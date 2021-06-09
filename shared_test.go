@@ -6,7 +6,6 @@
 package amqp
 
 import (
-	"encoding/hex"
 	"io"
 	"testing"
 )
@@ -37,35 +36,13 @@ type logIO struct {
 }
 
 func (log *logIO) Read(p []byte) (n int, err error) {
-	log.t.Logf("%s reading %d\n", log.prefix, len(p))
-	n, err = log.proxy.Read(p)
-	if err != nil {
-		log.t.Logf("%s read %x: %v\n", log.prefix, p[0:n], err)
-	} else {
-		log.t.Logf("%s read:\n%s\n", log.prefix, hex.Dump(p[0:n]))
-		//fmt.Printf("%s read:\n%s\n", log.prefix, hex.Dump(p[0:n]))
-	}
-	return
+	return log.proxy.Read(p)
 }
 
 func (log *logIO) Write(p []byte) (n int, err error) {
-	log.t.Logf("%s writing %d\n", log.prefix, len(p))
-	n, err = log.proxy.Write(p)
-	if err != nil {
-		log.t.Logf("%s write %d, %x: %v\n", log.prefix, len(p), p[0:n], err)
-	} else {
-		log.t.Logf("%s write %d:\n%s", log.prefix, len(p), hex.Dump(p[0:n]))
-		//fmt.Printf("%s write %d:\n%s", log.prefix, len(p), hex.Dump(p[0:n]))
-	}
-	return
+	return log.proxy.Write(p)
 }
 
 func (log *logIO) Close() (err error) {
-	err = log.proxy.Close()
-	if err != nil {
-		log.t.Logf("%s close : %v\n", log.prefix, err)
-	} else {
-		log.t.Logf("%s close\n", log.prefix)
-	}
-	return
+	return log.proxy.Close()
 }
