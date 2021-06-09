@@ -7,7 +7,7 @@
 
 The workflow is pretty standard:
 
-1. Fork github.com/streadway/amqp
+1. Fork this repository, **github.com/rabbitmq/amqp091-go**
 1. Add the pre-commit hook: `ln -s ../../pre-commit .git/hooks/pre-commit`
 1. Create your feature branch (`git checkout -b my-new-feature`)
 1. Run integration tests (see below)
@@ -28,7 +28,9 @@ The test suite assumes that:
 
 After starting a local RabbitMQ, run integration tests with the following:
 
-    env AMQP_URL=amqp://guest:guest@127.0.0.1:5672/ go test -v -cpu 2 -tags integration -race
+``` shell
+env AMQP_URL=amqp://guest:guest@127.0.0.1:5672/ go test -v -cpu 4 -tags integration
+```
 
 All integration tests should use the `integrationConnection(...)` test
 helpers defined in `integration_test.go` to setup the integration environment

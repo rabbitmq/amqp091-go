@@ -1,7 +1,7 @@
 # Go RabbitMQ Client Library
 
 This is a Go AMQP 0.9.1 client maintained by the [RabbitMQ core team](https://github.com/rabbitmq).
-It was originally developed by [Sean Treadway](https://github.com/streadway/amqp).
+It was [originally developed by Sean Treadway](https://github.com/streadway/amqp).
 
 Compared to the original client, this one
 
