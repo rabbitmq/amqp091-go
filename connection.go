@@ -717,7 +717,7 @@ func (c *Connection) openStart(config Config) error {
 
 	c.Major = int(start.VersionMajor)
 	c.Minor = int(start.VersionMinor)
-	c.Properties = Table(start.ServerProperties)
+	c.Properties = start.ServerProperties
 	c.Locales = strings.Split(start.Locales, " ")
 
 	// eventually support challenge/response here by also responding to

@@ -50,7 +50,7 @@ func (r *reader) ReadFrame() (frame frame, err error) {
 		return
 	}
 
-	typ := uint8(scratch[0])
+	typ := scratch[0]
 	channel := binary.BigEndian.Uint16(scratch[1:3])
 	size := binary.BigEndian.Uint32(scratch[3:7])
 

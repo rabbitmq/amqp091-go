@@ -183,7 +183,7 @@ func subscribe(sessions chan chan session, messages chan<- message) {
 		log.Printf("subscribed...")
 
 		for msg := range deliveries {
-			messages <- message(msg.Body)
+			messages <- msg.Body
 			sub.Ack(msg.DeliveryTag, false)
 		}
 	}
@@ -197,7 +197,7 @@ func read(r io.Reader) <-chan message {
 		defer close(lines)
 		scan := bufio.NewScanner(r)
 		for scan.Scan() {
-			lines <- message(scan.Bytes())
+			lines <- scan.Bytes()
 		}
 	}()
 	return lines
