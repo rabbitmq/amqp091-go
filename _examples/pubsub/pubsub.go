@@ -8,6 +8,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha1"
 	"flag"
 	"fmt"
@@ -16,7 +17,6 @@ import (
 	"os"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-	"golang.org/x/net/context"
 )
 
 var url = flag.String("url", "amqp:///", "AMQP url for both the publisher and subscriber")
