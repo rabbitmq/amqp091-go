@@ -27,7 +27,7 @@ func (c *confirms) Listen(l chan Confirmation) {
 	c.listeners = append(c.listeners, l)
 }
 
-// publish increments the publishing counter
+// Publish increments the publishing counter
 func (c *confirms) Publish() uint64 {
 	c.m.Lock()
 	defer c.m.Unlock()
@@ -57,7 +57,7 @@ func (c *confirms) resequence() {
 	}
 }
 
-// one confirms one publishing and all following in the publishing sequence
+// One confirms one publishing and all following in the publishing sequence
 func (c *confirms) One(confirmed Confirmation) {
 	c.m.Lock()
 	defer c.m.Unlock()
@@ -70,7 +70,7 @@ func (c *confirms) One(confirmed Confirmation) {
 	c.resequence()
 }
 
-// multiple confirms all publishings up until the delivery tag
+// Multiple confirms all publishings up until the delivery tag
 func (c *confirms) Multiple(confirmed Confirmation) {
 	c.m.Lock()
 	defer c.m.Unlock()
