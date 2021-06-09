@@ -5,7 +5,8 @@ It was [originally developed by Sean Treadway](https://github.com/streadway/amqp
 
 ## Differences from streadway/amqp
 
-Compared to the original client, this one has a few changes.
+Some things are different compared to the original client,
+others haven't changed.
 
 ### Package Name
 
