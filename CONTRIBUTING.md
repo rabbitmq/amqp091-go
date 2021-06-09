@@ -29,7 +29,7 @@ The test suite assumes that:
 After starting a local RabbitMQ, run integration tests with the following:
 
 ``` shell
-env AMQP_URL=amqp://guest:guest@127.0.0.1:5672/ go test -v -cpu 4 -tags integration
+env AMQP_URL=amqp://guest:guest@127.0.0.1:5672/ go test -v -tags integration
 ```
 
 All integration tests should use the `integrationConnection(...)` test
