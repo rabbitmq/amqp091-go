@@ -1,4 +1,4 @@
-package amqp_test
+package amqp091_test
 
 import (
 	"crypto/tls"
@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/streadway/amqp"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func ExampleConfig_timeout() {

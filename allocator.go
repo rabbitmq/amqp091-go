@@ -1,4 +1,4 @@
-package amqp
+package amqp091
 
 import (
 	"bytes"

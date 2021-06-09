@@ -3,12 +3,29 @@
 This is a Go AMQP 0.9.1 client maintained by the [RabbitMQ core team](https://github.com/rabbitmq).
 It was [originally developed by Sean Treadway](https://github.com/streadway/amqp).
 
-Compared to the original client, this one
+## Differences from streadway/amqp
 
- * Retains the same 2-clause BSD license
- * Retains key API elements as practically possible
- * Is open to reasonable breaking public API changes
- * Will be co-maintained with the community
+Compared to the original client, this one has a few changes.
+
+### Package Name
+
+This library uses a different package name. If moving from `streadway/amqp`,
+using an alias may reduce the number of changes needed:
+
+``` go
+`amqp "github.com/rabbitmq/amqp091-go"`
+```
+
+### License
+
+This client uses the same 2-clause BSD license as the original project.
+
+### Public API Evolution
+
+ This client retains key API elements as practically possible.
+ It is, however, open to reasonable breaking public API changes suggested by the community.
+ We don't have the "no breaking public API changes ever" rule and fully recognize
+ that a good client API evolves over time.
 
 
 ## Project Maturity

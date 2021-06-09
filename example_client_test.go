@@ -1,4 +1,4 @@
-package amqp_test
+package amqp091_test
 
 import (
 	"errors"
@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/streadway/amqp"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // This exports a Session object that wraps this library. It

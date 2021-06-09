@@ -6,7 +6,7 @@
 /* GENERATED FILE - DO NOT EDIT */
 /* Rebuild from the spec/gen.go tool */
 
-package amqp
+package amqp091
 
 import (
 	"encoding/binary"

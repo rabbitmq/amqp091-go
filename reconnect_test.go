@@ -1,9 +1,10 @@
-package amqp_test
+package amqp091_test
 
 import (
 	"fmt"
-	"github.com/streadway/amqp"
 	"os"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // Every connection should declare the topology they expect

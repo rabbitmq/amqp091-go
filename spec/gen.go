@@ -151,7 +151,7 @@ var (
   /* Rebuild from the spec/gen.go tool */
 
   {{with .Root}}
-  package amqp
+  package amqp091
 
   import (
     "fmt"
