@@ -1,33 +1,40 @@
-[![Build Status](https://api.travis-ci.org/streadway/amqp.svg)](http://travis-ci.org/streadway/amqp) [![GoDoc](https://godoc.org/github.com/streadway/amqp?status.svg)](http://godoc.org/github.com/streadway/amqp)
-
 # Go RabbitMQ Client Library
 
-This is an AMQP 0.9.1 client with RabbitMQ extensions in Go.
+This is a Go AMQP 0.9.1 client maintained by the [RabbitMQ core team](https://github.com/rabbitmq).
+It was originally developed by [Sean Treadway](https://github.com/streadway/amqp).
+
+Compared to the original client, this one
+
+ * Retains the same 2-clause BSD license
+ * Retains key API elements as practically possible
+ * Is open to reasonable breaking public API changes
+ * Will be co-maintained with the community
+
 
 ## Project Maturity
 
-This project has been used in production systems for many years. It is reasonably mature
-and feature complete, and as of November 2016 has [a team of maintainers](https://github.com/streadway/amqp/issues/215).
+This project is based on a mature Go client that's been around for over a decade.
 
-Future API changes are unlikely but possible. They will be discussed on [Github
-issues](https://github.com/streadway/amqp/issues) along with any bugs or
-enhancements.
+We expect this client to undergo moderate breaking public API changes in 2021.
+Major and minor versions will be updated accordingly.
+
 
 ## Supported Go Versions
 
-This library supports two most recent Go release series, currently 1.10 and 1.11.
+This client supports two most recent Go release series.
 
 
 ## Supported RabbitMQ Versions
 
 This project supports RabbitMQ versions starting with `2.0` but primarily tested
-against reasonably recent `3.x` releases. Some features and behaviours may be
-server version-specific.
+against [currently supported RabbitMQ release series](https://www.rabbitmq.com/versions.html).
+
+Some features and behaviours may be server version-specific.
 
 ## Goals
 
 Provide a functional interface that closely represents the AMQP 0.9.1 model
-targeted to RabbitMQ as a server.  This includes the minimum necessary to
+targeted to RabbitMQ as a server. This includes the minimum necessary to
 interact the semantics of the protocol.
 
 ## Non-goals
@@ -62,12 +69,9 @@ please file an issue.
 
 ## Documentation
 
-Use [Godoc documentation](http://godoc.org/github.com/streadway/amqp) for
-reference and usage.
-
-[RabbitMQ tutorials in
-Go](https://github.com/rabbitmq/rabbitmq-tutorials/tree/master/go) are also
-available.
+ * [Godoc API reference](http://godoc.org/github.com/rabbitmq/amqp091-go)
+ * [RabbitMQ tutorials in Go](https://github.com/rabbitmq/rabbitmq-tutorials/tree/master/go) currently use a different client.
+    They will be switched to use this client eventually
 
 ## Contributing
 
@@ -78,13 +82,6 @@ your commits represent coherent changes that include a reason for the change.
 To run the integration tests, make sure you have RabbitMQ running on any host,
 export the environment variable `AMQP_URL=amqp://host/` and run `go test -tags
 integration`.  TravisCI will also run the integration tests.
-
-Thanks to the [community of contributors](https://github.com/streadway/amqp/graphs/contributors).
-
-## External packages
-
-  * [Google App Engine Dialer support](https://github.com/soundtrackyourbrand/gaeamqp)
-  * [RabbitMQ examples in Go](https://github.com/rabbitmq/rabbitmq-tutorials/tree/master/go)
 
 ## License
 
