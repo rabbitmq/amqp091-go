@@ -779,7 +779,7 @@ func (msg *exchangeDeclare) id() (uint16, uint16) {
 }
 
 func (msg *exchangeDeclare) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *exchangeDeclare) write(w io.Writer) (err error) {
@@ -890,7 +890,7 @@ func (msg *exchangeDelete) id() (uint16, uint16) {
 }
 
 func (msg *exchangeDelete) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *exchangeDelete) write(w io.Writer) (err error) {
@@ -974,7 +974,7 @@ func (msg *exchangeBind) id() (uint16, uint16) {
 }
 
 func (msg *exchangeBind) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *exchangeBind) write(w io.Writer) (err error) {
@@ -1073,7 +1073,7 @@ func (msg *exchangeUnbind) id() (uint16, uint16) {
 }
 
 func (msg *exchangeUnbind) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *exchangeUnbind) write(w io.Writer) (err error) {
@@ -1174,7 +1174,7 @@ func (msg *queueDeclare) id() (uint16, uint16) {
 }
 
 func (msg *queueDeclare) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *queueDeclare) write(w io.Writer) (err error) {
@@ -1306,7 +1306,7 @@ func (msg *queueBind) id() (uint16, uint16) {
 }
 
 func (msg *queueBind) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *queueBind) write(w io.Writer) (err error) {
@@ -1485,7 +1485,7 @@ func (msg *queuePurge) id() (uint16, uint16) {
 }
 
 func (msg *queuePurge) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *queuePurge) write(w io.Writer) (err error) {
@@ -1572,7 +1572,7 @@ func (msg *queueDelete) id() (uint16, uint16) {
 }
 
 func (msg *queueDelete) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *queueDelete) write(w io.Writer) (err error) {
@@ -1748,7 +1748,7 @@ func (msg *basicConsume) id() (uint16, uint16) {
 }
 
 func (msg *basicConsume) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *basicConsume) write(w io.Writer) (err error) {
@@ -1861,7 +1861,7 @@ func (msg *basicCancel) id() (uint16, uint16) {
 }
 
 func (msg *basicCancel) wait() bool {
-	return true && !msg.NoWait
+	return !msg.NoWait
 }
 
 func (msg *basicCancel) write(w io.Writer) (err error) {
