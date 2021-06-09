@@ -1,3 +1,3 @@
-module github.com/streadway/amqp
+module github.com/rabbitmq/amqp091-go
 
-go 1.10
+go 1.15
