@@ -14,7 +14,7 @@ This library uses a different package name. If moving from `streadway/amqp`,
 using an alias may reduce the number of changes needed:
 
 ``` go
-`amqp "github.com/rabbitmq/amqp091-go"`
+amqp "github.com/rabbitmq/amqp091-go"
 ```
 
 ### License
