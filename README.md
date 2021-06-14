@@ -93,8 +93,8 @@ please file an issue.
 
 ## Contributing
 
-Pull requests are very much welcomed.  Create your pull request on a non-master
-branch, make sure a test or example is included that covers your change and
+Pull requests are very much welcomed.  Create your pull request on a non-main
+branch, make sure a test or example is included that covers your change, and
 your commits represent coherent changes that include a reason for the change.
 
 To run the integration tests, make sure you have RabbitMQ running on any host,
