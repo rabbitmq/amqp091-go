@@ -783,7 +783,7 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 
 	// "The client should start sending heartbeats after receiving a
 	// Connection.Tune method"
-	go c.heartbeater(c.Config.Heartbeat, c.NotifyClose(make(chan *Error, 1)))
+	go c.heartbeater(c.Config.Heartbeat/2, c.NotifyClose(make(chan *Error, 1)))
 
 	if err := c.send(&methodFrame{
 		ChannelId: 0,
