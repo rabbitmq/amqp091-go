@@ -13,7 +13,7 @@ import (
 )
 
 /*
-Reads a frame from an input stream and returns an interface that can be cast into
+ReadFrame reads a frame from an input stream and returns an interface that can be cast into
 one of the following:
 
    methodFrame

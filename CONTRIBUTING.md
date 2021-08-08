@@ -1,4 +1,4 @@
-## Prequisites
+## Prerequisites
 
 1. Go: [https://golang.org/dl/](https://golang.org/dl/)
 1. Golint `go get -u -v github.com/golang/lint/golint`
