@@ -232,7 +232,7 @@ func (session *Session) Push(data []byte) error {
 // UnsafePush will push to the queue without checking for
 // confirmation. It returns an error if it fails to connect.
 // No guarantees are provided for whether the server will
-// recieve the message.
+// receive the message.
 func (session *Session) UnsafePush(data []byte) error {
 	if !session.isReady {
 		return errNotConnected

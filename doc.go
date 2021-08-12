@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 /*
-package amqp091 is an AMQP 0.9.1 client with RabbitMQ extensions
+Package amqp091 is an AMQP 0.9.1 client with RabbitMQ extensions
 
 Understand the AMQP 0.9.1 messaging model by reviewing these links first. Much
 of the terminology in this library directly relates to AMQP concepts.
@@ -58,7 +58,7 @@ of band from an RPC call like basic.ack or basic.flow.
 
 Any asynchronous events, including Deliveries and Publishings must always have
 a receiver until the corresponding chans are closed.  Without asynchronous
-receivers, the sychronous methods will block.
+receivers, the synchronous methods will block.
 
 Use Case
 

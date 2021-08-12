@@ -13,7 +13,7 @@ import (
 )
 
 func ExampleConfig_timeout() {
-	// Provide your own anonymous Dial function that delgates to net.DialTimout
+	// Provide your own anonymous Dial function that delegates to net.DialTimout
 	// for custom timeouts
 
 	conn, err := amqp.DialConfig("amqp:///", amqp.Config{

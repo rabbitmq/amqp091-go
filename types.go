@@ -28,7 +28,7 @@ var (
 	ErrChannelMax = &Error{Code: ChannelError, Reason: "channel id space exhausted"}
 
 	// ErrSASL is returned from Dial when the authentication mechanism could not
-	// be negoated.
+	// be negotiated.
 	ErrSASL = &Error{Code: AccessRefused, Reason: "SASL could not negotiate a shared mechanism"}
 
 	// ErrCredentials is returned when the authenticated client is not authorized
