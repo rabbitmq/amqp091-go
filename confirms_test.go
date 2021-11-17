@@ -47,6 +47,26 @@ func TestConfirmOneResequences(t *testing.T) {
 	}
 }
 
+func TestConfirmAndPublishDoNotDeadlock(t *testing.T) {
+	var (
+		c          = newConfirms()
+		l          = make(chan Confirmation)
+		iterations = 10
+	)
+	c.Listen(l)
+
+	go func() {
+		for i := 0; i < iterations; i++ {
+			c.One(Confirmation{uint64(i + 1), true})
+		}
+	}()
+
+	for i := 0; i < iterations; i++ {
+		c.Publish()
+		<-l
+	}
+}
+
 func TestConfirmMixedResequences(t *testing.T) {
 	var (
 		fixtures = []Confirmation{

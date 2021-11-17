@@ -9,11 +9,12 @@ import "sync"
 
 // confirms resequences and notifies one or multiple publisher confirmation listeners
 type confirms struct {
-	m         sync.Mutex
-	listeners []chan Confirmation
-	sequencer map[uint64]Confirmation
-	published uint64
-	expecting uint64
+	m            sync.Mutex
+	listeners    []chan Confirmation
+	sequencer    map[uint64]Confirmation
+	published    uint64
+	publishedMut sync.Mutex
+	expecting    uint64
 }
 
 // newConfirms allocates a confirms
@@ -34,8 +35,8 @@ func (c *confirms) Listen(l chan Confirmation) {
 
 // Publish increments the publishing counter
 func (c *confirms) Publish() uint64 {
-	c.m.Lock()
-	defer c.m.Unlock()
+	c.publishedMut.Lock()
+	defer c.publishedMut.Unlock()
 
 	c.published++
 	return c.published
@@ -53,6 +54,9 @@ func (c *confirms) confirm(confirmation Confirmation) {
 
 // resequence confirms any out of order delivered confirmations
 func (c *confirms) resequence() {
+	c.publishedMut.Lock()
+	defer c.publishedMut.Unlock()
+
 	for c.expecting <= c.published {
 		sequenced, found := c.sequencer[c.expecting]
 		if !found {
