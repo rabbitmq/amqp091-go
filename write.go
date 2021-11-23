@@ -276,7 +276,8 @@ func writeLongstr(w io.Writer, s string) (err error) {
 'S': string
 'T': time.Time
 'V': nil
-'b': byte
+'b': int8
+'B': byte
 'd': float64
 'f': float32
 'l': int64
@@ -299,8 +300,13 @@ func writeField(w io.Writer, value interface{}) (err error) {
 		enc = buf[:2]
 
 	case byte:
-		buf[0] = 'b'
+		buf[0] = 'B'
 		buf[1] = v
+		enc = buf[:2]
+
+	case int8:
+		buf[0] = 'b'
+		buf[1] = uint8(v)
 		enc = buf[:2]
 
 	case int16:

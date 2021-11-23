@@ -161,7 +161,8 @@ func readTimestamp(r io.Reader) (v time.Time, err error) {
 'S': string
 'T': time.Time
 'V': nil
-'b': byte
+'b': int8
+'B': byte
 'd': float64
 'f': float32
 'l': int64
@@ -183,12 +184,19 @@ func readField(r io.Reader) (v interface{}, err error) {
 		}
 		return (value != 0), nil
 
-	case 'b':
+	case 'B':
 		var value [1]byte
 		if _, err = io.ReadFull(r, value[0:1]); err != nil {
 			return
 		}
 		return value[0], nil
+
+	case 'b':
+		var value int8
+		if err = binary.Read(r, binary.BigEndian, &value); err != nil {
+			return
+		}
+		return value, nil
 
 	case 's':
 		var value int16
