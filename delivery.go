@@ -58,8 +58,8 @@ type Delivery struct {
 	Body []byte
 }
 
-func newDelivery(channel *Channel, msg messageWithContent) *Delivery {
-	props, body := msg.getContent()
+func newDelivery(channel *Channel, msg MessageWithContent) *Delivery {
+	props, body := msg.GetContent()
 
 	delivery := Delivery{
 		Acknowledger: channel,

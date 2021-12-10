@@ -37,7 +37,7 @@ type Return struct {
 }
 
 func newReturn(msg basicReturn) *Return {
-	props, body := msg.getContent()
+	props, body := msg.GetContent()
 
 	return &Return{
 		ReplyCode:  msg.ReplyCode,

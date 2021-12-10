@@ -22,7 +22,7 @@ func TestGoFuzzCrashers(t *testing.T) {
 	}
 
 	for idx, testStr := range testData {
-		r := reader{strings.NewReader(testStr)}
+		r := Reader{strings.NewReader(testStr)}
 		frame, err := r.ReadFrame()
 		if err != nil && frame != nil {
 			t.Errorf("%d. frame is not nil: %#v err = %v", idx, frame, err)

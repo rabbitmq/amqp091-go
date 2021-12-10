@@ -69,7 +69,7 @@ func (*ExternalAuth) Response() string {
 }
 
 // Finds the first mechanism preferred by the client that the server supports.
-func pickSASLMechanism(client []Authentication, serverMechanisms []string) (auth Authentication, ok bool) {
+func PickSASLMechanism(client []Authentication, serverMechanisms []string) (auth Authentication, ok bool) {
 
 	for _, auth = range client {
 		for _, mech := range serverMechanisms {

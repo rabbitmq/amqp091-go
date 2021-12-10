@@ -10,7 +10,7 @@ package amqp091
 import "bytes"
 
 func Fuzz(data []byte) int {
-	r := reader{bytes.NewReader(data)}
+	r := Reader{bytes.NewReader(data)}
 	frame, err := r.ReadFrame()
 	if err != nil {
 		if frame != nil {

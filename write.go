@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-func (w *writer) WriteFrame(frame frame) (err error) {
-	if err = frame.write(w.w); err != nil {
+func (w *Writer) WriteFrame(frame Frame) (err error) {
+	if err = frame.Write(w.w); err != nil {
 		return
 	}
 
@@ -27,14 +27,14 @@ func (w *writer) WriteFrame(frame frame) (err error) {
 	return
 }
 
-func (f *methodFrame) write(w io.Writer) (err error) {
+func (f *MethodFrame) Write(w io.Writer) (err error) {
 	var payload bytes.Buffer
 
 	if f.Method == nil {
 		return errors.New("malformed frame: missing method")
 	}
 
-	class, method := f.Method.id()
+	class, method := f.Method.Id()
 
 	if err = binary.Write(&payload, binary.BigEndian, class); err != nil {
 		return
@@ -44,18 +44,18 @@ func (f *methodFrame) write(w io.Writer) (err error) {
 		return
 	}
 
-	if err = f.Method.write(&payload); err != nil {
+	if err = f.Method.Write(&payload); err != nil {
 		return
 	}
 
-	return writeFrame(w, frameMethod, f.ChannelId, payload.Bytes())
+	return writeFrame(w, FrameMethod, f.ChannelId, payload.Bytes())
 }
 
 // Heartbeat
 //
 // Payload is empty
-func (f *heartbeatFrame) write(w io.Writer) (err error) {
-	return writeFrame(w, frameHeartbeat, f.ChannelId, []byte{})
+func (f *HeartbeatFrame) Write(w io.Writer) (err error) {
+	return writeFrame(w, FrameHeartbeat, f.ChannelId, []byte{})
 }
 
 // CONTENT HEADER
@@ -65,7 +65,7 @@ func (f *heartbeatFrame) write(w io.Writer) (err error) {
 // +----------+--------+-----------+----------------+------------- - -
 //    short     short    long long       short        remainder...
 //
-func (f *headerFrame) write(w io.Writer) (err error) {
+func (f *HeaderFrame) Write(w io.Writer) (err error) {
 	var payload bytes.Buffer
 	var zeroTime time.Time
 
@@ -196,19 +196,19 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 		}
 	}
 
-	return writeFrame(w, frameHeader, f.ChannelId, payload.Bytes())
+	return writeFrame(w, FrameHeader, f.ChannelId, payload.Bytes())
 }
 
 // Body
 //
 // Payload is one byterange from the full body who's size is declared in the
 // Header frame
-func (f *bodyFrame) write(w io.Writer) (err error) {
-	return writeFrame(w, frameBody, f.ChannelId, f.Body)
+func (f *BodyFrame) Write(w io.Writer) (err error) {
+	return writeFrame(w, FrameBody, f.ChannelId, f.Body)
 }
 
 func writeFrame(w io.Writer, typ uint8, channel uint16, payload []byte) (err error) {
-	end := []byte{frameEnd}
+	end := []byte{FrameEnd}
 	size := uint(len(payload))
 
 	_, err = w.Write([]byte{

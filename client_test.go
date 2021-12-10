@@ -15,8 +15,8 @@ import (
 
 type server struct {
 	*testing.T
-	r reader             // framer <- client
-	w writer             // framer -> client
+	r Reader             // framer <- client
+	w Writer             // framer -> client
 	S io.ReadWriteCloser // Server IO
 	C io.ReadWriteCloser // Client IO
 
@@ -49,8 +49,8 @@ func amqplainConfig() Config {
 func newServer(t *testing.T, serverIO, clientIO io.ReadWriteCloser) *server {
 	return &server{
 		T: t,
-		r: reader{serverIO},
-		w: writer{serverIO},
+		r: Reader{serverIO},
+		w: Writer{serverIO},
 		S: serverIO,
 		C: clientIO,
 	}
@@ -77,28 +77,28 @@ func (t *server) expectBytes(b []byte) {
 	}
 }
 
-func (t *server) send(channel int, m message) {
+func (t *server) send(channel int, m Message) {
 	defer time.AfterFunc(time.Second, func() { panic("send deadlock") }).Stop()
 
-	if msg, ok := m.(messageWithContent); ok {
-		props, body := msg.getContent()
-		class, _ := msg.id()
-		t.w.WriteFrame(&methodFrame{
+	if msg, ok := m.(MessageWithContent); ok {
+		props, body := msg.GetContent()
+		class, _ := msg.Id()
+		t.w.WriteFrame(&MethodFrame{
 			ChannelId: uint16(channel),
 			Method:    msg,
 		})
-		t.w.WriteFrame(&headerFrame{
+		t.w.WriteFrame(&HeaderFrame{
 			ChannelId:  uint16(channel),
 			ClassId:    class,
 			Size:       uint64(len(body)),
 			Properties: props,
 		})
-		t.w.WriteFrame(&bodyFrame{
+		t.w.WriteFrame(&BodyFrame{
 			ChannelId: uint16(channel),
 			Body:      body,
 		})
 	} else {
-		t.w.WriteFrame(&methodFrame{
+		t.w.WriteFrame(&MethodFrame{
 			ChannelId: uint16(channel),
 			Method:    m,
 		})
@@ -106,11 +106,11 @@ func (t *server) send(channel int, m message) {
 }
 
 // drops all but method frames expected on the given channel
-func (t *server) recv(channel int, m message) message {
+func (t *server) recv(channel int, m Message) Message {
 	defer time.AfterFunc(time.Second, func() { panic("recv deadlock") }).Stop()
 
 	var remaining int
-	var header *headerFrame
+	var header *HeaderFrame
 	var body []byte
 
 	for {
@@ -119,38 +119,38 @@ func (t *server) recv(channel int, m message) message {
 			t.Fatalf("frame err, read: %s", err)
 		}
 
-		if frame.channel() != uint16(channel) {
-			t.Fatalf("expected frame on channel %d, got channel %d", channel, frame.channel())
+		if frame.Channel() != uint16(channel) {
+			t.Fatalf("expected frame on channel %d, got channel %d", channel, frame.Channel())
 		}
 
 		switch f := frame.(type) {
-		case *heartbeatFrame:
+		case *HeartbeatFrame:
 			// drop
 
-		case *headerFrame:
+		case *HeaderFrame:
 			// start content state
 			header = f
 			remaining = int(header.Size)
 			if remaining == 0 {
-				m.(messageWithContent).setContent(header.Properties, nil)
+				m.(MessageWithContent).SetContent(header.Properties, nil)
 				return m
 			}
 
-		case *bodyFrame:
+		case *BodyFrame:
 			// continue until terminated
 			body = append(body, f.Body...)
 			remaining -= len(f.Body)
 			if remaining <= 0 {
-				m.(messageWithContent).setContent(header.Properties, body)
+				m.(MessageWithContent).SetContent(header.Properties, body)
 				return m
 			}
 
-		case *methodFrame:
+		case *MethodFrame:
 			if reflect.TypeOf(m) == reflect.TypeOf(f.Method) {
 				wantv := reflect.ValueOf(m).Elem()
 				havev := reflect.ValueOf(f.Method).Elem()
 				wantv.Set(havev)
-				if _, ok := m.(messageWithContent); !ok {
+				if _, ok := m.(MessageWithContent); !ok {
 					return m
 				}
 			} else {

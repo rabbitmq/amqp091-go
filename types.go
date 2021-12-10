@@ -19,6 +19,10 @@ const (
 	ExchangeHeaders = "headers"
 )
 
+// ProtocolHeaderBytes is an AMQP v0.9.1 protocol header sent from client to server
+// after socket connection between them is established.
+var ProtocolHeaderBytes = []byte{'A', 'M', 'Q', 'P', 0, 0, 9, 1}
+
 var (
 	// ErrClosed is returned when the channel or connection is not open
 	ErrClosed = &Error{Code: ChannelError, Reason: "channel/connection is not open"}
@@ -70,11 +74,11 @@ type Error struct {
 	Recover bool   // true when this error can be recovered by retrying later or with different parameters
 }
 
-func newError(code uint16, text string) *Error {
+func NewError(code uint16, text string) *Error {
 	return &Error{
 		Code:    int(code),
 		Reason:  text,
-		Recover: isSoftExceptionCode(int(code)),
+		Recover: IsSoftExceptionCode(int(code)),
 		Server:  true,
 	}
 }
@@ -84,7 +88,7 @@ func (e Error) Error() string {
 }
 
 // Used by header frames to capture routing and header information
-type properties struct {
+type Properties struct {
 	ContentType     string    // MIME content type
 	ContentEncoding string    // MIME content encoding
 	Headers         Table     // Application or header exchange table
@@ -255,6 +259,35 @@ func (t Table) Validate() error {
 	return validateField(t)
 }
 
+// ToMap converts table to map with golang types
+func (t Table) ToMap() map[string]interface{} {
+	return ConvertValue(t).(map[string]interface{})
+}
+
+func ConvertValue(v interface{}) interface{} {
+	switch fv := v.(type) {
+	case nil, bool, byte, int, int16, int32, int64, float32, float64, string, []byte, Decimal, time.Time:
+		return fv
+
+	case []interface{}:
+		var result []interface{}
+		for _, v := range fv {
+			result = append(result, ConvertValue(v))
+		}
+		return result
+
+	case Table:
+		result := make(map[string]interface{})
+		for k, v := range fv {
+			result[k] = ConvertValue(v)
+		}
+		return result
+
+	default:
+		return nil
+	}
+}
+
 // Heap interface for maintaining delivery tags
 type tagSet []uint64
 
@@ -268,17 +301,24 @@ func (set *tagSet) Pop() interface{} {
 	return val
 }
 
-type message interface {
-	id() (uint16, uint16)
-	wait() bool
-	read(io.Reader) error
-	write(io.Writer) error
+type Message interface {
+	Id() (uint16, uint16)
+	Wait() bool
+	Read(io.Reader) error
+	Write(io.Writer) error
 }
 
-type messageWithContent interface {
-	message
-	getContent() (properties, []byte)
-	setContent(properties, []byte)
+type MessageWithContent interface {
+	Message
+	GetContent() (Properties, []byte)
+	SetContent(Properties, []byte)
+}
+
+type ErrorMessage interface {
+	GetReplyCode() uint16
+	GetReplyText() string
+	GetClassId() uint16
+	GetMethodId() uint16
 }
 
 /*
@@ -306,28 +346,36 @@ In realistic implementations where performance is a concern, we would use
 system calls to read a frame.
 
 */
-type frame interface {
-	write(io.Writer) error
-	channel() uint16
+type Frame interface {
+	Write(io.Writer) error
+	Channel() uint16
 }
 
-type reader struct {
+type Reader struct {
 	r io.Reader
 }
 
-type writer struct {
+func NewReader(r io.Reader) *Reader {
+	return &Reader{r: r}
+}
+
+type Writer struct {
 	w io.Writer
 }
 
-// Implements the frame interface for Connection RPC
-type protocolHeader struct{}
+func NewWriter(w io.Writer) *Writer {
+	return &Writer{w: w}
+}
 
-func (protocolHeader) write(w io.Writer) error {
-	_, err := w.Write([]byte{'A', 'M', 'Q', 'P', 0, 0, 9, 1})
+// Implements the frame interface for Connection RPC
+type ProtocolHeader struct{}
+
+func (ProtocolHeader) Write(w io.Writer) error {
+	_, err := w.Write(ProtocolHeaderBytes)
 	return err
 }
 
-func (protocolHeader) channel() uint16 {
+func (ProtocolHeader) Channel() uint16 {
 	panic("only valid as initial handshake")
 }
 
@@ -353,14 +401,14 @@ Method frame bodies are constructed as a list of AMQP data fields (bits,
 integers, strings and string tables).  The marshalling code is trivially
 generated directly from the protocol specifications, and can be very rapid.
 */
-type methodFrame struct {
+type MethodFrame struct {
 	ChannelId uint16
 	ClassId   uint16
-	MethodId  uint16
-	Method    message
+	MethodId uint16
+	Method   Message
 }
 
-func (f *methodFrame) channel() uint16 { return f.ChannelId }
+func (f *MethodFrame) Channel() uint16 { return f.ChannelId }
 
 /*
 Heartbeating is a technique designed to undo one of TCP/IP's features, namely
@@ -371,11 +419,11 @@ Since heartbeating can be done at a low level, we implement this as a special
 type of frame that peers exchange at the transport level, rather than as a
 class method.
 */
-type heartbeatFrame struct {
+type HeartbeatFrame struct {
 	ChannelId uint16
 }
 
-func (f *heartbeatFrame) channel() uint16 { return f.ChannelId }
+func (f *HeartbeatFrame) Channel() uint16 { return f.ChannelId }
 
 /*
 Certain methods (such as Basic.Publish, Basic.Deliver, etc.) are formally
@@ -396,15 +444,15 @@ never marshalled or encoded.  We place the content properties in their own
 frame so that recipients can selectively discard contents they do not want to
 process
 */
-type headerFrame struct {
+type HeaderFrame struct {
 	ChannelId  uint16
 	ClassId    uint16
 	weight     uint16
 	Size       uint64
-	Properties properties
+	Properties Properties
 }
 
-func (f *headerFrame) channel() uint16 { return f.ChannelId }
+func (f *HeaderFrame) Channel() uint16 { return f.ChannelId }
 
 /*
 Content is the application data we carry from client-to-client via the AMQP
@@ -421,9 +469,9 @@ might see something like this:
 		[method]
 		...
 */
-type bodyFrame struct {
+type BodyFrame struct {
 	ChannelId uint16
 	Body      []byte
 }
 
-func (f *bodyFrame) channel() uint16 { return f.ChannelId }
+func (f *BodyFrame) Channel() uint16 { return f.ChannelId }

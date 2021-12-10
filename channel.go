@@ -32,7 +32,7 @@ type Channel struct {
 
 	connection *Connection
 
-	rpc       chan message
+	rpc       chan Message
 	consumers *consumers
 
 	id uint16
@@ -66,11 +66,11 @@ type Channel struct {
 	errors chan *Error
 
 	// State machine that manages frame order, must only be mutated by the connection
-	recv func(*Channel, frame) error
+	recv func(*Channel, Frame) error
 
 	// Current state for frame re-assembly, only mutated from recv
-	message messageWithContent
-	header  *headerFrame
+	message MessageWithContent
+	header  *HeaderFrame
 	body    []byte
 }
 
@@ -79,7 +79,7 @@ func newChannel(c *Connection, id uint16) *Channel {
 	return &Channel{
 		connection: c,
 		id:         id,
-		rpc:        make(chan message),
+		rpc:        make(chan Message),
 		consumers:  makeConsumers(),
 		confirms:   newConfirms(),
 		recv:       (*Channel).recvMethod,
@@ -152,7 +152,7 @@ func (ch *Channel) shutdown(e *Error) {
 //
 // After the channel has been closed, send calls Channel.sendClosed(), ensuring
 // only 'channel.close' is sent to the server.
-func (ch *Channel) send(msg message) (err error) {
+func (ch *Channel) send(msg Message) (err error) {
 	// If the channel is closed, use Channel.sendClosed()
 	if atomic.LoadInt32(&ch.closed) == 1 {
 		return ch.sendClosed(msg)
@@ -167,12 +167,12 @@ func (ch *Channel) open() error {
 
 // Performs a request/response call for when the message is not NoWait and is
 // specified as Synchronous.
-func (ch *Channel) call(req message, res ...message) error {
+func (ch *Channel) call(req Message, res ...Message) error {
 	if err := ch.send(req); err != nil {
 		return err
 	}
 
-	if req.wait() {
+	if req.Wait() {
 		select {
 		case e, ok := <-ch.errors:
 			if ok {
@@ -203,11 +203,11 @@ func (ch *Channel) call(req message, res ...message) error {
 	return nil
 }
 
-func (ch *Channel) sendClosed(msg message) (err error) {
+func (ch *Channel) sendClosed(msg Message) (err error) {
 	// After a 'channel.close' is sent or received the only valid response is
 	// channel.close-ok
 	if _, ok := msg.(*channelCloseOk); ok {
-		return ch.connection.send(&methodFrame{
+		return ch.connection.send(&MethodFrame{
 			ChannelId: ch.id,
 			Method:    msg,
 		})
@@ -216,10 +216,10 @@ func (ch *Channel) sendClosed(msg message) (err error) {
 	return ErrClosed
 }
 
-func (ch *Channel) sendOpen(msg message) (err error) {
-	if content, ok := msg.(messageWithContent); ok {
-		props, body := content.getContent()
-		class, _ := content.id()
+func (ch *Channel) sendOpen(msg Message) (err error) {
+	if content, ok := msg.(MessageWithContent); ok {
+		props, body := content.GetContent()
+		class, _ := content.Id()
 
 		// catch client max frame size==0 and server max frame size==0
 		// set size to length of what we're trying to publish
@@ -230,14 +230,14 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 			size = len(body)
 		}
 
-		if err = ch.connection.send(&methodFrame{
+		if err = ch.connection.send(&MethodFrame{
 			ChannelId: ch.id,
 			Method:    content,
 		}); err != nil {
 			return
 		}
 
-		if err = ch.connection.send(&headerFrame{
+		if err = ch.connection.send(&HeaderFrame{
 			ChannelId:  ch.id,
 			ClassId:    class,
 			Size:       uint64(len(body)),
@@ -252,7 +252,7 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 				j = len(body)
 			}
 
-			if err = ch.connection.send(&bodyFrame{
+			if err = ch.connection.send(&BodyFrame{
 				ChannelId: ch.id,
 				Body:      body[i:j],
 			}); err != nil {
@@ -260,7 +260,7 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 			}
 		}
 	} else {
-		err = ch.connection.send(&methodFrame{
+		err = ch.connection.send(&MethodFrame{
 			ChannelId: ch.id,
 			Method:    msg,
 		})
@@ -271,7 +271,7 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 
 // Eventually called via the state machine from the connection's reader
 // goroutine, so assumes serialized access.
-func (ch *Channel) dispatch(msg message) {
+func (ch *Channel) dispatch(msg Message) {
 	switch m := msg.(type) {
 	case *channelClose:
 		// lock before sending connection.close-ok
@@ -280,7 +280,7 @@ func (ch *Channel) dispatch(msg message) {
 		ch.m.Lock()
 		ch.send(&channelCloseOk{})
 		ch.m.Unlock()
-		ch.connection.closeChannel(ch, newError(m.ReplyCode, m.ReplyText))
+		ch.connection.closeChannel(ch, NewError(m.ReplyCode, m.ReplyText))
 
 	case *channelFlow:
 		ch.notifyM.RLock()
@@ -334,15 +334,15 @@ func (ch *Channel) dispatch(msg message) {
 	}
 }
 
-func (ch *Channel) transition(f func(*Channel, frame) error) error {
+func (ch *Channel) transition(f func(*Channel, Frame) error) error {
 	ch.recv = f
 	return nil
 }
 
-func (ch *Channel) recvMethod(f frame) error {
+func (ch *Channel) recvMethod(f Frame) error {
 	switch frame := f.(type) {
-	case *methodFrame:
-		if msg, ok := frame.Method.(messageWithContent); ok {
+	case *MethodFrame:
+		if msg, ok := frame.Method.(MessageWithContent); ok {
 			ch.body = make([]byte, 0)
 			ch.message = msg
 			return ch.transition((*Channel).recvHeader)
@@ -351,11 +351,11 @@ func (ch *Channel) recvMethod(f frame) error {
 		ch.dispatch(frame.Method) // termination state
 		return ch.transition((*Channel).recvMethod)
 
-	case *headerFrame:
+	case *HeaderFrame:
 		// drop
 		return ch.transition((*Channel).recvMethod)
 
-	case *bodyFrame:
+	case *BodyFrame:
 		// drop
 		return ch.transition((*Channel).recvMethod)
 	}
@@ -363,24 +363,24 @@ func (ch *Channel) recvMethod(f frame) error {
 	panic("unexpected frame type")
 }
 
-func (ch *Channel) recvHeader(f frame) error {
+func (ch *Channel) recvHeader(f Frame) error {
 	switch frame := f.(type) {
-	case *methodFrame:
+	case *MethodFrame:
 		// interrupt content and handle method
 		return ch.recvMethod(f)
 
-	case *headerFrame:
+	case *HeaderFrame:
 		// start collecting if we expect body frames
 		ch.header = frame
 
 		if frame.Size == 0 {
-			ch.message.setContent(ch.header.Properties, ch.body)
+			ch.message.SetContent(ch.header.Properties, ch.body)
 			ch.dispatch(ch.message) // termination state
 			return ch.transition((*Channel).recvMethod)
 		}
 		return ch.transition((*Channel).recvContent)
 
-	case *bodyFrame:
+	case *BodyFrame:
 		// drop and reset
 		return ch.transition((*Channel).recvMethod)
 	}
@@ -390,24 +390,24 @@ func (ch *Channel) recvHeader(f frame) error {
 
 // state after method + header and before the length
 // defined by the header has been reached
-func (ch *Channel) recvContent(f frame) error {
+func (ch *Channel) recvContent(f Frame) error {
 	switch frame := f.(type) {
-	case *methodFrame:
+	case *MethodFrame:
 		// interrupt content and handle method
 		return ch.recvMethod(f)
 
-	case *headerFrame:
+	case *HeaderFrame:
 		// drop and reset
 		return ch.transition((*Channel).recvMethod)
 
-	case *bodyFrame:
+	case *BodyFrame:
 		if cap(ch.body) == 0 {
 			ch.body = make([]byte, 0, ch.header.Size)
 		}
 		ch.body = append(ch.body, frame.Body...)
 
 		if uint64(len(ch.body)) >= ch.header.Size {
-			ch.message.setContent(ch.header.Properties, ch.body)
+			ch.message.SetContent(ch.header.Properties, ch.body)
 			ch.dispatch(ch.message) // termination state
 			return ch.transition((*Channel).recvMethod)
 		}
@@ -428,7 +428,7 @@ It is safe to call this method multiple times.
 func (ch *Channel) Close() error {
 	defer ch.connection.closeChannel(ch, nil)
 	return ch.call(
-		&channelClose{ReplyCode: replySuccess},
+		&channelClose{ReplyCode: ReplySuccess},
 		&channelCloseOk{},
 	)
 }
@@ -691,7 +691,7 @@ func (ch *Channel) Cancel(consumer string, noWait bool) error {
 		return err
 	}
 
-	if req.wait() {
+	if req.Wait() {
 		ch.consumers.cancel(res.ConsumerTag)
 	} else {
 		// Potentially could drop deliveries in flight
@@ -774,7 +774,7 @@ func (ch *Channel) QueueDeclare(name string, durable, autoDelete, exclusive, noW
 		return Queue{}, err
 	}
 
-	if req.wait() {
+	if req.Wait() {
 		return Queue{
 			Name:      res.Queue,
 			Messages:  int(res.MessageCount),
@@ -814,7 +814,7 @@ func (ch *Channel) QueueDeclarePassive(name string, durable, autoDelete, exclusi
 		return Queue{}, err
 	}
 
-	if req.wait() {
+	if req.Wait() {
 		return Queue{
 			Name:      res.Queue,
 			Messages:  int(res.MessageCount),
@@ -1343,7 +1343,7 @@ func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg 
 		Mandatory:  mandatory,
 		Immediate:  immediate,
 		Body:       msg.Body,
-		Properties: properties{
+		Properties: Properties{
 			Headers:         msg.Headers,
 			ContentType:     msg.ContentType,
 			ContentEncoding: msg.ContentEncoding,
