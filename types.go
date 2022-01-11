@@ -8,6 +8,7 @@ package amqp091
 import (
 	"fmt"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -177,6 +178,15 @@ type Publishing struct {
 type Blocking struct {
 	Active bool   // TCP pushback active/inactive on server
 	Reason string // Server reason for activation
+}
+
+// DeferredConfirmation represents a future publisher confirm for a message. It
+// allows users to directly correlate a publishing to a confirmation. These are
+// returned from PublishWithDeferredConfirm on Channels.
+type DeferredConfirmation struct {
+	wg           sync.WaitGroup
+	DeliveryTag  uint64
+	confirmation Confirmation
 }
 
 // Confirmation notifies the acknowledgment or negative acknowledgement of a

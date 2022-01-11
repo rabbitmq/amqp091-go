@@ -6,6 +6,7 @@
 package amqp091
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -24,8 +25,8 @@ func TestConfirmOneResequences(t *testing.T) {
 	c.Listen(l)
 
 	for i := range fixtures {
-		if want, got := uint64(i+1), c.Publish(); want != got {
-			t.Fatalf("expected publish to return the 1 based delivery tag published, want: %d, got: %d", want, got)
+		if want, got := uint64(i+1), c.Publish(); want != got.DeliveryTag {
+			t.Fatalf("expected publish to return the 1 based delivery tag published, want: %d, got: %d", want, got.DeliveryTag)
 		}
 	}
 
@@ -139,7 +140,7 @@ func BenchmarkSequentialBufferedConfirms(t *testing.B) {
 		if i > cap(l)-1 {
 			<-l
 		}
-		c.One(Confirmation{c.Publish(), true})
+		c.One(Confirmation{c.Publish().DeliveryTag, true})
 	}
 }
 
@@ -157,7 +158,7 @@ func TestConfirmsIsThreadSafe(t *testing.T) {
 	c.Listen(l)
 
 	for i := 0; i < count; i++ {
-		go func() { pub <- Confirmation{c.Publish(), true} }()
+		go func() { pub <- Confirmation{c.Publish().DeliveryTag, true} }()
 	}
 
 	for i := 0; i < count; i++ {
@@ -174,5 +175,44 @@ func TestConfirmsIsThreadSafe(t *testing.T) {
 		case <-late:
 			t.Fatalf("expected all publish/confirms to finish after %s", timeout)
 		}
+	}
+}
+
+func TestDeferredConfirmationsConfirm(t *testing.T) {
+	dcs := newDeferredConfirmations()
+	var wg sync.WaitGroup
+	for i, ack := range []bool{true, false} {
+		var result bool
+		deliveryTag := uint64(i + 1)
+		dc := dcs.Add(deliveryTag)
+		wg.Add(1)
+		go func() {
+			result = dc.Wait()
+			wg.Done()
+		}()
+		dcs.Confirm(Confirmation{deliveryTag, ack})
+		wg.Wait()
+		if result != ack {
+			t.Fatalf("expected to receive matching ack got %v", result)
+		}
+	}
+}
+
+func TestDeferredConfirmationsConfirmMultiple(t *testing.T) {
+	dcs := newDeferredConfirmations()
+	var wg sync.WaitGroup
+	var result bool
+	dc1 := dcs.Add(1)
+	dc2 := dcs.Add(2)
+	dc3 := dcs.Add(3)
+	wg.Add(1)
+	go func() {
+		result = dc1.Wait() && dc2.Wait() && dc3.Wait()
+		wg.Done()
+	}()
+	dcs.ConfirmMultiple(Confirmation{4, true})
+	wg.Wait()
+	if !result {
+		t.Fatal("expected to receive true for result, received false")
 	}
 }
