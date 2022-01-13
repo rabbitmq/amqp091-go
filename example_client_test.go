@@ -278,6 +278,7 @@ func (session *Session) Close() error {
 	if !session.isReady {
 		return errAlreadyClosed
 	}
+	close(session.done)
 	err := session.channel.Close()
 	if err != nil {
 		return err
@@ -286,7 +287,7 @@ func (session *Session) Close() error {
 	if err != nil {
 		return err
 	}
-	close(session.done)
+
 	session.isReady = false
 	return nil
 }
