@@ -454,6 +454,69 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 
 }
 
+func TestDeferredConfirmations(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+
+		srv.recv(1, &confirmSelect{})
+		srv.send(1, &confirmSelectOk{})
+
+		srv.recv(1, &basicPublish{})
+		srv.recv(1, &basicPublish{})
+		srv.recv(1, &basicPublish{})
+		srv.recv(1, &basicPublish{})
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	ch.Confirm(false)
+
+	var results []*DeferredConfirmation
+	for i := 1; i < 5; i++ {
+		dc, err := ch.PublishWithDeferredConfirm("", "q", false, false, Publishing{Body: []byte("pub")})
+		if err != nil {
+			t.Fatalf("failed to PublishWithDeferredConfirm: %v", err)
+		}
+		results = append(results, dc)
+	}
+
+	acks := make(chan Confirmation, 4)
+	for _, result := range results {
+		go func(r *DeferredConfirmation) {
+			acks <- Confirmation{Ack: r.Wait(), DeliveryTag: r.DeliveryTag}
+		}(result)
+	}
+
+	// received out of order, consumed out of order
+	assertReceive := func(ack Confirmation, tags ...uint64) {
+		for _, tag := range tags {
+			if tag == ack.DeliveryTag {
+				return
+			}
+		}
+		t.Fatalf("failed ack, expected ack to be in set %v, got %d", tags, ack.DeliveryTag)
+	}
+	srv.send(1, &basicAck{DeliveryTag: 2})
+	assertReceive(<-acks, 2)
+	srv.send(1, &basicAck{DeliveryTag: 1})
+	assertReceive(<-acks, 1)
+	srv.send(1, &basicAck{DeliveryTag: 4, Multiple: true})
+	assertReceive(<-acks, 3, 4) // 3 and 4 are non-determistic due to map ordering
+	assertReceive(<-acks, 3, 4)
+}
+
 func TestNotifyClosesReusedPublisherConfirmChan(t *testing.T) {
 	rwc, srv := newSession(t)
 
