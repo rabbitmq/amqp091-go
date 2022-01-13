@@ -86,12 +86,12 @@ func New(name string, addr string) *Session {
 func (session *Session) handleReconnect(addr string) {
 	for {
 		session.isReady = false
-		log.Println("Attempting to connect")
+		session.logger.Println("Attempting to connect")
 
 		conn, err := session.connect(addr)
 
 		if err != nil {
-			log.Println("Failed to connect. Retrying...")
+			session.logger.Println("Failed to connect. Retrying...")
 
 			select {
 			case <-session.done:
@@ -116,7 +116,7 @@ func (session *Session) connect(addr string) (*amqp.Connection, error) {
 	}
 
 	session.changeConnection(conn)
-	log.Println("Connected!")
+	session.logger.Println("Connected!")
 	return conn, nil
 }
 
@@ -129,7 +129,7 @@ func (session *Session) handleReInit(conn *amqp.Connection) bool {
 		err := session.init(conn)
 
 		if err != nil {
-			log.Println("Failed to initialize channel. Retrying...")
+			session.logger.Println("Failed to initialize channel. Retrying...")
 
 			select {
 			case <-session.done:
@@ -143,10 +143,10 @@ func (session *Session) handleReInit(conn *amqp.Connection) bool {
 		case <-session.done:
 			return true
 		case <-session.notifyConnClose:
-			log.Println("Connection closed. Reconnecting...")
+			session.logger.Println("Connection closed. Reconnecting...")
 			return false
 		case <-session.notifyChanClose:
-			log.Println("Channel closed. Re-running init...")
+			session.logger.Println("Channel closed. Re-running init...")
 		}
 	}
 }
@@ -179,7 +179,7 @@ func (session *Session) init(conn *amqp.Connection) error {
 
 	session.changeChannel(ch)
 	session.isReady = true
-	log.Println("Setup!")
+	session.logger.Println("Setup!")
 
 	return nil
 }
