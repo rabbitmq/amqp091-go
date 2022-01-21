@@ -25,9 +25,9 @@ import (
 // Try running this in one terminal, and `rabbitmq-server` in another.
 // Stop & restart RabbitMQ to see how the queue reacts.
 func Example() {
-	name := "job_queue"
+	queueName := "job_queue"
 	addr := "amqp://guest:guest@localhost:5672/"
-	queue := New(name, addr)
+	queue := New(queueName, addr)
 	message := []byte("message")
 	// Attempt to push a message every 2 seconds
 	for {
@@ -41,7 +41,7 @@ func Example() {
 }
 
 type Session struct {
-	name            string
+	queueName       string
 	logger          *log.Logger
 	connection      *amqp.Connection
 	channel         *amqp.Channel
@@ -71,11 +71,11 @@ var (
 
 // New creates a new consumer state instance, and automatically
 // attempts to connect to the server.
-func New(name string, addr string) *Session {
+func New(queueName, addr string) *Session {
 	session := Session{
-		logger: log.New(os.Stdout, "", log.LstdFlags),
-		name:   name,
-		done:   make(chan bool),
+		logger:    log.New(os.Stdout, "", log.LstdFlags),
+		queueName: queueName,
+		done:      make(chan bool),
 	}
 	go session.handleReconnect(addr)
 	return &session
@@ -165,7 +165,7 @@ func (session *Session) init(conn *amqp.Connection) error {
 		return err
 	}
 	_, err = ch.QueueDeclare(
-		session.name,
+		session.queueName,
 		false, // Durable
 		false, // Delete when unused
 		false, // Exclusive
@@ -243,10 +243,10 @@ func (session *Session) UnsafePush(data []byte) error {
 		return errNotConnected
 	}
 	return session.channel.Publish(
-		"",           // Exchange
-		session.name, // Routing key
-		false,        // Mandatory
-		false,        // Immediate
+		"",                // Exchange
+		session.queueName, // Routing key, the queue name is used for example purposes
+		false,             // Mandatory
+		false,             // Immediate
 		amqp.Publishing{
 			ContentType: "text/plain",
 			Body:        data,
@@ -263,7 +263,7 @@ func (session *Session) Stream() (<-chan amqp.Delivery, error) {
 		return nil, errNotConnected
 	}
 	return session.channel.Consume(
-		session.name,
+		session.queueName,
 		"",    // Consumer
 		false, // Auto-Ack
 		false, // Exclusive
