@@ -244,7 +244,7 @@ func (client *Client) UnsafePush(data []byte) error {
 	}
 	return client.channel.Publish(
 		"",          // Exchange
-		client.name, // Routing key
+		client.queueName, // Routing key
 		false,       // Mandatory
 		false,       // Immediate
 		amqp.Publishing{
