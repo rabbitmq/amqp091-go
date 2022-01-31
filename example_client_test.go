@@ -243,10 +243,10 @@ func (client *Client) UnsafePush(data []byte) error {
 		return errNotConnected
 	}
 	return client.channel.Publish(
-		"",          // Exchange
+		"",               // Exchange
 		client.queueName, // Routing key
-		false,       // Mandatory
-		false,       // Immediate
+		false,            // Mandatory
+		false,            // Immediate
 		amqp.Publishing{
 			ContentType: "text/plain",
 			Body:        data,
