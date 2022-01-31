@@ -165,7 +165,7 @@ func (client *Client) init(conn *amqp.Connection) error {
 		return err
 	}
 	_, err = ch.QueueDeclare(
-		session.queueName,
+		client.queueName,
 		false, // Durable
 		false, // Delete when unused
 		false, // Exclusive
@@ -242,7 +242,7 @@ func (client *Client) UnsafePush(data []byte) error {
 	if !client.isReady {
 		return errNotConnected
 	}
-	return session.channel.Publish(
+	return client.channel.Publish(
 		"",          // Exchange
 		client.name, // Routing key
 		false,       // Mandatory
@@ -262,8 +262,8 @@ func (client *Client) Stream() (<-chan amqp.Delivery, error) {
 	if !client.isReady {
 		return nil, errNotConnected
 	}
-	return session.channel.Consume(
-		session.queueName,
+	return client.channel.Consume(
+		client.queueName,
 		"",    // Consumer
 		false, // Auto-Ack
 		false, // Exclusive
