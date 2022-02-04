@@ -254,11 +254,11 @@ func (client *Client) UnsafePush(data []byte) error {
 	)
 }
 
-// Stream will continuously put queue items on the channel.
+// Consume will continuously put queue items on the channel.
 // It is required to call delivery.Ack when it has been
 // successfully processed, or delivery.Nack when it fails.
 // Ignoring this will cause data to build up on the server.
-func (client *Client) Stream() (<-chan amqp.Delivery, error) {
+func (client *Client) Consume() (<-chan amqp.Delivery, error) {
 	if !client.isReady {
 		return nil, errNotConnected
 	}
