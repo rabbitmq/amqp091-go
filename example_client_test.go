@@ -25,9 +25,9 @@ import (
 // Try running this in one terminal, and `rabbitmq-server` in another.
 // Stop & restart RabbitMQ to see how the queue reacts.
 func Example() {
-	name := "job_queue"
+	queueName := "job_queue"
 	addr := "amqp://guest:guest@localhost:5672/"
-	queue := New(name, addr)
+	queue := New(queueName, addr)
 	message := []byte("message")
 	// Attempt to push a message every 2 seconds
 	for {
@@ -41,7 +41,7 @@ func Example() {
 }
 
 type Client struct {
-	name            string
+	queueName       string
 	logger          *log.Logger
 	connection      *amqp.Connection
 	channel         *amqp.Channel
@@ -71,10 +71,10 @@ var (
 
 // New creates a new consumer state instance, and automatically
 // attempts to connect to the server.
-func New(name string, addr string) *Client {
+func New(queueName, addr string) *Client {
 	client := Client{
 		logger: log.New(os.Stdout, "", log.LstdFlags),
-		name:   name,
+		queueName: queueName,
 		done:   make(chan bool),
 	}
 	go client.handleReconnect(addr)
@@ -165,7 +165,7 @@ func (client *Client) init(conn *amqp.Connection) error {
 		return err
 	}
 	_, err = ch.QueueDeclare(
-		client.name,
+		client.queueName,
 		false, // Durable
 		false, // Delete when unused
 		false, // Exclusive
@@ -243,10 +243,10 @@ func (client *Client) UnsafePush(data []byte) error {
 		return errNotConnected
 	}
 	return client.channel.Publish(
-		"",          // Exchange
-		client.name, // Routing key
-		false,       // Mandatory
-		false,       // Immediate
+		"",               // Exchange
+		client.queueName, // Routing key
+		false,            // Mandatory
+		false,            // Immediate
 		amqp.Publishing{
 			ContentType: "text/plain",
 			Body:        data,
@@ -263,7 +263,7 @@ func (client *Client) Stream() (<-chan amqp.Delivery, error) {
 		return nil, errNotConnected
 	}
 	return client.channel.Consume(
-		client.name,
+		client.queueName,
 		"",    // Consumer
 		false, // Auto-Ack
 		false, // Exclusive
