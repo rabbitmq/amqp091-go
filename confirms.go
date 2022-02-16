@@ -103,11 +103,20 @@ func (c *confirms) Close() error {
 	c.m.Lock()
 	defer c.m.Unlock()
 
+	c.releaseWaitConfirms()
+
 	for _, l := range c.listeners {
 		close(l)
 	}
 	c.listeners = nil
 	return nil
+}
+
+func (c *confirms) releaseWaitConfirms() {
+	c.deferredConfirmations.ConfirmMultiple(Confirmation{
+		DeliveryTag: c.published,
+		Ack:         false,
+	})
 }
 
 type deferredConfirmations struct {
