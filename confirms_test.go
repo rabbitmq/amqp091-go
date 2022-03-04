@@ -226,12 +226,12 @@ func TestDeferredConfirmationsClose(t *testing.T) {
 	dc3 := dcs.Add(3)
 	wg.Add(1)
 	go func() {
-		result = dc1.Wait() && dc2.Wait() && dc3.Wait()
+		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
 		wg.Done()
 	}()
 	dcs.Close()
 	wg.Wait()
-	if result {
+	if !result {
 		t.Fatal("expected to receive false for nacked confirmations, received true")
 	}
 }
