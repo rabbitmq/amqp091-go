@@ -98,25 +98,19 @@ func (c *confirms) Multiple(confirmed Confirmation) {
 	c.resequence()
 }
 
-// Close closes all listeners, discarding any out of sequence confirmations
+// Cleans up the confirms struct and its dependencies.
+// Closes all listeners, discarding any out of sequence confirmations
 func (c *confirms) Close() error {
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	c.releaseWaitConfirms()
+	c.deferredConfirmations.Close()
 
 	for _, l := range c.listeners {
 		close(l)
 	}
 	c.listeners = nil
 	return nil
-}
-
-func (c *confirms) releaseWaitConfirms() {
-	c.deferredConfirmations.ConfirmMultiple(Confirmation{
-		DeliveryTag: c.published,
-		Ack:         false,
-	})
 }
 
 type deferredConfirmations struct {
@@ -167,6 +161,19 @@ func (d *deferredConfirmations) ConfirmMultiple(confirmation Confirmation) {
 	}
 }
 
+// Nacks all pending DeferredConfirmations being blocked by dc.Wait()
+func (d *deferredConfirmations) Close() {
+	d.m.Lock()
+	defer d.m.Unlock()
+
+	for k, v := range d.confirmations {
+		v.confirmation = Confirmation{DeliveryTag: k, Ack: false}
+		v.wg.Done()
+		delete(d.confirmations, k)
+	}
+}
+
+// Waits for publisher confirmation. Returns true if server successfully received the publishing.
 func (d *DeferredConfirmation) Wait() bool {
 	d.wg.Wait()
 	return d.confirmation.Ack
