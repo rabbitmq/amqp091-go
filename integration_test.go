@@ -1810,6 +1810,37 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 	}
 }
 
+// https://github.com/rabbitmq/amqp091-go/pull/44
+func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
+	conn := integrationConnection(t, "TestShouldNotWaitAfterConnectionClosedIssue44")
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("channel error: %v", err)
+	}
+	err = ch.Confirm(false)
+	if err != nil {
+		t.Fatalf("confirm error: %v", err)
+	}
+	closed := conn.NotifyClose(make(chan *Error, 1))
+	go func() {
+		<-closed
+	}()
+
+	confirm, err := ch.PublishWithDeferredConfirm("test-issue44", "issue44", false, false, Publishing{Body: []byte("abc")})
+	if err != nil {
+		t.Fatalf("PublishWithDeferredConfirm error: %v", err)
+	}
+
+	ch.Close()
+	conn.Close()
+
+	ack := confirm.Wait()
+
+	if ack != false {
+		t.Fatalf("ack returned should be false %v", ack)
+	}
+}
+
 /*
  * Support for integration tests
  */

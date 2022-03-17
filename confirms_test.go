@@ -216,3 +216,22 @@ func TestDeferredConfirmationsConfirmMultiple(t *testing.T) {
 		t.Fatal("expected to receive true for result, received false")
 	}
 }
+
+func TestDeferredConfirmationsClose(t *testing.T) {
+	dcs := newDeferredConfirmations()
+	var wg sync.WaitGroup
+	var result bool
+	dc1 := dcs.Add(1)
+	dc2 := dcs.Add(2)
+	dc3 := dcs.Add(3)
+	wg.Add(1)
+	go func() {
+		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
+		wg.Done()
+	}()
+	dcs.Close()
+	wg.Wait()
+	if !result {
+		t.Fatal("expected to receive false for nacked confirmations, received true")
+	}
+}
