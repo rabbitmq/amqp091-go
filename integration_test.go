@@ -1826,7 +1826,7 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 		<-closed
 	}()
 
-	confirm, err := ch.PublishWithDeferredConfirm("amqp.direct", "issue44", false, false, Publishing{Body: []byte("abc")})
+	confirm, err := ch.PublishWithDeferredConfirm("amq.direct", "issue44", false, false, Publishing{Body: []byte("abc")})
 	if err != nil {
 		t.Fatalf("PublishWithDeferredConfirm error: %v", err)
 	}
