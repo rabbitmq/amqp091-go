@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build integration
 // +build integration
 
 package amqp091
@@ -1907,6 +1908,31 @@ func assertConsumeBody(t *testing.T, messages <-chan Delivery, want []byte) (msg
 	}
 
 	return msg
+}
+
+// https://github.com/rabbitmq/amqp091-go/issues/11
+func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T) {
+	conn := integrationConnection(t, "TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11")
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("channel error: %v", err)
+	}
+
+	conn.NotifyClose(make(chan *Error, 1))
+
+	_, err = ch.PublishWithDeferredConfirm("issue11", "issue11", false, false, Publishing{Body: []byte("abc")})
+	if err != nil {
+		t.Fatalf("PublishWithDeferredConfirm error: %v", err)
+	}
+
+	ch.Close()
+	conn.Close()
+
+	ch, err = conn.Channel()
+	if err == nil {
+		t.Fatalf("Opening a channel from a closed connection should not block but returning an error %v", err)
+	}
+
 }
 
 // Pulls out the CRC and verifies the remaining content against the CRC
