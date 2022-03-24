@@ -229,7 +229,7 @@ func TestDefaultClientProperties(t *testing.T) {
 		t.Errorf("expected product %s got: %s", want, got)
 	}
 
-	if want, got := defaultVersion, srv.start.ClientProperties["version"]; want != got {
+	if want, got := buildVersion, srv.start.ClientProperties["version"]; want != got {
 		t.Errorf("expected version %s got: %s", want, got)
 	}
 
