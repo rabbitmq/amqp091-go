@@ -215,10 +215,11 @@ func (t *server) channelOpen(id int) {
 
 func TestDefaultClientProperties(t *testing.T) {
 	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
 
 	go func() {
 		srv.connectionOpen()
-		rwc.Close()
+
 	}()
 
 	if c, err := Open(rwc, defaultConfig()); err != nil {
@@ -236,10 +237,12 @@ func TestDefaultClientProperties(t *testing.T) {
 	if want, got := defaultLocale, srv.start.Locale; want != got {
 		t.Errorf("expected locale %s got: %s", want, got)
 	}
+
 }
 
 func TestCustomClientProperties(t *testing.T) {
 	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
 
 	config := defaultConfig()
 	config.Properties = Table{
@@ -249,7 +252,7 @@ func TestCustomClientProperties(t *testing.T) {
 
 	go func() {
 		srv.connectionOpen()
-		rwc.Close()
+
 	}()
 
 	if c, err := Open(rwc, config); err != nil {
@@ -263,28 +266,31 @@ func TestCustomClientProperties(t *testing.T) {
 	if want, got := config.Properties["version"], srv.start.ClientProperties["version"]; want != got {
 		t.Errorf("expected version %s got: %s", want, got)
 	}
+
 }
 
 func TestOpen(t *testing.T) {
 	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
 	go func() {
 		srv.connectionOpen()
-		rwc.Close()
+
 	}()
 
 	if c, err := Open(rwc, defaultConfig()); err != nil {
 		t.Fatalf("could not create connection: %v (%s)", c, err)
 	}
+
 }
 
 func TestChannelOpen(t *testing.T) {
 	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
 
 	go func() {
 		srv.connectionOpen()
 		srv.channelOpen(1)
 
-		rwc.Close()
 	}()
 
 	c, err := Open(rwc, defaultConfig())
@@ -296,10 +302,12 @@ func TestChannelOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not open channel: %v (%s)", ch, err)
 	}
+
 }
 
 func TestOpenFailedSASLUnsupportedMechanisms(t *testing.T) {
 	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
 
 	go func() {
 		srv.expectAMQP()
@@ -310,11 +318,13 @@ func TestOpenFailedSASLUnsupportedMechanisms(t *testing.T) {
 	if err != ErrSASL {
 		t.Fatalf("expected ErrSASL got: %+v on %+v", err, c)
 	}
+
 }
 
 func TestOpenAMQPlainAuth(t *testing.T) {
 	auth := make(chan Table)
 	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
 
 	go func() {
 		srv.expectAMQP()
@@ -326,7 +336,7 @@ func TestOpenAMQPlainAuth(t *testing.T) {
 
 		srv.recv(0, &connectionOpen{})
 		srv.send(0, &connectionOpenOk{})
-		rwc.Close()
+
 		auth <- table
 	}()
 
@@ -340,6 +350,7 @@ func TestOpenAMQPlainAuth(t *testing.T) {
 	if table["PASSWORD"] != defaultPassword {
 		t.Fatalf("unexpected password: want: %s, got: %s", defaultPassword, table["PASSWORD"])
 	}
+
 }
 
 func TestOpenFailedCredentials(t *testing.T) {
@@ -356,6 +367,7 @@ func TestOpenFailedCredentials(t *testing.T) {
 	if err != ErrCredentials {
 		t.Fatalf("expected ErrCredentials got: %+v on %+v", err, c)
 	}
+
 }
 
 func TestOpenFailedVhost(t *testing.T) {
