@@ -218,7 +218,7 @@ func TestDefaultClientProperties(t *testing.T) {
 
 	go func() {
 		srv.connectionOpen()
-		rwc.Close()
+
 	}()
 
 	if c, err := Open(rwc, defaultConfig()); err != nil {
@@ -236,6 +236,7 @@ func TestDefaultClientProperties(t *testing.T) {
 	if want, got := defaultLocale, srv.start.Locale; want != got {
 		t.Errorf("expected locale %s got: %s", want, got)
 	}
+	rwc.Close()
 }
 
 func TestCustomClientProperties(t *testing.T) {
@@ -249,7 +250,7 @@ func TestCustomClientProperties(t *testing.T) {
 
 	go func() {
 		srv.connectionOpen()
-		rwc.Close()
+
 	}()
 
 	if c, err := Open(rwc, config); err != nil {
@@ -263,18 +264,21 @@ func TestCustomClientProperties(t *testing.T) {
 	if want, got := config.Properties["version"], srv.start.ClientProperties["version"]; want != got {
 		t.Errorf("expected version %s got: %s", want, got)
 	}
+
+	rwc.Close()
 }
 
 func TestOpen(t *testing.T) {
 	rwc, srv := newSession(t)
 	go func() {
 		srv.connectionOpen()
-		rwc.Close()
+
 	}()
 
 	if c, err := Open(rwc, defaultConfig()); err != nil {
 		t.Fatalf("could not create connection: %v (%s)", c, err)
 	}
+	rwc.Close()
 }
 
 func TestChannelOpen(t *testing.T) {
@@ -326,7 +330,7 @@ func TestOpenAMQPlainAuth(t *testing.T) {
 
 		srv.recv(0, &connectionOpen{})
 		srv.send(0, &connectionOpenOk{})
-		rwc.Close()
+
 		auth <- table
 	}()
 
@@ -340,6 +344,7 @@ func TestOpenAMQPlainAuth(t *testing.T) {
 	if table["PASSWORD"] != defaultPassword {
 		t.Fatalf("unexpected password: want: %s, got: %s", defaultPassword, table["PASSWORD"])
 	}
+	rwc.Close()
 }
 
 func TestOpenFailedCredentials(t *testing.T) {
