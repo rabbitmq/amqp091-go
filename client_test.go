@@ -236,7 +236,7 @@ func TestDefaultClientProperties(t *testing.T) {
 	if want, got := defaultLocale, srv.start.Locale; want != got {
 		t.Errorf("expected locale %s got: %s", want, got)
 	}
-	rwc.Close()
+	t.Cleanup(func() { rwc.Close() })
 }
 
 func TestCustomClientProperties(t *testing.T) {
@@ -265,7 +265,7 @@ func TestCustomClientProperties(t *testing.T) {
 		t.Errorf("expected version %s got: %s", want, got)
 	}
 
-	rwc.Close()
+	t.Cleanup(func() { rwc.Close() })
 }
 
 func TestOpen(t *testing.T) {
@@ -278,7 +278,7 @@ func TestOpen(t *testing.T) {
 	if c, err := Open(rwc, defaultConfig()); err != nil {
 		t.Fatalf("could not create connection: %v (%s)", c, err)
 	}
-	rwc.Close()
+	t.Cleanup(func() { rwc.Close() })
 }
 
 func TestChannelOpen(t *testing.T) {
@@ -288,7 +288,6 @@ func TestChannelOpen(t *testing.T) {
 		srv.connectionOpen()
 		srv.channelOpen(1)
 
-		rwc.Close()
 	}()
 
 	c, err := Open(rwc, defaultConfig())
@@ -300,6 +299,8 @@ func TestChannelOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not open channel: %v (%s)", ch, err)
 	}
+
+	t.Cleanup(func() { rwc.Close() })
 }
 
 func TestOpenFailedSASLUnsupportedMechanisms(t *testing.T) {
@@ -314,6 +315,7 @@ func TestOpenFailedSASLUnsupportedMechanisms(t *testing.T) {
 	if err != ErrSASL {
 		t.Fatalf("expected ErrSASL got: %+v on %+v", err, c)
 	}
+	t.Cleanup(func() { rwc.Close() })
 }
 
 func TestOpenAMQPlainAuth(t *testing.T) {
@@ -344,7 +346,7 @@ func TestOpenAMQPlainAuth(t *testing.T) {
 	if table["PASSWORD"] != defaultPassword {
 		t.Fatalf("unexpected password: want: %s, got: %s", defaultPassword, table["PASSWORD"])
 	}
-	rwc.Close()
+	t.Cleanup(func() { rwc.Close() })
 }
 
 func TestOpenFailedCredentials(t *testing.T) {
@@ -361,6 +363,7 @@ func TestOpenFailedCredentials(t *testing.T) {
 	if err != ErrCredentials {
 		t.Fatalf("expected ErrCredentials got: %+v on %+v", err, c)
 	}
+
 }
 
 func TestOpenFailedVhost(t *testing.T) {
