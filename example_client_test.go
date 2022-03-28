@@ -73,9 +73,9 @@ var (
 // attempts to connect to the server.
 func New(queueName, addr string) *Client {
 	client := Client{
-		logger: log.New(os.Stdout, "", log.LstdFlags),
+		logger:    log.New(os.Stdout, "", log.LstdFlags),
 		queueName: queueName,
-		done:   make(chan bool),
+		done:      make(chan bool),
 	}
 	go client.handleReconnect(addr)
 	return &client
