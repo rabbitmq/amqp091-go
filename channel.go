@@ -449,6 +449,9 @@ this channel.
 The chan provided will be closed when the Channel is closed and on a
 graceful close, no error will be sent.
 
+In case of a non graceful close the error will be notified synchronously by the library
+so that it will be necessary to consume the Channel from the caller in order to avoid deadlocks
+
 */
 func (ch *Channel) NotifyClose(c chan *Error) chan *Error {
 	ch.notifyM.Lock()

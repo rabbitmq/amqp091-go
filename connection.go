@@ -284,6 +284,9 @@ accompanying a connection.close method or by a normal shutdown.
 The chan provided will be closed when the Channel is closed and on a
 graceful close, no error will be sent.
 
+In case of a non graceful close the error will be notified synchronously by the library
+so that it will be necessary to consume the Channel from the caller in order to avoid deadlocks
+
 To reconnect after a transport or protocol error, register a listener here and
 re-run your setup process.
 
