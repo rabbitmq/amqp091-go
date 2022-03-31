@@ -119,25 +119,26 @@ You can see that in the shutdown function of connection and channel (see connect
 The error is sent synchronously to the channel so that the flow will wait until the channel will be consumed by the caller.
 To avoid deadlocks it is necessary to consume the messages from the channels.
 This could be done inside a different goroutine with a select listening on the two channels inside a for loop like:
+```
 go func() {
-  for  {
-    select {
-      case _, ok <-notifyConnClose:
-        log.Println("connection closed")
-        if !ok  {
-          notifyConnClose = nil
-        }
-      case _, ok <-notifyChanClose:
-        log.Println("channel closed")
-        if !ok  {
-          notifyChanClose = nil
-        }
+ for notifyConnClose != nil || notifyChanClose != nil {
+  select {
+   case err, ok := <-notifyConnClose:
+      if !(ok) {
+        notifyConnClose = nil
+      } else {
+        fmt.Printf("connection closed, error %s", err)
+      }
+   case err, ok := <-notifyChanClose:
+      if !(ok) {
+        notifyChanClose = nil
+      } else {
+        fmt.Printf("channel closed, error %s", err)
+      }
     }
-    if notifyConnClose == nil && notifyChanClose == nil  {
-      break
-    }
-  }
+ }
 }()
+```
 */
 
 package amqp091
