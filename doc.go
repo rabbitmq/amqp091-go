@@ -111,11 +111,13 @@ conn.NotifyClose(notifyConnClose)
 No errors will be sent in case of a graceful connection close.
 In case of a non-graceful close, because of a network issue of forced disconnection from the UI, the error will be notified synchronously by the library.
 You can see that in the shutdown function of connection and channel (see connection.go and channel.go)
+ ```
  if err != nil {
       for _, c := range c.closes {
         c <- err
       }
     }
+```
 The error is sent synchronously to the channel so that the flow will wait until the channel will be consumed by the caller.
 To avoid deadlocks it is necessary to consume the messages from the channels.
 This could be done inside a different goroutine with a select listening on the two channels inside a for loop like:
