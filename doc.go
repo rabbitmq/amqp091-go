@@ -105,23 +105,24 @@ encounters an amqp:// scheme.
 SSL/TLS in RabbitMQ is documented here: http://www.rabbitmq.com/ssl.html
 
 Best practises for Connections and Channels notifications.
+
 In order to be notified when a connection or channel gets closed both the structures offer the possibility to register channels using the `notifyClose` function like:
 notifyConnClose := make(chan *amqp.Error)
 conn.NotifyClose(notifyConnClose)
 No errors will be sent in case of a graceful connection close.
 In case of a non-graceful close, because of a network issue of forced disconnection from the UI, the error will be notified synchronously by the library.
 You can see that in the shutdown function of connection and channel (see connection.go and channel.go)
- ```
+
  if err != nil {
       for _, c := range c.closes {
         c <- err
       }
     }
-```
+
 The error is sent synchronously to the channel so that the flow will wait until the channel will be consumed by the caller.
 To avoid deadlocks it is necessary to consume the messages from the channels.
 This could be done inside a different goroutine with a select listening on the two channels inside a for loop like:
-```
+
 go func() {
  for notifyConnClose != nil || notifyChanClose != nil {
   select {
@@ -140,7 +141,6 @@ go func() {
     }
  }
 }()
-```
-*/
 
+*/
 package amqp091
