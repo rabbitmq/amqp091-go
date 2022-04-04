@@ -72,14 +72,15 @@ Things not intended to be supported.
       topology declaration so that reconnection is trivial and encapsulated in
       the caller's application code.
   * AMQP Protocol negotiation for forward or backward compatibility.
-    * 0.9.1 is stable and widely deployed.  Versions 0.10 and 1.0 are divergent
-      specifications that change the semantics and wire format of the protocol.
-      We will accept patches for other protocol support but have no plans for
-      implementation ourselves.
+    * 0.9.1 is stable and widely deployed.  AMQP 1.0 is a divergent
+      specification (a different protocol) and belongs to a different library.
   * Anything other than PLAIN and EXTERNAL authentication mechanisms.
     * Keeping the mechanisms interface modular makes it possible to extend
       outside of this package.  If other mechanisms prove to be popular, then
       we would accept patches to include them in this package.
+  * Support for [`basic.return` and `basic.ack` frame ordering](https://www.rabbitmq.com/confirms.html#when-publishes-are-confirmed).
+    This client uses Go channels for certain protocol events and ordering between
+    events sent to two different channels generally cannot be guaranteed.
 
 ## Usage
 
@@ -105,6 +106,6 @@ integration`.  TravisCI will also run the integration tests.
 
 ## License
 
-BSD 2 clause - see LICENSE for more details.
+BSD 2 clause, see LICENSE for more details.
 
 
