@@ -1,3 +1,3 @@
 module github.com/rabbitmq/amqp091-go
 
-go 1.15
+go 1.16
