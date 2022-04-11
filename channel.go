@@ -603,6 +603,9 @@ or Channel while confirms are in-flight.
 It's advisable to wait for all Confirmations to arrive before calling
 Channel.Close() or Connection.Close().
 
+It is also advisable for the caller to consume from the channel returned till it is closed
+to avoid possible deadlocks
+
 */
 func (ch *Channel) NotifyPublish(confirm chan Confirmation) chan Confirmation {
 	ch.notifyM.Lock()
