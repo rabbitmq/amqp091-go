@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 func TestRequiredServerLocale(t *testing.T) {
@@ -209,4 +211,33 @@ func TestChannelIsClosed(t *testing.T) {
 	if !ch.IsClosed() {
 		t.Fatal("channel expected to be marked as closed")
 	}
+}
+
+// TestReaderGoRoutineTerminatesWhenMsgIsProcessedDuringClose tests the issue
+// described in https://github.com/rabbitmq/amqp091-go/issues/69.
+func TestReaderGoRoutineTerminatesWhenMsgIsProcessedDuringClose(t *testing.T) {
+	const routines = 10
+	defer goleak.VerifyNone(t)
+	c := integrationConnection(t, t.Name())
+
+	var wg sync.WaitGroup
+	startSigCh := make(chan interface{})
+
+	for i := 0; i < routines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			<-startSigCh
+
+			err := c.Close()
+			if err != nil {
+				t.Logf("close failed in routine %d: %s", id, err.Error())
+			}
+		}(i)
+	}
+	close(startSigCh)
+
+	t.Log("waiting for go-routines to terminate")
+	wg.Wait()
 }
