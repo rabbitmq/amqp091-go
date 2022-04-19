@@ -1424,6 +1424,8 @@ func TestDeadlockConsumerIssue48(t *testing.T) {
 func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 	conn := integrationConnection(t, "issue46")
 	if conn != nil {
+		t.Cleanup(func() { conn.Close() })
+
 		for i := 0; i < 100; i++ {
 			ch, err := conn.Channel()
 			if err != nil {
@@ -1446,6 +1448,8 @@ func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 	conn := integrationConnection(t, "issue43")
 	if conn != nil {
+		t.Cleanup(func() { conn.Close() })
+
 		go func() {
 			for err := range conn.NotifyClose(make(chan *Error)) {
 				t.Log(err.Error())

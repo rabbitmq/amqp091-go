@@ -18,6 +18,7 @@ import (
 
 func TestRequiredServerLocale(t *testing.T) {
 	conn := integrationConnection(t, "AMQP 0-9-1 required server locale")
+	t.Cleanup(func() { conn.Close() })
 	requiredServerLocale := defaultLocale
 
 	for _, locale := range conn.Locales {
@@ -31,6 +32,7 @@ func TestRequiredServerLocale(t *testing.T) {
 
 func TestDefaultConnectionLocale(t *testing.T) {
 	conn := integrationConnection(t, "client default locale")
+	t.Cleanup(func() { conn.Close() })
 
 	if conn.Config.Locale != defaultLocale {
 		t.Fatalf("Expected default connection locale to be %s, is was: %s", defaultLocale, conn.Config.Locale)
@@ -198,6 +200,7 @@ func TestIsClosed(t *testing.T) {
 // TestChannelIsClosed will test the public method IsClosed on a channel.
 func TestChannelIsClosed(t *testing.T) {
 	conn := integrationConnection(t, "public channel.IsClosed()")
+	t.Cleanup(func() { conn.Close() })
 	ch, _ := conn.Channel()
 
 	if ch.IsClosed() {
