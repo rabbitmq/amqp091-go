@@ -20,6 +20,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"testing/quick"
@@ -1422,6 +1423,9 @@ func TestDeadlockConsumerIssue48(t *testing.T) {
 
 // https://github.com/streadway/amqp/issues/46
 func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
+	if strings.Compare(os.Getenv("CI"), "true") == 0 {
+		t.Skip("FLAKY - https://github.com/rabbitmq/amqp091-go/issues/77")
+	}
 	conn := integrationConnection(t, "issue46")
 	if conn != nil {
 		t.Cleanup(func() { conn.Close() })
