@@ -18,4 +18,4 @@ vet: ## Run go vet against code
 
 .PHONY: tests
 tests: ## Run all tests and requires a running rabbitmq-server
-	env AMQP_URL=amqp://guest:guest@127.0.0.1:5672/ go test -v -tags integration
+	env AMQP_URL=amqp://guest:guest@127.0.0.1:5672/ go test -race -v -tags integration
