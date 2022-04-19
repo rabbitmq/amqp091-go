@@ -56,11 +56,12 @@ func ExampleConnection_reconnect() {
 		// between reconnects, shares the same topology as the consumer.  If we rather
 		// sent all messages up front, the first consumer would receive every message.
 		// We would rather show how the messages are not lost between reconnects.
-		_, pub, err := setup(url, queue)
+		con, pub, err := setup(url, queue)
 		if err != nil {
 			fmt.Println("err publisher setup:", err)
 			return
 		}
+		defer con.Close()
 
 		// Purge the queue from the publisher side to establish initial state
 		if _, err := pub.QueuePurge(queue, false); err != nil {

@@ -539,6 +539,8 @@ func (c *Connection) reader(r io.Reader) {
 	frames := &reader{buf}
 	conn, haveDeadliner := r.(readDeadliner)
 
+	defer close(c.rpc)
+
 	for {
 		frame, err := frames.ReadFrame()
 
@@ -689,27 +691,26 @@ func (c *Connection) call(req message, res ...message) error {
 		}
 	}
 
-	select {
-	case err, ok := <-c.errors:
-		if !ok {
+	msg, ok := <-c.rpc
+	if !ok {
+		err, errorsChanIsOpen := <-c.errors
+		if !errorsChanIsOpen {
 			return ErrClosed
 		}
 		return err
-
-	case msg := <-c.rpc:
-		// Try to match one of the result types
-		for _, try := range res {
-			if reflect.TypeOf(msg) == reflect.TypeOf(try) {
-				// *res = *msg
-				vres := reflect.ValueOf(try).Elem()
-				vmsg := reflect.ValueOf(msg).Elem()
-				vres.Set(vmsg)
-				return nil
-			}
-		}
-		return ErrCommandInvalid
 	}
-	// unreachable
+
+	// Try to match one of the result types
+	for _, try := range res {
+		if reflect.TypeOf(msg) == reflect.TypeOf(try) {
+			// *res = *msg
+			vres := reflect.ValueOf(try).Elem()
+			vmsg := reflect.ValueOf(msg).Elem()
+			vres.Set(vmsg)
+			return nil
+		}
+	}
+	return ErrCommandInvalid
 }
 
 //    Connection          = open-Connection *use-Connection close-Connection
