@@ -24,6 +24,8 @@ import (
 	"testing"
 	"testing/quick"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 func TestIntegrationOpenClose(t *testing.T) {
@@ -1966,4 +1968,8 @@ func generateCrc32Random(size int) []byte {
 	binary.BigEndian.PutUint32(msg[4:8], crc.Sum32())
 
 	return msg
+}
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
 }
