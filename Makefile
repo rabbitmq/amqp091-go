@@ -10,10 +10,10 @@ list: ## list Makefile targets
 fmt: ## Run go fmt against code
 	go fmt ./...
 
-.PHONY: vet
-vet: ## Run go vet against code
-	go vet ./...
-
 .PHONY: tests
 tests: ## Run all tests and requires a running rabbitmq-server
 	env AMQP_URL=amqp://guest:guest@127.0.0.1:5672/ go test -cpu 1,2 -race -v -tags integration
+
+.PHONY: check
+check:
+	golangci-lint run ./...
