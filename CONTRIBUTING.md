@@ -1,7 +1,8 @@
 ## Prerequisites
 
 1. Go: [https://golang.org/dl/](https://golang.org/dl/)
-1. Golint `go get -u -v github.com/golang/lint/golint`
+1. `golint`: `go get -u -v github.com/golang/lint/golint`
+1. `golangci-lint` (Optional for `make check`): [installation docs](https://golangci-lint.run/usage/install/)
 
 ## Contributing
 
