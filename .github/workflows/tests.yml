@@ -26,4 +26,4 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
       - name: Tests
-        run: AMQP_URL=amqp://guest:guest@localhost:5672/ go test -cpu=1,2 -v -tags integration
+        run: make tests
