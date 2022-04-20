@@ -94,19 +94,36 @@ func TestRaceBetweenChannelAndConnectionClose(t *testing.T) {
 // See https://github.com/streadway/amqp/pull/253#issuecomment-292464811 for
 // more details - thanks to jmalloc again.
 func TestRaceBetweenChannelShutdownAndSend(t *testing.T) {
+	const concurrency = 10
 	defer time.AfterFunc(10*time.Second, func() { panic("Close deadlock") }).Stop()
 
 	conn := integrationConnection(t, "channel close/send race")
 	defer conn.Close()
 
 	ch, _ := conn.Channel()
-
 	go ch.Close()
-	for i := 0; i < 10; i++ {
+
+	errs := make(chan error, concurrency)
+	wg := sync.WaitGroup{}
+	wg.Add(concurrency)
+
+	for i := 0; i < concurrency; i++ {
 		go func() {
+			defer wg.Done()
 			// ch.Ack calls ch.send() internally.
-			ch.Ack(42, false)
+			if err := ch.Ack(42, false); err != nil {
+				errs <- err
+			}
 		}()
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Logf("[INFO] %#v (%s) of type %T", err, err, err)
+		}
 	}
 }
 
@@ -127,8 +144,10 @@ func TestConcurrentClose(t *testing.T) {
 	conn := integrationConnection(t, "concurrent close")
 	defer conn.Close()
 
+	errs := make(chan error, concurrency)
 	wg := sync.WaitGroup{}
 	wg.Add(concurrency)
+
 	for i := 0; i < concurrency; i++ {
 		go func() {
 			defer wg.Done()
@@ -156,11 +175,19 @@ func TestConcurrentClose(t *testing.T) {
 
 			// A different/protocol error occurred indicating a race or missed condition
 			if _, other := err.(*Error); other {
-				t.Fatalf("Expected no error, or ErrClosed, or a net.OpError from conn.Close(), got %#v (%s) of type %T", err, err, err)
+				errs <- err
 			}
 		}()
 	}
+
 	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Expected no error, or ErrClosed, or a net.OpError from conn.Close(), got %#v (%s) of type %T", err, err, err)
+		}
+	}
 }
 
 // TestPlaintextDialTLS ensures amqp:// connections succeed when using DialTLS.

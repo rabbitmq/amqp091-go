@@ -265,19 +265,6 @@ func (t Table) Validate() error {
 	return validateField(t)
 }
 
-// Heap interface for maintaining delivery tags
-type tagSet []uint64
-
-func (set tagSet) Len() int              { return len(set) }
-func (set tagSet) Less(i, j int) bool    { return (set)[i] < (set)[j] }
-func (set tagSet) Swap(i, j int)         { (set)[i], (set)[j] = (set)[j], (set)[i] }
-func (set *tagSet) Push(tag interface{}) { *set = append(*set, tag.(uint64)) }
-func (set *tagSet) Pop() interface{} {
-	val := (*set)[len(*set)-1]
-	*set = (*set)[:len(*set)-1]
-	return val
-}
-
 type message interface {
 	id() (uint16, uint16)
 	wait() bool
