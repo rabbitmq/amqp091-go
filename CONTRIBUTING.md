@@ -1,12 +1,8 @@
 # Contributing
 
-## Prerequisites
+## Workflow
 
-1. Go: [https://golang.org/dl/](https://golang.org/dl/)
-
-## Contributing
-
-The workflow is pretty standard:
+Here is the recommended workflow:
 
 1. Fork this repository, **github.com/rabbitmq/amqp091-go**
 1. Create your feature branch (`git checkout -b my-new-feature`)
