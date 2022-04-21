@@ -29,6 +29,20 @@ import (
 	"go.uber.org/goleak"
 )
 
+const envAMQPURLName = "AMQP_URL"
+
+var amqpURL = "amqp://guest:guest@127.0.0.1:5672/"
+
+func init() {
+	url := os.Getenv(envAMQPURLName)
+	if url != "" {
+		amqpURL = url
+		return
+	}
+
+	fmt.Printf("environment variable envAMQPURLName undefined or empty, using default: %q\n", amqpURL)
+}
+
 func TestIntegrationOpenClose(t *testing.T) {
 	if c := integrationConnection(t, "open-close"); c != nil {
 		t.Logf("have connection, calling connection close")
@@ -68,7 +82,7 @@ func TestIntegrationHighChannelChurnInTightLoop(t *testing.T) {
 func TestIntegrationOpenConfig(t *testing.T) {
 	config := Config{}
 
-	c, err := DialConfig(integrationURLFromEnv(), config)
+	c, err := DialConfig(amqpURL, config)
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
@@ -85,7 +99,7 @@ func TestIntegrationOpenConfig(t *testing.T) {
 func TestIntegrationOpenConfigWithNetDial(t *testing.T) {
 	config := Config{Dial: net.Dial}
 
-	c, err := DialConfig(integrationURLFromEnv(), config)
+	c, err := DialConfig(amqpURL, config)
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
@@ -102,7 +116,7 @@ func TestIntegrationOpenConfigWithNetDial(t *testing.T) {
 func TestIntegrationLocalAddr(t *testing.T) {
 	config := Config{}
 
-	c, err := DialConfig(integrationURLFromEnv(), config)
+	c, err := DialConfig(amqpURL, config)
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
@@ -401,7 +415,7 @@ func TestIntegrationBasicQueueOperations(t *testing.T) {
 func TestIntegrationConnectionNegotiatesMaxChannels(t *testing.T) {
 	config := Config{ChannelMax: 0}
 
-	c, err := DialConfig(integrationURLFromEnv(), config)
+	c, err := DialConfig(amqpURL, config)
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
@@ -415,7 +429,7 @@ func TestIntegrationConnectionNegotiatesMaxChannels(t *testing.T) {
 func TestIntegrationConnectionNegotiatesClientMaxChannels(t *testing.T) {
 	config := Config{ChannelMax: 16}
 
-	c, err := DialConfig(integrationURLFromEnv(), config)
+	c, err := DialConfig(amqpURL, config)
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
@@ -429,7 +443,7 @@ func TestIntegrationConnectionNegotiatesClientMaxChannels(t *testing.T) {
 func TestIntegrationChannelIDsExhausted(t *testing.T) {
 	config := Config{ChannelMax: 16}
 
-	c, err := DialConfig(integrationURLFromEnv(), config)
+	c, err := DialConfig(amqpURL, config)
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
@@ -742,10 +756,7 @@ func TestIntegrationConsumeCancel(t *testing.T) {
 }
 
 func (c *Connection) Generate(r *rand.Rand, _ int) reflect.Value {
-	urlStr := os.Getenv("AMQP_URL")
-	if urlStr == "" {
-		return reflect.ValueOf(nil)
-	}
+	urlStr := amqpURL
 
 	conn, err := Dial(urlStr)
 	if err != nil {
@@ -1856,14 +1867,6 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
  * Support for integration tests
  */
 
-func integrationURLFromEnv() string {
-	url := os.Getenv("AMQP_URL")
-	if url == "" {
-		url = "amqp://"
-	}
-	return url
-}
-
 func loggedConnection(t *testing.T, conn *Connection, name string) *Connection {
 	if name != "" {
 		conn.conn = &logIO{t, name, conn.conn}
@@ -1874,7 +1877,7 @@ func loggedConnection(t *testing.T, conn *Connection, name string) *Connection {
 // Returns a connection to the AMQP if the AMQP_URL environment
 // variable is set and a connection can be established.
 func integrationConnection(t *testing.T, name string) *Connection {
-	conn, err := Dial(integrationURLFromEnv())
+	conn, err := Dial(amqpURL)
 	if err != nil {
 		t.Fatalf("cannot dial integration server. Is the rabbitmq-server service running? %s", err)
 		return nil

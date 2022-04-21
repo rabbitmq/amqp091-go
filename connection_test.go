@@ -165,7 +165,7 @@ func TestConcurrentClose(t *testing.T) {
 
 // TestPlaintextDialTLS ensures amqp:// connections succeed when using DialTLS.
 func TestPlaintextDialTLS(t *testing.T) {
-	uri, err := ParseURI(integrationURLFromEnv())
+	uri, err := ParseURI(amqpURL)
 	if err != nil {
 		t.Fatalf("parse URI error: %s", err)
 	}
