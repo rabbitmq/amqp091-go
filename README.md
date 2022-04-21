@@ -84,7 +84,7 @@ Things not intended to be supported.
 
 ## Usage
 
-See the 'examples' subdirectory for simple producers and consumers executables.
+See the [_examples](_examples) subdirectory for simple producers and consumers executables.
 If you have a use-case in mind which isn't well-represented by the examples,
 please file an issue.
 
