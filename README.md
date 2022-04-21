@@ -84,7 +84,7 @@ Things not intended to be supported.
 
 ## Usage
 
-See the 'examples' subdirectory for simple producers and consumers executables.
+See the [_examples](_examples) subdirectory for simple producers and consumers executables.
 If you have a use-case in mind which isn't well-represented by the examples,
 please file an issue.
 
@@ -100,12 +100,8 @@ Pull requests are very much welcomed.  Create your pull request on a non-main
 branch, make sure a test or example is included that covers your change, and
 your commits represent coherent changes that include a reason for the change.
 
-To run the integration tests, make sure you have RabbitMQ running on any host,
-export the environment variable `AMQP_URL=amqp://host/` and run `go test -tags
-integration`.  TravisCI will also run the integration tests.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
 
 ## License
 
 BSD 2 clause, see LICENSE for more details.
-
-
