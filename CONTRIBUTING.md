@@ -20,17 +20,20 @@ The workflow is pretty standard:
 
 ## Running Tests
 
-The test suite assumes that:
-
- * A RabbitMQ node is running on localhost with all defaults: [https://www.rabbitmq.com/download.html](https://www.rabbitmq.com/download.html)
- * `AMQP_URL` is exported to `amqp://guest:guest@127.0.0.1:5672/`
-
 ### Integration Tests
 
-After starting a local RabbitMQ, run integration tests with the following:
+Running the Integration tests require:
 
-``` shell
-env AMQP_URL=amqp://guest:guest@127.0.0.1:5672/ go test -v -tags integration
+* A running RabbitMQ node with all defaults:
+  [https://www.rabbitmq.com/download.html](https://www.rabbitmq.com/download.html)
+* That the server is either reachable via `amqp://guest:guest@127.0.0.1:5672/`
+  or the environment variable `AMQP_URL` set to it's URL
+  (e.g.: `export AMQP_URL="amqp://guest:verysecretpasswd@rabbitmq-host:5772/`)
+
+The integration tests can be run via:
+
+```shell
+make tests
 ```
 
 All integration tests should use the `integrationConnection(...)` test
