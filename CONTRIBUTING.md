@@ -1,8 +1,6 @@
 ## Prerequisites
 
 1. Go: [https://golang.org/dl/](https://golang.org/dl/)
-1. `golint`: `go get -u -v github.com/golang/lint/golint`
-1. `golangci-lint` (Optional for `make check`): [installation docs](https://golangci-lint.run/usage/install/)
 
 ## Contributing
 
@@ -10,12 +8,24 @@ The workflow is pretty standard:
 
 1. Fork this repository, **github.com/rabbitmq/amqp091-go**
 1. Create your feature branch (`git checkout -b my-new-feature`)
+1. Run Static Checks
 1. Run integration tests (see below)
 1. **Implement tests**
 1. Implement fixs
 1. Commit your changes (`git commit -am 'Add some feature'`)
 1. Push to a branch (`git push -u origin my-new-feature`)
 1. Submit a pull request
+
+## Running Static Checks
+
+golangci-lint must be installed to run the static checks. See [installation
+docs](https://golangci-lint.run/usage/install/) for more information.
+
+The static checks can be run via:
+
+```shell
+make checks
+```
 
 ## Running Tests
 
