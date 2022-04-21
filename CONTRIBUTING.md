@@ -1,3 +1,5 @@
+# Contributing
+
 ## Prerequisites
 
 1. Go: [https://golang.org/dl/](https://golang.org/dl/)
