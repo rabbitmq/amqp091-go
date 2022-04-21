@@ -9,7 +9,6 @@
 The workflow is pretty standard:
 
 1. Fork this repository, **github.com/rabbitmq/amqp091-go**
-1. Add the pre-commit hook: `ln -s ../../pre-commit .git/hooks/pre-commit`
 1. Create your feature branch (`git checkout -b my-new-feature`)
 1. Run integration tests (see below)
 1. **Implement tests**
