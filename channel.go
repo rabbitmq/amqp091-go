@@ -66,7 +66,7 @@ type Channel struct {
 	errors chan *Error
 
 	// State machine that manages frame order, must only be mutated by the connection
-	recv func(*Channel, frame) error
+	recv func(*Channel, frame)
 
 	// Current state for frame re-assembly, only mutated from recv
 	message messageWithContent
@@ -334,40 +334,42 @@ func (ch *Channel) dispatch(msg message) {
 	}
 }
 
-func (ch *Channel) transition(f func(*Channel, frame) error) error {
+func (ch *Channel) transition(f func(*Channel, frame)) error {
 	ch.recv = f
 	return nil
 }
 
-func (ch *Channel) recvMethod(f frame) error {
+func (ch *Channel) recvMethod(f frame) {
 	switch frame := f.(type) {
 	case *methodFrame:
 		if msg, ok := frame.Method.(messageWithContent); ok {
 			ch.body = make([]byte, 0)
 			ch.message = msg
-			return ch.transition((*Channel).recvHeader)
+			ch.transition((*Channel).recvHeader)
+			return
 		}
 
 		ch.dispatch(frame.Method) // termination state
-		return ch.transition((*Channel).recvMethod)
+		ch.transition((*Channel).recvMethod)
 
 	case *headerFrame:
 		// drop
-		return ch.transition((*Channel).recvMethod)
+		ch.transition((*Channel).recvMethod)
 
 	case *bodyFrame:
 		// drop
-		return ch.transition((*Channel).recvMethod)
+		ch.transition((*Channel).recvMethod)
+
 	default:
 		panic("unexpected frame type")
 	}
 }
 
-func (ch *Channel) recvHeader(f frame) error {
+func (ch *Channel) recvHeader(f frame) {
 	switch frame := f.(type) {
 	case *methodFrame:
 		// interrupt content and handle method
-		return ch.recvMethod(f)
+		ch.recvMethod(f)
 
 	case *headerFrame:
 		// start collecting if we expect body frames
@@ -376,13 +378,14 @@ func (ch *Channel) recvHeader(f frame) error {
 		if frame.Size == 0 {
 			ch.message.setContent(ch.header.Properties, ch.body)
 			ch.dispatch(ch.message) // termination state
-			return ch.transition((*Channel).recvMethod)
+			ch.transition((*Channel).recvMethod)
+			return
 		}
-		return ch.transition((*Channel).recvContent)
+		ch.transition((*Channel).recvContent)
 
 	case *bodyFrame:
 		// drop and reset
-		return ch.transition((*Channel).recvMethod)
+		ch.transition((*Channel).recvMethod)
 
 	default:
 		panic("unexpected frame type")
@@ -391,15 +394,15 @@ func (ch *Channel) recvHeader(f frame) error {
 
 // state after method + header and before the length
 // defined by the header has been reached
-func (ch *Channel) recvContent(f frame) error {
+func (ch *Channel) recvContent(f frame) {
 	switch frame := f.(type) {
 	case *methodFrame:
 		// interrupt content and handle method
-		return ch.recvMethod(f)
+		ch.recvMethod(f)
 
 	case *headerFrame:
 		// drop and reset
-		return ch.transition((*Channel).recvMethod)
+		ch.transition((*Channel).recvMethod)
 
 	case *bodyFrame:
 		if cap(ch.body) == 0 {
@@ -410,10 +413,11 @@ func (ch *Channel) recvContent(f frame) error {
 		if uint64(len(ch.body)) >= ch.header.Size {
 			ch.message.setContent(ch.header.Properties, ch.body)
 			ch.dispatch(ch.message) // termination state
-			return ch.transition((*Channel).recvMethod)
+			ch.transition((*Channel).recvMethod)
+			return
 		}
 
-		return ch.transition((*Channel).recvContent)
+		ch.transition((*Channel).recvContent)
 
 	default:
 		panic("unexpected frame type")
