@@ -334,9 +334,8 @@ func (ch *Channel) dispatch(msg message) {
 	}
 }
 
-func (ch *Channel) transition(f func(*Channel, frame)) error {
+func (ch *Channel) transition(f func(*Channel, frame)) {
 	ch.recv = f
-	return nil
 }
 
 func (ch *Channel) recvMethod(f frame) {
