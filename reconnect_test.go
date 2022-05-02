@@ -92,7 +92,9 @@ func ExampleConnection_reconnect() {
 			// session and begin ranging over the deliveries again.
 			for msg := range deliveries {
 				fmt.Println(string(msg.Body))
-				msg.Ack(false)
+				if e := msg.Ack(false); e != nil {
+					fmt.Println("ack error: ", e)
+				}
 
 				// Simulate an error like a server restart, loss of route or operator
 				// intervention that results in the connection terminating

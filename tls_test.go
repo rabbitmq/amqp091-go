@@ -8,6 +8,7 @@ package amqp091
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -85,10 +86,14 @@ func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
 func TestTLSHandshake(t *testing.T) {
 	srv := startTLSServer(t, tlsServerConfig())
 	defer srv.Close()
+
+	success := make(chan bool)
+	errs := make(chan error, 3)
+
 	go func() {
 		select {
 		case <-time.After(10 * time.Millisecond):
-			t.Fatalf("server timeout waiting for TLS handshake from client")
+			errs <- errors.New("server timeout waiting for TLS handshake from client")
 		case session := <-srv.Sessions:
 			session.connectionOpen()
 			session.connectionClose()
@@ -96,14 +101,25 @@ func TestTLSHandshake(t *testing.T) {
 		}
 	}()
 
-	c, err := DialTLS(srv.URL, tlsClientConfig())
-	if err != nil {
-		t.Fatalf("expected to open a TLS connection, got err: %v", err)
-	}
-	defer c.Close()
+	go func() {
+		c, err := DialTLS(srv.URL, tlsClientConfig())
+		if err != nil {
+			errs <- fmt.Errorf("expected to open a TLS connection, got err: %v", err)
+		}
+		defer c.Close()
 
-	if st := c.ConnectionState(); !st.HandshakeComplete {
-		t.Errorf("expected to complete a TLS handshake, TLS connection state: %+v", st)
+		if st := c.ConnectionState(); !st.HandshakeComplete {
+			errs <- fmt.Errorf("expected to complete a TLS handshake, TLS connection state: %+v", st)
+		}
+
+		success <- true
+	}()
+
+	select {
+	case err := <-errs:
+		t.Fatalf("TLS server saw error: %+v", err)
+	case <-success:
+		return
 	}
 }
 

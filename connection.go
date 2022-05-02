@@ -8,6 +8,7 @@ package amqp091
 import (
 	"bufio"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"reflect"
@@ -465,11 +466,9 @@ func (c *Connection) dispatch0(f frame) {
 		switch m := mf.Method.(type) {
 		case *connectionClose:
 			// Send immediately as shutdown will close our side of the writer.
-			c.send(&methodFrame{
-				ChannelId: 0,
-				Method:    &connectionCloseOk{},
-			})
-
+			// TODO check error case
+			f := &methodFrame{ChannelId: 0, Method: &connectionCloseOk{}}
+			c.send(f) //nolint
 			c.shutdown(newError(m.ReplyCode, m.ReplyText))
 		case *connectionBlocked:
 			for _, c := range c.blocks {
@@ -486,7 +485,8 @@ func (c *Connection) dispatch0(f frame) {
 		// kthx - all reads reset our deadline.  so we can drop this
 	default:
 		// lolwat - channel0 only responds to methods and heartbeats
-		c.closeWith(ErrUnexpectedFrame)
+		// TODO check error case
+		c.closeWith(ErrUnexpectedFrame) //nolint
 	}
 }
 
@@ -518,15 +518,15 @@ func (c *Connection) dispatchClosed(f frame) {
 	if mf, ok := f.(*methodFrame); ok {
 		switch mf.Method.(type) {
 		case *channelClose:
-			c.send(&methodFrame{
-				ChannelId: f.channel(),
-				Method:    &channelCloseOk{},
-			})
+			// TODO check error case
+			f := &methodFrame{ChannelId: f.channel(), Method: &channelCloseOk{}}
+			c.send(f) //nolint
 		case *channelCloseOk:
 			// we are already closed, so do nothing
 		default:
 			// unexpected method on closed channel
-			c.closeWith(ErrClosed)
+			// TODO check error case
+			c.closeWith(ErrClosed) //nolint
 		}
 	}
 }
@@ -600,7 +600,13 @@ func (c *Connection) heartbeater(interval time.Duration, done chan *Error) {
 			// When reading, reset our side of the deadline, if we've negotiated one with
 			// a deadline that covers at least 2 server heartbeats
 			if interval > 0 {
-				conn.SetReadDeadline(time.Now().Add(maxServerHeartbeatsInFlight * interval))
+				if err := conn.SetReadDeadline(time.Now().Add(maxServerHeartbeatsInFlight * interval)); err != nil {
+					var opErr *net.OpError
+					if !errors.As(err, &opErr) {
+						// TODO check error case
+						return
+					}
+				}
 			}
 
 		case <-done:

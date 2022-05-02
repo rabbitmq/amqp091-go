@@ -55,7 +55,7 @@ type URI struct {
 func ParseURI(uri string) (URI, error) {
 	builder := defaultURI
 
-	if strings.Contains(uri, " ") == true {
+	if strings.Contains(uri, " ") {
 		return builder, errURIWhitespace
 	}
 

@@ -199,15 +199,21 @@ func ExampleChannel_Confirm_bridge() {
 		})
 
 		if err != nil {
-			msg.Nack(false, false)
+			if e := msg.Nack(false, false); e != nil {
+				log.Printf("nack error: %+v", e)
+			}
 			log.Fatalf("basic.publish destination: %+v", msg)
 		}
 
 		// only ack the source delivery when the destination acks the publishing
 		if confirmed := <-confirms; confirmed.Ack {
-			msg.Ack(false)
+			if e := msg.Ack(false); e != nil {
+				log.Printf("ack error: %+v", e)
+			}
 		} else {
-			msg.Nack(false, false)
+			if e := msg.Nack(false, false); e != nil {
+				log.Printf("nack error: %+v", e)
+			}
 		}
 	}
 }
@@ -275,9 +281,11 @@ func ExampleChannel_Consume() {
 	}
 
 	go func() {
-		for log := range pages {
+		for page := range pages {
 			// ... this consumer is responsible for sending pages per log
-			log.Ack(false)
+			if e := page.Ack(false); e != nil {
+				log.Printf("ack error: %+v", e)
+			}
 		}
 	}()
 
@@ -291,9 +299,11 @@ func ExampleChannel_Consume() {
 	}
 
 	go func() {
-		for log := range emails {
+		for email := range emails {
 			// ... this consumer is responsible for sending emails per log
-			log.Ack(false)
+			if e := email.Ack(false); e != nil {
+				log.Printf("ack error: %+v", e)
+			}
 		}
 	}()
 

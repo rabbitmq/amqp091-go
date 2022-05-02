@@ -88,11 +88,11 @@ func TestIntegrationOpenConfig(t *testing.T) {
 	}
 
 	if _, err := c.Channel(); err != nil {
-		t.Errorf("expected to open channel: %s", err)
+		t.Fatalf("expected to open channel: %s", err)
 	}
 
 	if err := c.Close(); err != nil {
-		t.Errorf("expected to close the connection: %s", err)
+		t.Fatalf("expected to close the connection: %s", err)
 	}
 }
 
@@ -105,11 +105,11 @@ func TestIntegrationOpenConfigWithNetDial(t *testing.T) {
 	}
 
 	if _, err := c.Channel(); err != nil {
-		t.Errorf("expected to open channel: %s", err)
+		t.Fatalf("expected to open channel: %s", err)
 	}
 
 	if err := c.Close(); err != nil {
-		t.Errorf("expected to close the connection: %s", err)
+		t.Fatalf("expected to close the connection: %s", err)
 	}
 }
 
@@ -125,12 +125,12 @@ func TestIntegrationLocalAddr(t *testing.T) {
 	a := c.LocalAddr()
 	_, portString, err := net.SplitHostPort(a.String())
 	if err != nil {
-		t.Errorf("expected to get a local network address with config %+v integration server: %s", config, a.String())
+		t.Fatalf("expected to get a local network address with config %+v integration server: %s", config, a.String())
 	}
 
 	port, err := strconv.Atoi(portString)
 	if err != nil {
-		t.Errorf("expected to get a TCP port number with config %+v integration server: %s", config, err)
+		t.Fatalf("expected to get a TCP port number with config %+v integration server: %s", config, err)
 	}
 	t.Logf("Connected to port %d\n", port)
 }
@@ -422,7 +422,7 @@ func TestIntegrationConnectionNegotiatesMaxChannels(t *testing.T) {
 	defer c.Close()
 
 	if want, got := defaultChannelMax, c.Config.ChannelMax; want != got {
-		t.Errorf("expected connection to negotiate uint16 (%d) channels, got: %d", want, got)
+		t.Fatalf("expected connection to negotiate uint16 (%d) channels, got: %d", want, got)
 	}
 }
 
@@ -436,7 +436,7 @@ func TestIntegrationConnectionNegotiatesClientMaxChannels(t *testing.T) {
 	defer c.Close()
 
 	if want, got := config.ChannelMax, c.Config.ChannelMax; want != got {
-		t.Errorf("expected client specified channel limit after handshake %d, got: %d", want, got)
+		t.Fatalf("expected client specified channel limit after handshake %d, got: %d", want, got)
 	}
 }
 
@@ -465,13 +465,6 @@ func TestIntegrationChannelClosing(t *testing.T) {
 	if c != nil {
 		defer c.Close()
 
-		// This function is run on every channel after it is successfully
-		// opened. It can do something to verify something. It should be
-		// quick; many channels may be opened!
-		f := func(t *testing.T, c *Channel) {
-			return
-		}
-
 		// open and close
 		channel, err := c.Channel()
 		if err != nil {
@@ -486,26 +479,32 @@ func TestIntegrationChannelClosing(t *testing.T) {
 
 		// deferred close
 		signal := make(chan bool)
+		err0 := make(chan error)
+		err1 := make(chan error)
+
 		go func() {
 			channel, err := c.Channel()
 			if err != nil {
-				t.Fatalf("second create channel: %s", err)
+				err0 <- err
 			}
-			t.Logf("second create channel OK")
 
 			<-signal // a bit of synchronization
-			f(t, channel)
 
 			defer func() {
 				if err := channel.Close(); err != nil {
-					t.Fatalf("deferred close channel: %s", err)
+					err1 <- err
 				}
-				t.Logf("deferred close channel OK")
 				signal <- true
 			}()
 		}()
+
 		signal <- true
+
 		select {
+		case e0 := <-err0:
+			t.Fatalf("second create channel: %s", e0)
+		case e1 := <-err1:
+			t.Fatalf("deferred close channel: %s", e1)
 		case <-signal:
 			t.Logf("(got close signal OK)")
 			break
@@ -522,7 +521,6 @@ func TestIntegrationChannelClosing(t *testing.T) {
 					t.Fatalf("create channel %d/%d: %s", i+1, n, err)
 				}
 			}
-			f(t, channel)
 			for i, channel := range channels {
 				if err := channel.Close(); err != nil {
 					t.Fatalf("close channel %d/%d: %s", i+1, n, err)
@@ -603,15 +601,19 @@ func TestIntegrationNonBlockingClose(t *testing.T) {
 		}()
 
 		succeed := make(chan bool)
+		errs := make(chan error)
 
 		go func() {
 			if err = ch.Close(); err != nil {
-				t.Fatalf("Close produced an error when it shouldn't")
+				errs <- err
+			} else {
+				succeed <- true
 			}
-			succeed <- true
 		}()
 
 		select {
+		case <-errs:
+			t.Fatalf("Close produced an error when it shouldn't")
 		case <-succeed:
 			break
 		case <-time.After(1 * time.Second):
@@ -633,15 +635,27 @@ func TestIntegrationPublishConsume(t *testing.T) {
 		pub, _ := c1.Channel()
 		sub, _ := c2.Channel()
 
-		pub.QueueDeclare(queue, false, true, false, false, nil)
-		sub.QueueDeclare(queue, false, true, false, false, nil)
-		defer pub.QueueDelete(queue, false, false, false)
+		if _, e := pub.QueueDeclare(queue, false, true, false, false, nil); e != nil {
+			t.Fatalf("error declaring queue %s: %v", queue, e)
+		}
+
+		if _, e := sub.QueueDeclare(queue, false, true, false, false, nil); e != nil {
+			t.Fatalf("error declaring queue %s: %v", queue, e)
+		}
+
+		defer integrationQueueDelete(t, pub, queue)
 
 		messages, _ := sub.Consume(queue, "", false, false, false, false, nil)
 
-		pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 1")})
-		pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 2")})
-		pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 3")})
+		if e := pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 1")}); e != nil {
+			t.Fatalf("publish error: %v", e)
+		}
+		if e := pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 2")}); e != nil {
+			t.Fatalf("publish error: %v", e)
+		}
+		if e := pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 3")}); e != nil {
+			t.Fatalf("publish error: %v", e)
+		}
 
 		assertConsumeBody(t, messages, []byte("pub 1"))
 		assertConsumeBody(t, messages, []byte("pub 2"))
@@ -662,16 +676,32 @@ func TestIntegrationConsumeFlow(t *testing.T) {
 		pub, _ := c1.Channel()
 		sub, _ := c2.Channel()
 
-		pub.QueueDeclare(queue, false, true, false, false, nil)
-		sub.QueueDeclare(queue, false, true, false, false, nil)
-		defer pub.QueueDelete(queue, false, false, false)
+		if _, e := pub.QueueDeclare(queue, false, true, false, false, nil); e != nil {
+			t.Fatalf("error declaring queue %s: %v", queue, e)
+		}
 
-		sub.Qos(1, 0, false)
+		if _, e := sub.QueueDeclare(queue, false, true, false, false, nil); e != nil {
+			t.Fatalf("error declaring queue %s: %v", queue, e)
+		}
 
-		messages, _ := sub.Consume(queue, "", false, false, false, false, nil)
+		defer integrationQueueDelete(t, pub, queue)
 
-		pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 1")})
-		pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 2")})
+		if err := sub.Qos(1, 0, false); err != nil {
+			t.Fatalf("error setting QoS: %v", err)
+		}
+
+		var messages <-chan Delivery
+		var err error
+		if messages, err = sub.Consume(queue, "", false, false, false, false, nil); err != nil {
+			t.Fatalf("error consuming: %v", err)
+		}
+
+		if e := pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 1")}); e != nil {
+			t.Fatalf("error publishing: %v", e)
+		}
+		if e := pub.Publish("", queue, false, false, Publishing{Body: []byte("pub 2")}); e != nil {
+			t.Fatalf("error publishing: %v", e)
+		}
 
 		msg := assertConsumeBody(t, messages, []byte("pub 1"))
 
@@ -680,7 +710,9 @@ func TestIntegrationConsumeFlow(t *testing.T) {
 			return
 		}
 
-		msg.Ack(false)
+		if e := msg.Ack(false); e != nil {
+			t.Fatalf("error acking: %v", e)
+		}
 
 		select {
 		case <-messages:
@@ -688,10 +720,14 @@ func TestIntegrationConsumeFlow(t *testing.T) {
 		default:
 		}
 
-		sub.Flow(true)
+		if e := sub.Flow(true); e != nil {
+			t.Fatalf("error flow: %v", e)
+		}
 
 		msg = assertConsumeBody(t, messages, []byte("pub 2"))
-		msg.Ack(false)
+		if e := msg.Ack(false); e != nil {
+			t.Fatalf("error acking: %v", e)
+		}
 	}
 }
 
@@ -728,12 +764,17 @@ func TestIntegrationConsumeCancel(t *testing.T) {
 
 		ch, _ := c.Channel()
 
-		ch.QueueDeclare(queue, false, true, false, false, nil)
-		defer ch.QueueDelete(queue, false, false, false)
+		if _, e := ch.QueueDeclare(queue, false, true, false, false, nil); e != nil {
+			t.Fatalf("error declaring queue %s: %v", queue, e)
+		}
+
+		defer integrationQueueDelete(t, ch, queue)
 
 		messages, _ := ch.Consume(queue, "integration-tag", false, false, false, false, nil)
 
-		ch.Publish("", queue, false, false, Publishing{Body: []byte("1")})
+		if e := ch.Publish("", queue, false, false, Publishing{Body: []byte("1")}); e != nil {
+			t.Fatalf("error publishing: %v", e)
+		}
 
 		assertConsumeBody(t, messages, []byte("1"))
 
@@ -742,7 +783,9 @@ func TestIntegrationConsumeCancel(t *testing.T) {
 			t.Fatalf("error cancelling the consumer: %v", err)
 		}
 
-		ch.Publish("", queue, false, false, Publishing{Body: []byte("2")})
+		if e := ch.Publish("", queue, false, false, Publishing{Body: []byte("2")}); e != nil {
+			t.Fatalf("error publishing: %v", e)
+		}
 
 		select {
 		case <-time.After(100 * time.Millisecond):
@@ -817,18 +860,24 @@ func TestQuickPublishOnly(t *testing.T) {
 	if c := integrationConnection(t, "quick"); c != nil {
 		defer c.Close()
 		pub, err := c.Channel()
+		if err != nil {
+			t.Fatalf("getting channel failed: %s", err)
+		}
 		queue := "test-publish"
 
 		if _, err = pub.QueueDeclare(queue, false, true, false, false, nil); err != nil {
-			t.Errorf("Failed to declare: %s", err)
+			t.Fatalf("Failed to declare: %s", err)
 			return
 		}
 
-		defer pub.QueueDelete(queue, false, false, false)
+		defer integrationQueueDelete(t, pub, queue)
 
-		quick.Check(func(msg Publishing) bool {
+		chk := func(msg Publishing) bool {
 			return pub.Publish("", queue, false, false, msg) == nil
-		}, nil)
+		}
+		if err := quick.Check(chk, nil); err != nil {
+			t.Fatalf("check error: %v", err)
+		}
 	}
 }
 
@@ -839,8 +888,7 @@ func TestPublishEmptyBody(t *testing.T) {
 
 		ch, err := c.Channel()
 		if err != nil {
-			t.Errorf("Failed to create channel")
-			return
+			t.Fatalf("Failed to create channel")
 		}
 
 		queue := "test-TestPublishEmptyBody"
@@ -848,6 +896,8 @@ func TestPublishEmptyBody(t *testing.T) {
 		if _, err := ch.QueueDeclare(queue, false, true, false, false, nil); err != nil {
 			t.Fatalf("Could not declare")
 		}
+
+		defer integrationQueueDelete(t, ch, queue)
 
 		messages, err := ch.Consume(queue, "", false, false, false, false, nil)
 		if err != nil {
@@ -862,10 +912,10 @@ func TestPublishEmptyBody(t *testing.T) {
 		select {
 		case msg := <-messages:
 			if len(msg.Body) != 0 {
-				t.Errorf("Received non empty body")
+				t.Fatalf("Received non empty body")
 			}
 		case <-time.After(200 * time.Millisecond):
-			t.Errorf("Timeout on receive")
+			t.Fatalf("Timeout on receive")
 		}
 	}
 }
@@ -877,7 +927,7 @@ func TestPublishEmptyBodyWithHeadersIssue67(t *testing.T) {
 
 		ch, err := c.Channel()
 		if err != nil {
-			t.Errorf("Failed to create channel")
+			t.Fatalf("Failed to create channel")
 			return
 		}
 
@@ -886,6 +936,8 @@ func TestPublishEmptyBodyWithHeadersIssue67(t *testing.T) {
 		if _, err := ch.QueueDeclare(queue, false, true, false, false, nil); err != nil {
 			t.Fatalf("Could not declare")
 		}
+
+		defer integrationQueueDelete(t, ch, queue)
 
 		messages, err := ch.Consume(queue, "", false, false, false, false, nil)
 		if err != nil {
@@ -910,7 +962,7 @@ func TestPublishEmptyBodyWithHeadersIssue67(t *testing.T) {
 				t.Fatalf("Headers are wrong")
 			}
 		case <-time.After(200 * time.Millisecond):
-			t.Errorf("Timeout on receive")
+			t.Fatalf("Timeout on receive")
 		}
 	}
 }
@@ -924,28 +976,35 @@ func TestQuickPublishConsumeOnly(t *testing.T) {
 		defer c2.Close()
 
 		pub, err := c1.Channel()
+		if err != nil {
+			t.Fatalf("getting channel1 failed: %s", err)
+		}
+
 		sub, err := c2.Channel()
+		if err != nil {
+			t.Fatalf("getting channel2 failed: %s", err)
+		}
 
 		queue := "TestPublishConsumeOnly"
 
 		if _, err = pub.QueueDeclare(queue, false, true, false, false, nil); err != nil {
-			t.Errorf("Failed to declare: %s", err)
+			t.Fatalf("Failed to declare: %s", err)
 			return
 		}
 
 		if _, err = sub.QueueDeclare(queue, false, true, false, false, nil); err != nil {
-			t.Errorf("Failed to declare: %s", err)
+			t.Fatalf("Failed to declare: %s", err)
 			return
 		}
 
-		defer sub.QueueDelete(queue, false, false, false)
+		defer integrationQueueDelete(t, sub, queue)
 
 		ch, err := sub.Consume(queue, "", false, false, false, false, nil)
 		if err != nil {
-			t.Errorf("Could not sub: %s", err)
+			t.Fatalf("Could not sub: %s", err)
 		}
 
-		quick.CheckEqual(
+		if chkerr := quick.CheckEqual(
 			func(msg Publishing) []byte {
 				empty := Publishing{Body: msg.Body}
 				if pub.Publish("", queue, false, false, empty) != nil {
@@ -953,12 +1012,16 @@ func TestQuickPublishConsumeOnly(t *testing.T) {
 				}
 				return msg.Body
 			},
-			func(msg Publishing) []byte {
+			func(_ Publishing) []byte {
 				out := <-ch
-				out.Ack(false)
+				if out.Ack(false) != nil {
+					return []byte{'X'}
+				}
 				return out.Body
 			},
-			nil)
+			nil); chkerr != nil {
+			t.Fatalf("check error: %v", chkerr)
+		}
 	}
 }
 
@@ -971,18 +1034,23 @@ func TestQuickPublishConsumeBigBody(t *testing.T) {
 		defer c2.Close()
 
 		pub, err := c1.Channel()
+		if err != nil {
+			t.Fatalf("getting channel 1 failed: %s", err)
+		}
 		sub, err := c2.Channel()
+		if err != nil {
+			t.Fatalf("getting channel 2 failed: %s", err)
+		}
 
 		queue := "test-pubsub"
 
 		if _, err = sub.QueueDeclare(queue, false, true, false, false, nil); err != nil {
-			t.Errorf("Failed to declare: %s", err)
-			return
+			t.Fatalf("Failed to declare: %s", err)
 		}
 
 		ch, err := sub.Consume(queue, "", false, false, false, false, nil)
 		if err != nil {
-			t.Errorf("Could not sub: %s", err)
+			t.Fatalf("Could not sub: %s", err)
 		}
 
 		fixture := Publishing{
@@ -990,22 +1058,21 @@ func TestQuickPublishConsumeBigBody(t *testing.T) {
 		}
 
 		if _, err = pub.QueueDeclare(queue, false, true, false, false, nil); err != nil {
-			t.Errorf("Failed to declare: %s", err)
-			return
+			t.Fatalf("Failed to declare: %s", err)
 		}
 
 		err = pub.Publish("", queue, false, false, fixture)
 		if err != nil {
-			t.Errorf("Could not publish big body")
+			t.Fatalf("Could not publish big body")
 		}
 
 		select {
 		case msg := <-ch:
-			if bytes.Compare(msg.Body, fixture.Body) != 0 {
-				t.Errorf("Consumed big body didn't match")
+			if !bytes.Equal(msg.Body, fixture.Body) {
+				t.Fatalf("Consumed big body didn't match")
 			}
 		case <-time.After(200 * time.Millisecond):
-			t.Errorf("Timeout on receive")
+			t.Fatalf("Timeout on receive")
 		}
 	}
 }
@@ -1017,8 +1084,13 @@ func TestIntegrationGetOk(t *testing.T) {
 		queue := "test.get-ok"
 		ch, _ := c.Channel()
 
-		ch.QueueDeclare(queue, false, true, false, false, nil)
-		ch.Publish("", queue, false, false, Publishing{Body: []byte("ok")})
+		if _, err := ch.QueueDeclare(queue, false, true, false, false, nil); err != nil {
+			t.Fatalf("Failed to declare: %s", err)
+		}
+
+		if err := ch.Publish("", queue, false, false, Publishing{Body: []byte("ok")}); err != nil {
+			t.Fatalf("Failed to publish: %s", err)
+		}
 
 		msg, ok, err := ch.Get(queue, false)
 
@@ -1043,7 +1115,9 @@ func TestIntegrationGetEmpty(t *testing.T) {
 		queue := "test.get-ok"
 		ch, _ := c.Channel()
 
-		ch.QueueDeclare(queue, false, true, false, false, nil)
+		if _, err := ch.QueueDeclare(queue, false, true, false, false, nil); err != nil {
+			t.Fatalf("Failed to declare: %s", err)
+		}
 
 		_, ok, err := ch.Get(queue, false)
 
@@ -1064,13 +1138,17 @@ func TestIntegrationTxCommit(t *testing.T) {
 		queue := "test.tx.commit"
 		ch, _ := c.Channel()
 
-		ch.QueueDeclare(queue, false, true, false, false, nil)
+		if _, err := ch.QueueDeclare(queue, false, true, false, false, nil); err != nil {
+			t.Fatalf("Failed to declare: %s", err)
+		}
 
 		if err := ch.Tx(); err != nil {
 			t.Fatalf("tx.select failed")
 		}
 
-		ch.Publish("", queue, false, false, Publishing{Body: []byte("ok")})
+		if err := ch.Publish("", queue, false, false, Publishing{Body: []byte("ok")}); err != nil {
+			t.Fatalf("Failed to publish: %s", err)
+		}
 
 		if err := ch.TxCommit(); err != nil {
 			t.Fatalf("tx.commit failed")
@@ -1095,13 +1173,17 @@ func TestIntegrationTxRollback(t *testing.T) {
 		queue := "test.tx.rollback"
 		ch, _ := c.Channel()
 
-		ch.QueueDeclare(queue, false, true, false, false, nil)
+		if _, err := ch.QueueDeclare(queue, false, true, false, false, nil); err != nil {
+			t.Fatalf("Failed to declare: %s", err)
+		}
 
 		if err := ch.Tx(); err != nil {
 			t.Fatalf("tx.select failed")
 		}
 
-		ch.Publish("", queue, false, false, Publishing{Body: []byte("ok")})
+		if err := ch.Publish("", queue, false, false, Publishing{Body: []byte("ok")}); err != nil {
+			t.Fatalf("Failed to publish: %s", err)
+		}
 
 		if err := ch.TxRollback(); err != nil {
 			t.Fatalf("tx.rollback failed")
@@ -1128,7 +1210,9 @@ func TestIntegrationReturn(t *testing.T) {
 		ch.NotifyReturn(ret)
 
 		// mandatory publish to an exchange without a binding should be returned
-		ch.Publish("", "return-without-binding", true, false, Publishing{Body: []byte("mandatory")})
+		if err := ch.Publish("", "return-without-binding", true, false, Publishing{Body: []byte("mandatory")}); err != nil {
+			t.Fatalf("Failed to publish: %s", err)
+		}
 
 		select {
 		case res := <-ret:
@@ -1154,17 +1238,23 @@ func TestIntegrationCancel(t *testing.T) {
 		defer c.Close()
 
 		cancels := ch.NotifyCancel(make(chan string, 1))
+		consume_err := make(chan error, 1)
+		delete_err := make(chan error, 1)
 
 		go func() {
 			if _, err := ch.Consume(queue, consumerTag, false, false, false, false, nil); err != nil {
-				t.Fatalf("cannot consume from %q to test NotifyCancel: %v", queue, err)
+				consume_err <- err
 			}
 			if _, err := ch.QueueDelete(queue, false, false, false); err != nil {
-				t.Fatalf("cannot delete integration queue: %v", err)
+				delete_err <- err
 			}
 		}()
 
 		select {
+		case err := <-consume_err:
+			t.Fatalf("cannot consume from %q to test NotifyCancel: %v", queue, err)
+		case err := <-delete_err:
+			t.Fatalf("cannot delete integration queue: %v", err)
 		case tag := <-cancels:
 			if want, got := consumerTag, tag; want != got {
 				t.Fatalf("expected to be notified of deleted queue with consumer tag, got: %q", got)
@@ -1185,7 +1275,9 @@ func TestIntegrationConfirm(t *testing.T) {
 			t.Fatalf("could not confirm")
 		}
 
-		ch.Publish("", "confirm", false, false, Publishing{Body: []byte("confirm")})
+		if err := ch.Publish("", "confirm", false, false, Publishing{Body: []byte("confirm")}); err != nil {
+			t.Fatalf("Failed to publish: %s", err)
+		}
 
 		select {
 		case confirmed := <-confirms:
@@ -1263,7 +1355,7 @@ func TestRoundTripAllFieldValueTypes61(t *testing.T) {
 
 		for k, v := range headers {
 			if !reflect.DeepEqual(v, msg.Headers[k]) {
-				t.Errorf("Round trip header not the same for key %q: expected: %#v, got %#v", k, v, msg.Headers[k])
+				t.Fatalf("Round trip header not the same for key %q: expected: %#v, got %#v", k, v, msg.Headers[k])
 			}
 		}
 	}
@@ -1334,9 +1426,12 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 		}
 
 		// Reject everything consumed
+		reject_errs := make(chan error, len(fails))
 		go func() {
 			for d := range fails {
-				d.Reject(false)
+				if err := d.Reject(false); err != nil {
+					reject_errs <- err
+				}
 			}
 		}()
 
@@ -1364,8 +1459,17 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 				t.Fatalf("array field x-death expected in the headers, got: %v (%T)", d.Headers, d.Headers["x-death"])
 			}
 		}
+		t.Fatalf("expected dead-letter after 10 get attempts")
 
-		t.Fatalf("expectd dead-letter after 10 get attempts")
+		if err := ch.Close(); err != nil {
+			t.Fatalf("channel close error: %v", err)
+		}
+		close(reject_errs)
+		for err := range reject_errs {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		}
 	}
 }
 
@@ -1403,7 +1507,9 @@ func TestDeadlockConsumerIssue48(t *testing.T) {
 
 		for i := 0; i < cap(confirms); i++ {
 			// Fill the queue with some new or remaining publishings
-			ch.Publish("", queue, false, false, Publishing{Body: []byte("")})
+			if err := ch.Publish("", queue, false, false, Publishing{Body: []byte("")}); err != nil {
+				t.Fatalf("error publishing: %v", err)
+			}
 		}
 
 		for i := 0; i < cap(confirms); i++ {
@@ -1578,22 +1684,29 @@ func TestChannelCounterShouldNotPanicIssue136(t *testing.T) {
 		var wg sync.WaitGroup
 
 		// exceeds 65535 channels
+		errs := make(chan error, 8*10000*2)
 		for i := 0; i < 8; i++ {
 			wg.Add(1)
-			go func(i int) {
+			go func() {
 				for j := 0; j < 10000; j++ {
 					ch, err := c.Channel()
 					if err != nil {
-						t.Fatalf("failed to create channel %d:%d, got: %v", i, j, err)
+						errs <- err
 					}
 					if err := ch.Close(); err != nil {
-						t.Fatalf("failed to close channel %d:%d, got: %v", i, j, err)
+						errs <- err
 					}
 				}
 				wg.Done()
-			}(i)
+			}()
 		}
 		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("failed to create or close channel, got: %v", err)
+			}
+		}
 	}
 }
 
@@ -1675,7 +1788,9 @@ func TestRabbitMQQueueTTLGet(t *testing.T) {
 			t.Fatalf("queue declare: %s", err)
 		}
 
-		channel.Publish("", queue, false, false, Publishing{Body: []byte("ttl")})
+		if err := channel.Publish("", queue, false, false, Publishing{Body: []byte("ttl")}); err != nil {
+			t.Fatalf("error publishing: %v", err)
+		}
 
 		time.Sleep(200 * time.Millisecond)
 
@@ -1706,8 +1821,12 @@ func TestRabbitMQQueueNackMultipleRequeue(t *testing.T) {
 				t.Fatalf("queue declare: %s", err)
 			}
 
-			channel.Publish("", queue, false, false, Publishing{Body: []byte("1")})
-			channel.Publish("", queue, false, false, Publishing{Body: []byte("2")})
+			if err := channel.Publish("", queue, false, false, Publishing{Body: []byte("1")}); err != nil {
+				t.Fatalf("error publishing: %v", err)
+			}
+			if err := channel.Publish("", queue, false, false, Publishing{Body: []byte("2")}); err != nil {
+				t.Fatalf("error publishing: %v", err)
+			}
 
 			m1, ok, err := channel.Get(queue, false)
 			if !ok || err != nil || m1.Body[0] != '1' {
@@ -1719,7 +1838,9 @@ func TestRabbitMQQueueNackMultipleRequeue(t *testing.T) {
 				t.Fatalf("could not get message %v", m2)
 			}
 
-			m2.Nack(true, true)
+			if err := m2.Nack(true, true); err != nil {
+				t.Fatalf("nack error: %v", err)
+			}
 
 			m1, ok, err = channel.Get(queue, false)
 			if !ok || err != nil || m1.Body[0] != '1' {
@@ -1764,7 +1885,7 @@ func TestConsumerCancelNotification(t *testing.T) {
 		case <-ccnChan:
 			// do nothing
 		case <-time.After(time.Second * 10):
-			t.Errorf("basic.cancel wasn't received")
+			t.Fatalf("basic.cancel wasn't received")
 			t.Fail()
 		}
 		// we don't close ccnChan because channel shutdown
@@ -1820,14 +1941,16 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 
 		n := ch.GetNextPublishSeqNo()
 		if n != 1 {
-			t.Errorf("wrong next publish seqence number before any publish, expected: %d, got: %d", 1, n)
+			t.Fatalf("wrong next publish seqence number before any publish, expected: %d, got: %d", 1, n)
 		}
 
-		ch.Publish("test-get-next-pub-seq", "", false, false, Publishing{})
+		if err := ch.Publish("test-get-next-pub-seq", "", false, false, Publishing{}); err != nil {
+			t.Fatalf("publish error: %v", err)
+		}
 
 		n = ch.GetNextPublishSeqNo()
 		if n != 2 {
-			t.Errorf("wrong next publish seqence number after 1 publishing, expected: %d, got: %d", 2, n)
+			t.Fatalf("wrong next publish seqence number after 1 publishing, expected: %d, got: %d", 2, n)
 		}
 	}
 }
@@ -1897,6 +2020,12 @@ func integrationQueue(t *testing.T, name string) (*Connection, *Channel) {
 	return nil, nil
 }
 
+func integrationQueueDelete(t *testing.T, c *Channel, queue string) {
+	if c, err := c.QueueDelete(queue, false, false, false); err != nil {
+		t.Fatalf("queue deletion failed, c: %d, err: %v", c, err)
+	}
+}
+
 // Delegates to integrationConnection and only returns a connection if the
 // product is RabbitMQ
 func integrationRabbitMQ(t *testing.T, name string) *Connection {
@@ -1912,7 +2041,7 @@ func integrationRabbitMQ(t *testing.T, name string) *Connection {
 func assertConsumeBody(t *testing.T, messages <-chan Delivery, want []byte) (msg *Delivery) {
 	select {
 	case got := <-messages:
-		if bytes.Compare(want, got.Body) != 0 {
+		if !bytes.Equal(want, got.Body) {
 			t.Fatalf("Message body does not match want: %v, got: %v, for: %+v", want, got.Body, got)
 		}
 		msg = &got
@@ -1941,7 +2070,7 @@ func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T
 	ch.Close()
 	conn.Close()
 
-	ch, err = conn.Channel()
+	_, err = conn.Channel()
 	if err == nil {
 		t.Fatalf("Opening a channel from a closed connection should not block but returning an error %v", err)
 	}

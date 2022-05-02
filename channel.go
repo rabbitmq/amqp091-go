@@ -278,7 +278,8 @@ func (ch *Channel) dispatch(msg message) {
 		// to avoid unexpected interleaving with basic.publish frames if
 		// publishing is happening concurrently
 		ch.m.Lock()
-		ch.send(&channelCloseOk{})
+		// TODO check error case
+		ch.send(&channelCloseOk{}) //nolint
 		ch.m.Unlock()
 		ch.connection.closeChannel(ch, newError(m.ReplyCode, m.ReplyText))
 
@@ -288,7 +289,8 @@ func (ch *Channel) dispatch(msg message) {
 			c <- m.Active
 		}
 		ch.notifyM.RUnlock()
-		ch.send(&channelFlowOk{Active: m.Active})
+		// TODO check error case
+		ch.send(&channelFlowOk{Active: m.Active}) //nolint
 
 	case *basicCancel:
 		ch.notifyM.RLock()

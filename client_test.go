@@ -72,7 +72,7 @@ func (t *server) expectBytes(b []byte) {
 		t.Fatalf("io error expecting bytes: %v", err)
 	}
 
-	if bytes.Compare(b, in) != 0 {
+	if !bytes.Equal(b, in) {
 		t.Fatalf("failed bytes: expected: %s got: %s", string(b), string(in))
 	}
 }
@@ -83,25 +83,33 @@ func (t *server) send(channel int, m message) {
 	if msg, ok := m.(messageWithContent); ok {
 		props, body := msg.getContent()
 		class, _ := msg.id()
-		t.w.WriteFrame(&methodFrame{
+		if err := t.w.WriteFrame(&methodFrame{
 			ChannelId: uint16(channel),
 			Method:    msg,
-		})
-		t.w.WriteFrame(&headerFrame{
+		}); err != nil {
+			t.Fatalf("WriteFrame error: %v", err)
+		}
+		if err := t.w.WriteFrame(&headerFrame{
 			ChannelId:  uint16(channel),
 			ClassId:    class,
 			Size:       uint64(len(body)),
 			Properties: props,
-		})
-		t.w.WriteFrame(&bodyFrame{
+		}); err != nil {
+			t.Fatalf("WriteFrame error: %v", err)
+		}
+		if err := t.w.WriteFrame(&bodyFrame{
 			ChannelId: uint16(channel),
 			Body:      body,
-		})
+		}); err != nil {
+			t.Fatalf("WriteFrame error: %v", err)
+		}
 	} else {
-		t.w.WriteFrame(&methodFrame{
+		if err := t.w.WriteFrame(&methodFrame{
 			ChannelId: uint16(channel),
 			Method:    m,
-		})
+		}); err != nil {
+			t.Fatalf("WriteFrame error: %v", err)
+		}
 	}
 }
 
@@ -435,13 +443,25 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 
 	confirm := ch.NotifyPublish(make(chan Confirmation))
 
-	ch.Confirm(false)
+	err = ch.Confirm(false)
+	if err != nil {
+		t.Fatalf("channel error setting confirm mode: %v (%s)", ch, err)
+	}
 
 	go func() {
-		ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 1")})
-		ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 2")})
-		ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 3")})
-		ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 4")})
+		var e error
+		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 1")}); e != nil {
+			t.Errorf("publish error: %v", err)
+		}
+		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 2")}); e != nil {
+			t.Errorf("publish error: %v", err)
+		}
+		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 3")}); e != nil {
+			t.Errorf("publish error: %v", err)
+		}
+		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 4")}); e != nil {
+			t.Errorf("publish error: %v", err)
+		}
 	}()
 
 	// received out of order, consumed in order
@@ -452,10 +472,19 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 	}
 
 	go func() {
-		ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 5")})
-		ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 6")})
-		ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 7")})
-		ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 8")})
+		var e error
+		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 5")}); e != nil {
+			t.Errorf("publish error: %v", err)
+		}
+		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 6")}); e != nil {
+			t.Errorf("publish error: %v", err)
+		}
+		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 7")}); e != nil {
+			t.Errorf("publish error: %v", err)
+		}
+		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 8")}); e != nil {
+			t.Errorf("publish error: %v", err)
+		}
 	}()
 
 	for i, tag := range []uint64{5, 6, 7, 8} {
@@ -493,7 +522,10 @@ func TestDeferredConfirmations(t *testing.T) {
 		t.Fatalf("could not open channel: %v (%s)", ch, err)
 	}
 
-	ch.Confirm(false)
+	err = ch.Confirm(false)
+	if err != nil {
+		t.Fatalf("channel error setting confirm mode: %v (%s)", ch, err)
+	}
 
 	var results []*DeferredConfirmation
 	for i := 1; i < 5; i++ {
@@ -665,7 +697,11 @@ func TestPublishBodySliceIssue74(t *testing.T) {
 	}
 
 	for i := 0; i < publishings; i++ {
-		go ch.Publish("", "q", false, false, Publishing{Body: base[0:i]})
+		go func(ii int) {
+			if err := ch.Publish("", "q", false, false, Publishing{Body: base[0:ii]}); err != nil {
+				t.Errorf("publish error: %v", err)
+			}
+		}(i)
 	}
 
 	<-done
@@ -709,7 +745,11 @@ func TestPublishZeroFrameSizeIssue161(t *testing.T) {
 	}
 
 	for i := 0; i < publishings; i++ {
-		go ch.Publish("", "q", false, false, Publishing{Body: []byte("anything")})
+		go func() {
+			if err := ch.Publish("", "q", false, false, Publishing{Body: []byte("anything")}); err != nil {
+				t.Errorf("publish error: %v", err)
+			}
+		}()
 	}
 
 	<-done
@@ -813,7 +853,11 @@ func TestLeakClosedConsumersIssue264(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not open channel: %v (%s)", ch, err)
 	}
-	ch.Qos(2, 0, false)
+
+	err = ch.Qos(2, 0, false)
+	if err != nil {
+		t.Fatalf("channel Qos error: %v (%s)", ch, err)
+	}
 
 	consumer, err := ch.Consume("queue", tag, false, false, false, false, nil)
 	if err != nil {
