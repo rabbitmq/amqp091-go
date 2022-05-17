@@ -72,7 +72,7 @@ func TestChannelOpenOnAClosedConnectionFails_ReleasesAllocatedChannel(t *testing
 // See https://github.com/streadway/amqp/issues/251 - thanks to jmalloc for the
 // test case.
 func TestRaceBetweenChannelAndConnectionClose(t *testing.T) {
-	defer time.AfterFunc(10*time.Second, func() { panic("Close deadlock") }).Stop()
+	defer time.AfterFunc(10*time.Second, func() { t.Fatalf("Close deadlock") }).Stop()
 
 	conn := integrationConnection(t, "allocation/shutdown race")
 
@@ -95,7 +95,7 @@ func TestRaceBetweenChannelAndConnectionClose(t *testing.T) {
 // more details - thanks to jmalloc again.
 func TestRaceBetweenChannelShutdownAndSend(t *testing.T) {
 	const concurrency = 10
-	defer time.AfterFunc(10*time.Second, func() { panic("Close deadlock") }).Stop()
+	defer time.AfterFunc(10*time.Second, func() { t.Fatalf("Close deadlock") }).Stop()
 
 	conn := integrationConnection(t, "channel close/send race")
 	defer conn.Close()

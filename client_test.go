@@ -78,7 +78,7 @@ func (t *server) expectBytes(b []byte) {
 }
 
 func (t *server) send(channel int, m message) {
-	defer time.AfterFunc(time.Second, func() { panic("send deadlock") }).Stop()
+	defer time.AfterFunc(time.Second, func() { t.Fatalf("send deadlock") }).Stop()
 
 	if msg, ok := m.(messageWithContent); ok {
 		props, body := msg.getContent()
@@ -115,7 +115,7 @@ func (t *server) send(channel int, m message) {
 
 // drops all but method frames expected on the given channel
 func (t *server) recv(channel int, m message) message {
-	defer time.AfterFunc(time.Second, func() { panic("recv deadlock") }).Stop()
+	defer time.AfterFunc(time.Second, func() { t.Fatalf("recv deadlock") }).Stop()
 
 	var remaining int
 	var header *headerFrame
@@ -777,7 +777,7 @@ func TestPublishAndShutdownDeadlockIssue84(t *testing.T) {
 		t.Fatalf("couldn't open channel: %v (%s)", ch, err)
 	}
 
-	defer time.AfterFunc(500*time.Millisecond, func() { panic("Publish deadlock") }).Stop()
+	defer time.AfterFunc(500*time.Millisecond, func() { t.Fatalf("Publish deadlock") }).Stop()
 	for {
 		if err := ch.Publish("exchange", "q", false, false, Publishing{Body: []byte("test")}); err != nil {
 			t.Log("successfully caught disconnect error", err)
@@ -791,7 +791,7 @@ func TestPublishAndShutdownDeadlockIssue84(t *testing.T) {
 // channel.shutdown() which closes all registered notification channels - checks
 // for a "send on closed channel" panic
 func TestChannelReturnsCloseRace(t *testing.T) {
-	defer time.AfterFunc(5*time.Second, func() { panic("Shutdown deadlock") }).Stop()
+	defer time.AfterFunc(5*time.Second, func() { t.Fatalf("Shutdown deadlock") }).Stop()
 	ch := newChannel(&Connection{}, 1)
 
 	// Register a channel to close in channel.shutdown()

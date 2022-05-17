@@ -466,9 +466,10 @@ func (c *Connection) dispatch0(f frame) {
 		switch m := mf.Method.(type) {
 		case *connectionClose:
 			// Send immediately as shutdown will close our side of the writer.
-			// TODO check error case
 			f := &methodFrame{ChannelId: 0, Method: &connectionCloseOk{}}
-			c.send(f) //nolint
+			if err := c.send(f); err != nil {
+				Logger.Printf("error sending connectionCloseOk, error: %+v", err)
+			}
 			c.shutdown(newError(m.ReplyCode, m.ReplyText))
 		case *connectionBlocked:
 			for _, c := range c.blocks {
@@ -485,8 +486,9 @@ func (c *Connection) dispatch0(f frame) {
 		// kthx - all reads reset our deadline.  so we can drop this
 	default:
 		// lolwat - channel0 only responds to methods and heartbeats
-		// TODO check error case
-		c.closeWith(ErrUnexpectedFrame) //nolint
+		if err := c.closeWith(ErrUnexpectedFrame); err != nil {
+			Logger.Printf("error sending connectionCloseOk with ErrUnexpectedFrame, error: %+v", err)
+		}
 	}
 }
 
@@ -518,15 +520,17 @@ func (c *Connection) dispatchClosed(f frame) {
 	if mf, ok := f.(*methodFrame); ok {
 		switch mf.Method.(type) {
 		case *channelClose:
-			// TODO check error case
 			f := &methodFrame{ChannelId: f.channel(), Method: &channelCloseOk{}}
-			c.send(f) //nolint
+			if err := c.send(f); err != nil {
+				Logger.Printf("error sending channelCloseOk, channel id: %d error: %+v", f.channel(), err)
+			}
 		case *channelCloseOk:
 			// we are already closed, so do nothing
 		default:
 			// unexpected method on closed channel
-			// TODO check error case
-			c.closeWith(ErrClosed) //nolint
+			if err := c.closeWith(ErrClosed); err != nil {
+				Logger.Printf("error sending connectionCloseOk with ErrClosed, error: %+v", err)
+			}
 		}
 	}
 }
@@ -603,7 +607,7 @@ func (c *Connection) heartbeater(interval time.Duration, done chan *Error) {
 				if err := conn.SetReadDeadline(time.Now().Add(maxServerHeartbeatsInFlight * interval)); err != nil {
 					var opErr *net.OpError
 					if !errors.As(err, &opErr) {
-						// TODO check error case
+						Logger.Printf("error setting read deadline in heartbeater: %+v", err)
 						return
 					}
 				}

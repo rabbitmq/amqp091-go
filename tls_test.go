@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func tlsServerConfig() *tls.Config {
+func tlsServerConfig(t *testing.T) *tls.Config {
 	cfg := new(tls.Config)
 
 	cfg.ClientCAs = x509.NewCertPool()
@@ -23,7 +23,7 @@ func tlsServerConfig() *tls.Config {
 
 	cert, err := tls.X509KeyPair([]byte(serverCert), []byte(serverKey))
 	if err != nil {
-		panic(err)
+		t.Fatalf("TLS server config error: %+v", err)
 	}
 
 	cfg.Certificates = append(cfg.Certificates, cert)
@@ -32,14 +32,14 @@ func tlsServerConfig() *tls.Config {
 	return cfg
 }
 
-func tlsClientConfig() *tls.Config {
+func tlsClientConfig(t *testing.T) *tls.Config {
 	cfg := new(tls.Config)
 	cfg.RootCAs = x509.NewCertPool()
 	cfg.RootCAs.AppendCertsFromPEM([]byte(caCert))
 
 	cert, err := tls.X509KeyPair([]byte(clientCert), []byte(clientKey))
 	if err != nil {
-		panic(err)
+		t.Fatalf("TLS client config error: %+v", err)
 	}
 
 	cfg.Certificates = append(cfg.Certificates, cert)
@@ -68,7 +68,7 @@ func (s *tlsServer) Serve(t *testing.T) {
 func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
 	l, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
 	if err != nil {
-		panic(err)
+		t.Fatalf("TLS server Listen error: %+v", err)
 	}
 
 	s := tlsServer{
@@ -84,7 +84,7 @@ func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
 
 // Tests opening a connection of a TLS enabled socket server
 func TestTLSHandshake(t *testing.T) {
-	srv := startTLSServer(t, tlsServerConfig())
+	srv := startTLSServer(t, tlsServerConfig(t))
 	defer srv.Close()
 
 	success := make(chan bool)
@@ -102,7 +102,7 @@ func TestTLSHandshake(t *testing.T) {
 	}()
 
 	go func() {
-		c, err := DialTLS(srv.URL, tlsClientConfig())
+		c, err := DialTLS(srv.URL, tlsClientConfig(t))
 		if err != nil {
 			errs <- fmt.Errorf("expected to open a TLS connection, got err: %v", err)
 		}
