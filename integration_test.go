@@ -20,7 +20,6 @@ import (
 	"os"
 	"reflect"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"testing/quick"
@@ -1540,25 +1539,46 @@ func TestDeadlockConsumerIssue48(t *testing.T) {
 
 // https://github.com/streadway/amqp/issues/46
 func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
-	if strings.Compare(os.Getenv("CI"), "true") == 0 {
-		t.Skip("FLAKY - https://github.com/rabbitmq/amqp091-go/issues/77")
-	}
-	conn := integrationConnection(t, "issue46")
-	if conn != nil {
-		t.Cleanup(func() { conn.Close() })
+	var conn *Connection = nil
 
-		for i := 0; i < 100; i++ {
-			ch, err := conn.Channel()
-			if err != nil {
-				t.Fatalf("expected error only on publish, got error on channel.open: %v", err)
+	t.Cleanup(func() {
+		if conn != nil {
+			conn.Close()
+		}
+	})
+
+	for i := 0; i < 100; i++ {
+		if conn == nil || conn.IsClosed() {
+			conn = integrationConnection(t, "issue46")
+			if conn == nil {
+				t.Fatal("conn is nil")
 			}
+		}
 
-			for j := 0; j < 10; j++ {
+		ch, err := conn.Channel()
+		if err, ok := err.(Error); ok {
+			if err.Code != 504 {
+				t.Fatalf("expected channel only exception i: %d got: %+v", i, err)
+			}
+		}
+
+		if ch == nil {
+			continue
+		}
+
+		for j := 0; j < 10; j++ {
+			if ch.IsClosed() {
+				break
+			} else {
 				err = ch.Publish("not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
 				if err, ok := err.(Error); ok {
 					if err.Code != 504 {
-						t.Fatalf("expected channel only exception, got: %v", err)
+						t.Fatalf("expected channel only exception i: %d j: %d got: %+v", i, j, err)
 					}
+					if cerr := ch.Close(); cerr != nil {
+						t.Logf("error on channel close i: %d j: %d got: %+v", i, j, cerr)
+					}
+					break
 				}
 			}
 		}

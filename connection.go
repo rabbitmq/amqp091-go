@@ -222,7 +222,6 @@ func DialConfig(url string, config Config) (*Connection, error) {
 
 		client := tls.Client(conn, config.TLSClientConfig)
 		if err := client.Handshake(); err != nil {
-
 			conn.Close()
 			return nil, err
 		}

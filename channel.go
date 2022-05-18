@@ -230,6 +230,11 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 			size = len(body)
 		}
 
+		// If the channel is closed, use Channel.sendClosed()
+		if atomic.LoadInt32(&ch.closed) == 1 {
+			return ch.sendClosed(msg)
+		}
+
 		if err = ch.connection.send(&methodFrame{
 			ChannelId: ch.id,
 			Method:    content,
@@ -260,6 +265,11 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 			}
 		}
 	} else {
+		// If the channel is closed, use Channel.sendClosed()
+		if atomic.LoadInt32(&ch.closed) == 1 {
+			return ch.sendClosed(msg)
+		}
+
 		err = ch.connection.send(&methodFrame{
 			ChannelId: ch.id,
 			Method:    msg,
