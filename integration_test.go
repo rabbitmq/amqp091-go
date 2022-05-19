@@ -1579,7 +1579,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 
 		c1, err := conn.Channel()
 		if err != nil {
-			panic(err)
+			t.Fatalf("failed to create channel, got: %v", err)
 		}
 
 		go func() {
@@ -1590,7 +1590,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 
 		c2, err := conn.Channel()
 		if err != nil {
-			panic(err)
+			t.Fatalf("failed to create channel, got: %v", err)
 		}
 
 		go func() {
@@ -1604,7 +1604,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 		// asynchronous method.
 		err = c1.Publish("nonexisting-exchange", "", false, false, Publishing{})
 		if err != nil {
-			panic(err)
+			t.Fatalf("failed to publish, got: %v", err)
 		}
 
 		// Receive or send the channel close method, the channel shuts down
@@ -1615,7 +1615,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 		// on channel 1.
 		err = c2.ExchangeDeclare("test-channel-still-exists", "direct", false, true, false, false, nil)
 		if err != nil {
-			panic(err)
+			t.Fatalf("failed to declare exchange, got: %v", err)
 		}
 	}
 }
@@ -1658,7 +1658,7 @@ func TestCorruptedMessageIssue7(t *testing.T) {
 
 		for i := 0; i < messageCount; i++ {
 			err := pub.Publish("", queue, false, false, Publishing{
-				Body: generateCrc32Random(7 * i),
+				Body: generateCrc32Random(t, 7*i),
 			})
 
 			if err != nil {
@@ -2095,10 +2095,10 @@ func assertMessageCrc32(t *testing.T, msg []byte, assert string) {
 
 // Creates a random body size with a leading 32-bit CRC in network byte order
 // that verifies the remaining slice
-func generateCrc32Random(size int) []byte {
+func generateCrc32Random(t *testing.T, size int) []byte {
 	msg := make([]byte, size+8)
 	if _, err := io.ReadFull(devrand.Reader, msg); err != nil {
-		panic(err)
+		t.Fatalf("could not get random data: %+v", err)
 	}
 
 	crc := crc32.NewIEEE()
