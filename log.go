@@ -4,22 +4,11 @@
 
 package amqp091
 
-import (
-	"log"
-	"os"
-)
-
 type Logging interface {
 	Printf(format string, v ...interface{})
 }
 
 var Logger Logging = NullLogger{}
-
-// Enables logging using the default Stderr logger. Note that this is
-// not thread safe and should be called at application start
-func EnableLogger() {
-	Logger = log.New(os.Stderr, "amqp091-go: ", log.LstdFlags|log.Lshortfile)
-}
 
 // Enables logging using a custom Logging instance. Note that this is
 // not thread safe and should be called at application start
