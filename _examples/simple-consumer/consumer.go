@@ -24,7 +24,7 @@ var (
 	bindingKey   = flag.String("key", "test-key", "AMQP binding key")
 	consumerTag  = flag.String("consumer-tag", "simple-consumer", "AMQP consumer tag (should not be blank)")
 	lifetime     = flag.Duration("lifetime", 5*time.Second, "lifetime of process before shutdown (0s=infinite)")
-	verbose      = flag.Bool("verbose", false, "enable verbose output of message data")
+	verbose      = flag.Bool("verbose", true, "enable verbose output of message data")
 	autoAck      = flag.Bool("auto_ack", false, "enable message auto-ack")
 	ErrLog       = log.New(os.Stderr, "[ERROR] ", log.LstdFlags|log.Lmsgprefix)
 	Log          = log.New(os.Stdout, "[INFO] ", log.LstdFlags|log.Lmsgprefix)
