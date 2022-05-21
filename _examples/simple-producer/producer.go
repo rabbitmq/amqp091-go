@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -18,6 +19,8 @@ var (
 	routingKey   = flag.String("key", "test-key", "AMQP routing key")
 	body         = flag.String("body", "foobar", "Body of message")
 	reliable     = flag.Bool("reliable", true, "Wait for the publisher confirmation before exiting")
+	ErrLog       = log.New(os.Stderr, "[ERROR] ", log.LstdFlags|log.Lmsgprefix)
+	Log          = log.New(os.Stdout, "[INFO] ", log.LstdFlags|log.Lmsgprefix)
 )
 
 func init() {
@@ -26,9 +29,9 @@ func init() {
 
 func main() {
 	if err := publish(*uri, *exchangeName, *exchangeType, *routingKey, *body, *reliable); err != nil {
-		log.Fatalf("%s", err)
+		ErrLog.Fatalf("%s", err)
 	}
-	log.Printf("published %dB OK", len(*body))
+	Log.Printf("published %dB OK", len(*body))
 }
 
 func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable bool) error {
@@ -37,20 +40,20 @@ func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable 
 	// all in one go. In a real service, you probably want to maintain a
 	// long-lived connection as state, and publish against that.
 
-	log.Printf("dialing %q", amqpURI)
+	Log.Printf("dialing %q", amqpURI)
 	connection, err := amqp.Dial(amqpURI)
 	if err != nil {
 		return fmt.Errorf("Dial: %s", err)
 	}
 	defer connection.Close()
 
-	log.Printf("got Connection, getting Channel")
+	Log.Printf("got Connection, getting Channel")
 	channel, err := connection.Channel()
 	if err != nil {
 		return fmt.Errorf("Channel: %s", err)
 	}
 
-	log.Printf("got Channel, declaring %q Exchange (%q)", exchangeType, exchange)
+	Log.Printf("got Channel, declaring %q Exchange (%q)", exchangeType, exchange)
 	if err := channel.ExchangeDeclare(
 		exchange,     // name
 		exchangeType, // type
@@ -66,7 +69,7 @@ func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable 
 	// Reliable publisher confirms require confirm.select support from the
 	// connection.
 	if reliable {
-		log.Printf("enabling publishing confirms.")
+		Log.Printf("enabling publishing confirms.")
 		if err := channel.Confirm(false); err != nil {
 			return fmt.Errorf("Channel could not be put into confirm mode: %s", err)
 		}
@@ -76,7 +79,7 @@ func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable 
 		defer confirmOne(confirms)
 	}
 
-	log.Printf("declared Exchange, publishing %dB body (%q)", len(body), body)
+	Log.Printf("declared Exchange, publishing %dB body (%q)", len(body), body)
 	if err = channel.Publish(
 		exchange,   // publish to an exchange
 		routingKey, // routing to 0 or more queues
@@ -102,11 +105,11 @@ func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable 
 // set of unacknowledged sequence numbers and loop until the publishing channel
 // is closed.
 func confirmOne(confirms <-chan amqp.Confirmation) {
-	log.Printf("waiting for confirmation of one publishing")
+	Log.Printf("waiting for confirmation of one publishing")
 
 	if confirmed := <-confirms; confirmed.Ack {
-		log.Printf("confirmed delivery with delivery tag: %d", confirmed.DeliveryTag)
+		Log.Printf("confirmed delivery with delivery tag: %d", confirmed.DeliveryTag)
 	} else {
-		log.Printf("failed delivery of delivery tag: %d", confirmed.DeliveryTag)
+		ErrLog.Printf("failed delivery of delivery tag: %d", confirmed.DeliveryTag)
 	}
 }

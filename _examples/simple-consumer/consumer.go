@@ -8,7 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"time"
+	"syscall"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -21,6 +24,11 @@ var (
 	bindingKey   = flag.String("key", "test-key", "AMQP binding key")
 	consumerTag  = flag.String("consumer-tag", "simple-consumer", "AMQP consumer tag (should not be blank)")
 	lifetime     = flag.Duration("lifetime", 5*time.Second, "lifetime of process before shutdown (0s=infinite)")
+	verbose      = flag.Bool("verbose", true, "enable verbose output of message data")
+	autoAck      = flag.Bool("auto_ack", false, "enable message auto-ack")
+	ErrLog       = log.New(os.Stderr, "[ERROR] ", log.LstdFlags|log.Lmsgprefix)
+	Log          = log.New(os.Stdout, "[INFO] ", log.LstdFlags|log.Lmsgprefix)
+	deliveryCount int = 0
 )
 
 func init() {
@@ -30,21 +38,23 @@ func init() {
 func main() {
 	c, err := NewConsumer(*uri, *exchange, *exchangeType, *queue, *bindingKey, *consumerTag)
 	if err != nil {
-		log.Fatalf("%s", err)
+		ErrLog.Fatalf("%s", err)
 	}
 
+	SetupCloseHandler(c)
+
 	if *lifetime > 0 {
-		log.Printf("running for %s", *lifetime)
+		Log.Printf("running for %s", *lifetime)
 		time.Sleep(*lifetime)
 	} else {
-		log.Printf("running forever")
+		Log.Printf("running forever")
 		select {}
 	}
 
-	log.Printf("shutting down")
+	Log.Printf("shutting down")
 
 	if err := c.Shutdown(); err != nil {
-		log.Fatalf("error during shutdown: %s", err)
+		ErrLog.Fatalf("error during shutdown: %s", err)
 	}
 }
 
@@ -53,6 +63,19 @@ type Consumer struct {
 	channel *amqp.Channel
 	tag     string
 	done    chan error
+}
+
+func SetupCloseHandler(consumer *Consumer) {
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		Log.Printf("Ctrl+C pressed in Terminal")
+		if err := consumer.Shutdown(); err != nil {
+			ErrLog.Fatalf("error during shutdown: %s", err)
+		}
+		os.Exit(0)
+	}()
 }
 
 func NewConsumer(amqpURI, exchange, exchangeType, queueName, key, ctag string) (*Consumer, error) {
@@ -65,23 +88,23 @@ func NewConsumer(amqpURI, exchange, exchangeType, queueName, key, ctag string) (
 
 	var err error
 
-	log.Printf("dialing %q", amqpURI)
+	Log.Printf("dialing %q", amqpURI)
 	c.conn, err = amqp.Dial(amqpURI)
 	if err != nil {
 		return nil, fmt.Errorf("Dial: %s", err)
 	}
 
 	go func() {
-		fmt.Printf("closing: %s", <-c.conn.NotifyClose(make(chan *amqp.Error)))
+		Log.Printf("closing: %s", <-c.conn.NotifyClose(make(chan *amqp.Error)))
 	}()
 
-	log.Printf("got Connection, getting Channel")
+	Log.Printf("got Connection, getting Channel")
 	c.channel, err = c.conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("Channel: %s", err)
 	}
 
-	log.Printf("got Channel, declaring Exchange (%q)", exchange)
+	Log.Printf("got Channel, declaring Exchange (%q)", exchange)
 	if err = c.channel.ExchangeDeclare(
 		exchange,     // name of the exchange
 		exchangeType, // type
@@ -94,7 +117,7 @@ func NewConsumer(amqpURI, exchange, exchangeType, queueName, key, ctag string) (
 		return nil, fmt.Errorf("Exchange Declare: %s", err)
 	}
 
-	log.Printf("declared Exchange, declaring Queue %q", queueName)
+	Log.Printf("declared Exchange, declaring Queue %q", queueName)
 	queue, err := c.channel.QueueDeclare(
 		queueName, // name of the queue
 		true,      // durable
@@ -107,7 +130,7 @@ func NewConsumer(amqpURI, exchange, exchangeType, queueName, key, ctag string) (
 		return nil, fmt.Errorf("Queue Declare: %s", err)
 	}
 
-	log.Printf("declared Queue (%q %d messages, %d consumers), binding to Exchange (key %q)",
+	Log.Printf("declared Queue (%q %d messages, %d consumers), binding to Exchange (key %q)",
 		queue.Name, queue.Messages, queue.Consumers, key)
 
 	if err = c.channel.QueueBind(
@@ -120,11 +143,11 @@ func NewConsumer(amqpURI, exchange, exchangeType, queueName, key, ctag string) (
 		return nil, fmt.Errorf("Queue Bind: %s", err)
 	}
 
-	log.Printf("Queue bound to Exchange, starting Consume (consumer tag %q)", c.tag)
+	Log.Printf("Queue bound to Exchange, starting Consume (consumer tag %q)", c.tag)
 	deliveries, err := c.channel.Consume(
 		queue.Name, // name
 		c.tag,      // consumerTag,
-		false,      // noAck
+		*autoAck,   // autoAck
 		false,      // exclusive
 		false,      // noLocal
 		false,      // noWait
@@ -149,22 +172,36 @@ func (c *Consumer) Shutdown() error {
 		return fmt.Errorf("AMQP connection close error: %s", err)
 	}
 
-	defer log.Printf("AMQP shutdown OK")
+	defer Log.Printf("AMQP shutdown OK")
 
 	// wait for handle() to exit
 	return <-c.done
 }
 
 func handle(deliveries <-chan amqp.Delivery, done chan error) {
-	for d := range deliveries {
-		log.Printf(
-			"got %dB delivery: [%v] %q",
-			len(d.Body),
-			d.DeliveryTag,
-			d.Body,
-		)
-		d.Ack(false)
+	cleanup := func() {
+		Log.Printf("handle: deliveries channel closed")
+		done <- nil
 	}
-	log.Printf("handle: deliveries channel closed")
-	done <- nil
+
+	defer cleanup()
+
+	for d := range deliveries {
+		deliveryCount++
+		if *verbose == true {
+			Log.Printf(
+				"got %dB delivery: [%v] %q",
+				len(d.Body),
+				d.DeliveryTag,
+				d.Body,
+			)
+		} else {
+			if deliveryCount % 65536 == 0 {
+				Log.Printf("delivery count %d", deliveryCount)
+			}
+		}
+		if *autoAck == false {
+			d.Ack(false)
+		}
+	}
 }
