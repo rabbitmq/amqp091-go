@@ -1539,46 +1539,43 @@ func TestDeadlockConsumerIssue48(t *testing.T) {
 
 // https://github.com/streadway/amqp/issues/46
 func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
-	var conn *Connection = nil
+	conn := integrationConnection(t, "issue46")
+	if conn == nil {
+		t.Fatal("conn is nil")
+	}
 
 	t.Cleanup(func() {
-		if conn != nil {
-			conn.Close()
-		}
+		conn.Close()
 	})
 
 	for i := 0; i < 100; i++ {
-		if conn == nil || conn.IsClosed() {
-			conn = integrationConnection(t, "issue46")
-			if conn == nil {
-				t.Fatal("conn is nil")
-			}
+		if conn == nil {
+			t.Fatal("conn is nil")
 		}
 
-		ch, err := conn.Channel()
-		if err, ok := err.(Error); ok {
-			if err.Code != 504 {
-				t.Fatalf("expected channel only exception i: %d got: %+v", i, err)
-			}
+		if conn.IsClosed() {
+			t.Fatal("conn is closed")
 		}
 
-		if ch == nil {
-			continue
+		ch, channelOpenError := conn.Channel()
+		if channelOpenError != nil {
+			t.Fatalf("error opening channel: %d error: %+v", i, channelOpenError)
 		}
 
 		for j := 0; j < 10; j++ {
 			if ch.IsClosed() {
-				break
-			} else {
-				err = ch.Publish("not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
-				if err, ok := err.(Error); ok {
-					if err.Code != 504 {
-						t.Fatalf("expected channel only exception i: %d j: %d got: %+v", i, j, err)
-					}
-					if cerr := ch.Close(); cerr != nil {
-						t.Logf("error on channel close i: %d j: %d got: %+v", i, j, cerr)
-					}
-					break
+				if j == 0 {
+					t.Fatal("channel should not be closed")
+				}
+				// TODO remove this debug log
+				t.Logf("channel is closed, i: %d j: %d", i, j)
+			}
+			publishError := ch.Publish("not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
+			if publishError, ok := publishError.(Error); ok {
+				if publishError.Code == 504 {
+					t.Logf("i: %d j: %d error: %+v", i, j, publishError)
+				} else {
+					t.Fatalf("expected channel only exception i: %d j: %d error: %+v", i, j, publishError)
 				}
 			}
 		}
