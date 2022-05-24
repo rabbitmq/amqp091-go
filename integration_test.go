@@ -1549,10 +1549,6 @@ func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 	})
 
 	for i := 0; i < 100; i++ {
-		if conn == nil {
-			t.Fatal("conn is nil")
-		}
-
 		if conn.IsClosed() {
 			t.Fatal("conn is closed")
 		}
@@ -1567,8 +1563,6 @@ func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 				if j == 0 {
 					t.Fatal("channel should not be closed")
 				}
-				// TODO remove this debug log
-				t.Logf("channel is closed, i: %d j: %d", i, j)
 				break
 			}
 			publishError := ch.Publish("not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
