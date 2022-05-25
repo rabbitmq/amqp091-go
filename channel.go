@@ -98,7 +98,6 @@ func (ch *Channel) shutdown(e *Error) {
 	ch.setClosed()
 
 	ch.destructor.Do(func() {
-
 		ch.m.Lock()
 		defer ch.m.Unlock()
 
@@ -288,9 +287,8 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 func (ch *Channel) dispatch(msg message) {
 	switch m := msg.(type) {
 	case *channelClose:
-		// Immediately indicate that this channel is closed to prevent
-		// invalid frames from being sent to the server
-		ch.setClosed()
+		// Note: channel state is set to closed immedately after the message is
+		// decoded by the Connection
 
 		// lock before sending connection.close-ok
 		// to avoid unexpected interleaving with basic.publish frames if

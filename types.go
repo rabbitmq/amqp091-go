@@ -310,7 +310,7 @@ type frame interface {
 
 /*
 Perform any updates on the channel immediately after the frame is decoded while the
-connection synchronization is held.
+connection mutex is held.
 */
 func updateChannel(f frame, channel *Channel) {
 	if mf, isMethodFrame := f.(*methodFrame); isMethodFrame {
