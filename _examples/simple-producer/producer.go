@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -19,6 +20,7 @@ var (
 	routingKey   = flag.String("key", "test-key", "AMQP routing key")
 	body         = flag.String("body", "foobar", "Body of message")
 	reliable     = flag.Bool("reliable", true, "Wait for the publisher confirmation before exiting")
+	continuous   = flag.Bool("continuous", false, "Keep publishing messages at a 1msg/sec rate")
 	ErrLog       = log.New(os.Stderr, "[ERROR] ", log.LstdFlags|log.Lmsgprefix)
 	Log          = log.New(os.Stdout, "[INFO] ", log.LstdFlags|log.Lmsgprefix)
 )
@@ -28,10 +30,17 @@ func init() {
 }
 
 func main() {
-	if err := publish(*uri, *exchangeName, *exchangeType, *routingKey, *body, *reliable); err != nil {
-		ErrLog.Fatalf("%s", err)
+	for {
+		if err := publish(*uri, *exchangeName, *exchangeType, *routingKey, *body, *reliable); err != nil {
+			ErrLog.Fatalf("%s", err)
+		}
+		Log.Printf("published %dB OK", len(*body))
+		if (*continuous) {
+			time.Sleep(time.Second)
+		} else {
+			break
+		}
 	}
-	Log.Printf("published %dB OK", len(*body))
 }
 
 func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable bool) error {
@@ -69,7 +78,7 @@ func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable 
 	// Reliable publisher confirms require confirm.select support from the
 	// connection.
 	if reliable {
-		Log.Printf("enabling publishing confirms.")
+		Log.Printf("enabling publisher confirms.")
 		if err := channel.Confirm(false); err != nil {
 			return fmt.Errorf("Channel could not be put into confirm mode: %s", err)
 		}

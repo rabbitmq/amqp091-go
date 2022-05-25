@@ -47,8 +47,8 @@ func main() {
 		Log.Printf("running for %s", *lifetime)
 		time.Sleep(*lifetime)
 	} else {
-		Log.Printf("running forever")
-		select {}
+		Log.Printf("running until Consumer is done")
+		<-c.done
 	}
 
 	Log.Printf("shutting down")
