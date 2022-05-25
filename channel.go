@@ -95,8 +95,9 @@ func (ch *Channel) setClosed() {
 // shutdown is called by Connection after the channel has been removed from the
 // connection registry.
 func (ch *Channel) shutdown(e *Error) {
+	ch.setClosed()
+
 	ch.destructor.Do(func() {
-		ch.setClosed()
 
 		ch.m.Lock()
 		defer ch.m.Unlock()
