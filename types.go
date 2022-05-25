@@ -308,6 +308,18 @@ type frame interface {
 	channel() uint16
 }
 
+/*
+Perform any updates on the channel immediately after the frame is decoded while the
+connection synchronization is held.
+*/
+func updateChannel(f frame, channel *Channel) {
+	if mf, isMethodFrame := f.(*methodFrame); isMethodFrame {
+		if _, isChannelClose := mf.Method.(*channelClose); isChannelClose {
+			channel.setClosed()
+		}
+	}
+}
+
 type reader struct {
 	r io.Reader
 }
