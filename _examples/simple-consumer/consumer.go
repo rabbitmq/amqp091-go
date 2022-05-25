@@ -10,24 +10,24 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"time"
 	"syscall"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 var (
-	uri          = flag.String("uri", "amqp://guest:guest@localhost:5672/", "AMQP URI")
-	exchange     = flag.String("exchange", "test-exchange", "Durable, non-auto-deleted AMQP exchange name")
-	exchangeType = flag.String("exchange-type", "direct", "Exchange type - direct|fanout|topic|x-custom")
-	queue        = flag.String("queue", "test-queue", "Ephemeral AMQP queue name")
-	bindingKey   = flag.String("key", "test-key", "AMQP binding key")
-	consumerTag  = flag.String("consumer-tag", "simple-consumer", "AMQP consumer tag (should not be blank)")
-	lifetime     = flag.Duration("lifetime", 5*time.Second, "lifetime of process before shutdown (0s=infinite)")
-	verbose      = flag.Bool("verbose", true, "enable verbose output of message data")
-	autoAck      = flag.Bool("auto_ack", false, "enable message auto-ack")
-	ErrLog       = log.New(os.Stderr, "[ERROR] ", log.LstdFlags|log.Lmsgprefix)
-	Log          = log.New(os.Stdout, "[INFO] ", log.LstdFlags|log.Lmsgprefix)
+	uri               = flag.String("uri", "amqp://guest:guest@localhost:5672/", "AMQP URI")
+	exchange          = flag.String("exchange", "test-exchange", "Durable, non-auto-deleted AMQP exchange name")
+	exchangeType      = flag.String("exchange-type", "direct", "Exchange type - direct|fanout|topic|x-custom")
+	queue             = flag.String("queue", "test-queue", "Ephemeral AMQP queue name")
+	bindingKey        = flag.String("key", "test-key", "AMQP binding key")
+	consumerTag       = flag.String("consumer-tag", "simple-consumer", "AMQP consumer tag (should not be blank)")
+	lifetime          = flag.Duration("lifetime", 5*time.Second, "lifetime of process before shutdown (0s=infinite)")
+	verbose           = flag.Bool("verbose", true, "enable verbose output of message data")
+	autoAck           = flag.Bool("auto_ack", false, "enable message auto-ack")
+	ErrLog            = log.New(os.Stderr, "[ERROR] ", log.LstdFlags|log.Lmsgprefix)
+	Log               = log.New(os.Stdout, "[INFO] ", log.LstdFlags|log.Lmsgprefix)
 	deliveryCount int = 0
 )
 
@@ -196,7 +196,7 @@ func handle(deliveries <-chan amqp.Delivery, done chan error) {
 				d.Body,
 			)
 		} else {
-			if deliveryCount % 65536 == 0 {
+			if deliveryCount%65536 == 0 {
 				Log.Printf("delivery count %d", deliveryCount)
 			}
 		}

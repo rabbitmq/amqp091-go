@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -30,25 +32,29 @@ func init() {
 }
 
 func main() {
-	for {
-		if err := publish(*uri, *exchangeName, *exchangeType, *routingKey, *body, *reliable); err != nil {
-			ErrLog.Fatalf("%s", err)
-		}
-		Log.Printf("published %dB OK", len(*body))
-		if (*continuous) {
-			time.Sleep(time.Second)
-		} else {
-			break
-		}
+	done := make(chan bool)
+
+	SetupCloseHandler(done)
+
+	if err := publish(done, *uri, *exchangeName, *exchangeType, *routingKey, *body, *reliable); err != nil {
+		ErrLog.Fatalf("%s", err)
 	}
 }
 
-func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable bool) error {
+func SetupCloseHandler(done chan bool) {
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		done <- true
+		Log.Printf("Ctrl+C pressed in Terminal")
+	}()
+}
 
+func publish(done chan bool, amqpURI, exchange, exchangeType, routingKey, body string, reliable bool) error {
 	// This function dials, connects, declares, publishes, and tears down,
 	// all in one go. In a real service, you probably want to maintain a
 	// long-lived connection as state, and publish against that.
-
 	Log.Printf("dialing %q", amqpURI)
 	connection, err := amqp.Dial(amqpURI)
 	if err != nil {
@@ -75,6 +81,9 @@ func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable 
 		return fmt.Errorf("Exchange Declare: %s", err)
 	}
 
+	var publishes chan uint64 = nil
+	var confirms chan amqp.Confirmation = nil
+
 	// Reliable publisher confirms require confirm.select support from the
 	// connection.
 	if reliable {
@@ -82,43 +91,80 @@ func publish(amqpURI, exchange, exchangeType, routingKey, body string, reliable 
 		if err := channel.Confirm(false); err != nil {
 			return fmt.Errorf("Channel could not be put into confirm mode: %s", err)
 		}
+		// We'll allow for a few outstanding publisher confirms
+		publishes = make(chan uint64, 8)
+		confirms = channel.NotifyPublish(make(chan amqp.Confirmation, 1))
 
-		confirms := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
-
-		defer confirmOne(confirms)
+		go confirmHandler(done, publishes, confirms)
 	}
 
-	Log.Printf("declared Exchange, publishing %dB body (%q)", len(body), body)
-	if err = channel.Publish(
-		exchange,   // publish to an exchange
-		routingKey, // routing to 0 or more queues
-		false,      // mandatory
-		false,      // immediate
-		amqp.Publishing{
-			Headers:         amqp.Table{},
-			ContentType:     "text/plain",
-			ContentEncoding: "",
-			Body:            []byte(body),
-			DeliveryMode:    amqp.Transient, // 1=non-persistent, 2=persistent
-			Priority:        0,              // 0-9
-			// a bunch of application/implementation-specific fields
-		},
-	); err != nil {
-		return fmt.Errorf("Exchange Publish: %s", err)
+	Log.Println("declared Exchange, publishing messages")
+
+	for {
+		seqNo := channel.GetNextPublishSeqNo()
+		Log.Printf("publishing %dB body (%q)", len(body), body)
+
+		if err := channel.Publish(
+			exchange,   // publish to an exchange
+			routingKey, // routing to 0 or more queues
+			false,      // mandatory
+			false,      // immediate
+			amqp.Publishing{
+				Headers:         amqp.Table{},
+				ContentType:     "text/plain",
+				ContentEncoding: "",
+				Body:            []byte(body),
+				DeliveryMode:    amqp.Transient, // 1=non-persistent, 2=persistent
+				Priority:        0,              // 0-9
+				// a bunch of application/implementation-specific fields
+			},
+		); err != nil {
+			return fmt.Errorf("Exchange Publish: %s", err)
+		}
+
+		Log.Printf("published %dB OK", len(body))
+		if reliable {
+			publishes <- seqNo
+		}
+
+		if *continuous {
+			select {
+			case <-done:
+				Log.Println("producer is stopping")
+				return nil
+			case <-time.After(time.Second):
+				continue
+			}
+		} else {
+			break
+		}
 	}
 
 	return nil
 }
 
-// One would typically keep a channel of publishings, a sequence number, and a
-// set of unacknowledged sequence numbers and loop until the publishing channel
-// is closed.
-func confirmOne(confirms <-chan amqp.Confirmation) {
-	Log.Printf("waiting for confirmation of one publishing")
-
-	if confirmed := <-confirms; confirmed.Ack {
-		Log.Printf("confirmed delivery with delivery tag: %d", confirmed.DeliveryTag)
-	} else {
-		ErrLog.Printf("failed delivery of delivery tag: %d", confirmed.DeliveryTag)
+func confirmHandler(done chan bool, publishes chan uint64, confirms chan amqp.Confirmation) {
+	m := make(map[uint64]bool)
+	for {
+		select {
+		case <-done:
+			Log.Println("confirmHandler is stopping")
+			return
+		case publishSeqNo := <-publishes:
+			Log.Printf("waiting for confirmation of %d", publishSeqNo)
+			m[publishSeqNo] = false
+		case confirmed := <-confirms:
+			if confirmed.DeliveryTag > 0 {
+				if confirmed.Ack {
+					Log.Printf("confirmed delivery with delivery tag: %d", confirmed.DeliveryTag)
+				} else {
+					ErrLog.Printf("failed delivery of delivery tag: %d", confirmed.DeliveryTag)
+				}
+				delete(m, confirmed.DeliveryTag)
+			}
+		}
+		if len(m) > 1 {
+			Log.Printf("outstanding confirmations: %d", len(m))
+		}
 	}
 }
