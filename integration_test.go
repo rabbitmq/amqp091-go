@@ -1565,11 +1565,10 @@ func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 				}
 				break
 			}
-			publishError := ch.Publish("not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
-			if publishError, ok := publishError.(Error); ok {
-				if publishError.Code == 504 {
-					t.Logf("i: %d j: %d error: %+v", i, j, publishError)
-				} else {
+			err := ch.Publish("not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
+			if err != nil {
+				publishError := err.(*Error)
+				if publishError.Code != 504 {
 					t.Fatalf("expected channel only exception i: %d j: %d error: %+v", i, j, publishError)
 				}
 			}
