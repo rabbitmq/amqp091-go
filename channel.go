@@ -87,9 +87,16 @@ func newChannel(c *Connection, id uint16) *Channel {
 	}
 }
 
+// Signal that from now on, Channel.send() should call Channel.sendClosed()
+func (ch *Channel) setClosed() {
+	atomic.StoreInt32(&ch.closed, 1)
+}
+
 // shutdown is called by Connection after the channel has been removed from the
 // connection registry.
 func (ch *Channel) shutdown(e *Error) {
+	ch.setClosed()
+
 	ch.destructor.Do(func() {
 		ch.m.Lock()
 		defer ch.m.Unlock()
@@ -104,10 +111,6 @@ func (ch *Channel) shutdown(e *Error) {
 				c <- e
 			}
 		}
-
-		// Signal that from now on, Channel.send() should call
-		// Channel.sendClosed()
-		atomic.StoreInt32(&ch.closed, 1)
 
 		// Notify RPC if we're selecting
 		if e != nil {
@@ -154,7 +157,7 @@ func (ch *Channel) shutdown(e *Error) {
 // only 'channel.close' is sent to the server.
 func (ch *Channel) send(msg message) (err error) {
 	// If the channel is closed, use Channel.sendClosed()
-	if atomic.LoadInt32(&ch.closed) == 1 {
+	if ch.IsClosed() {
 		return ch.sendClosed(msg)
 	}
 
@@ -231,7 +234,7 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 		}
 
 		// If the channel is closed, use Channel.sendClosed()
-		if atomic.LoadInt32(&ch.closed) == 1 {
+		if ch.IsClosed() {
 			return ch.sendClosed(msg)
 		}
 
@@ -266,7 +269,7 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 		}
 	} else {
 		// If the channel is closed, use Channel.sendClosed()
-		if atomic.LoadInt32(&ch.closed) == 1 {
+		if ch.IsClosed() {
 			return ch.sendClosed(msg)
 		}
 
@@ -284,6 +287,9 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 func (ch *Channel) dispatch(msg message) {
 	switch m := msg.(type) {
 	case *channelClose:
+		// Note: channel state is set to closed immedately after the message is
+		// decoded by the Connection
+
 		// lock before sending connection.close-ok
 		// to avoid unexpected interleaving with basic.publish frames if
 		// publishing is happening concurrently

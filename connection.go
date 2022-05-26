@@ -494,8 +494,11 @@ func (c *Connection) dispatch0(f frame) {
 func (c *Connection) dispatchN(f frame) {
 	c.m.Lock()
 	channel := c.channels[f.channel()]
+	updateChannel(f, channel)
 	c.m.Unlock()
 
+	// Note: this could result in concurrent dispatch depending on
+	// how channels are managed in an application
 	if channel != nil {
 		channel.recv(channel, f)
 	} else {
