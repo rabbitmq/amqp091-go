@@ -1567,8 +1567,7 @@ func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 			}
 			err := ch.Publish("not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
 			if err != nil {
-				publishError := err.(*Error)
-				if publishError.Code != 504 {
+				if publishError, ok := err.(*Error); !ok || publishError.Code != 504 {
 					t.Fatalf("expected channel only exception i: %d j: %d error: %+v", i, j, publishError)
 				}
 			}
@@ -1760,13 +1759,12 @@ func TestExchangeDeclarePrecondition(t *testing.T) {
 
 		if err == nil {
 			t.Fatalf("Expected to fail a redeclare with different durability, didn't receive an error")
-		}
-
-		if err, ok := err.(Error); ok {
-			if err.Code != PreconditionFailed {
+		} else {
+			declareErr := err.(*Error)
+			if declareErr.Code != PreconditionFailed {
 				t.Fatalf("Expected precondition error")
 			}
-			if !err.Recover {
+			if !declareErr.Recover {
 				t.Fatalf("Expected to be able to recover")
 			}
 		}
