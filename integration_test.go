@@ -1539,46 +1539,36 @@ func TestDeadlockConsumerIssue48(t *testing.T) {
 
 // https://github.com/streadway/amqp/issues/46
 func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
-	var conn *Connection = nil
+	conn := integrationConnection(t, "issue46")
+	if conn == nil {
+		t.Fatal("conn is nil")
+	}
 
 	t.Cleanup(func() {
-		if conn != nil {
-			conn.Close()
-		}
+		conn.Close()
 	})
 
 	for i := 0; i < 100; i++ {
-		if conn == nil || conn.IsClosed() {
-			conn = integrationConnection(t, "issue46")
-			if conn == nil {
-				t.Fatal("conn is nil")
-			}
+		if conn.IsClosed() {
+			t.Fatal("conn is closed")
 		}
 
-		ch, err := conn.Channel()
-		if err, ok := err.(Error); ok {
-			if err.Code != 504 {
-				t.Fatalf("expected channel only exception i: %d got: %+v", i, err)
-			}
+		ch, channelOpenError := conn.Channel()
+		if channelOpenError != nil {
+			t.Fatalf("error opening channel: %d error: %+v", i, channelOpenError)
 		}
 
-		if ch == nil {
-			continue
-		}
-
-		for j := 0; j < 10; j++ {
+		for j := 0; j < 100; j++ {
 			if ch.IsClosed() {
+				if j == 0 {
+					t.Fatal("channel should not be closed")
+				}
 				break
-			} else {
-				err = ch.Publish("not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
-				if err, ok := err.(Error); ok {
-					if err.Code != 504 {
-						t.Fatalf("expected channel only exception i: %d j: %d got: %+v", i, j, err)
-					}
-					if cerr := ch.Close(); cerr != nil {
-						t.Logf("error on channel close i: %d j: %d got: %+v", i, j, cerr)
-					}
-					break
+			}
+			err := ch.Publish("not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
+			if err != nil {
+				if publishError, ok := err.(*Error); !ok || publishError.Code != 540 {
+					t.Fatalf("expected channel only exception i: %d j: %d error: %+v", i, j, publishError)
 				}
 			}
 		}
@@ -1769,13 +1759,12 @@ func TestExchangeDeclarePrecondition(t *testing.T) {
 
 		if err == nil {
 			t.Fatalf("Expected to fail a redeclare with different durability, didn't receive an error")
-		}
-
-		if err, ok := err.(Error); ok {
-			if err.Code != PreconditionFailed {
+		} else {
+			declareErr := err.(*Error)
+			if declareErr.Code != PreconditionFailed {
 				t.Fatalf("Expected precondition error")
 			}
-			if !err.Recover {
+			if !declareErr.Recover {
 				t.Fatalf("Expected to be able to recover")
 			}
 		}
