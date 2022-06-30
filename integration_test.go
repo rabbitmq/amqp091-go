@@ -134,6 +134,28 @@ func TestIntegrationLocalAddr(t *testing.T) {
 	t.Logf("Connected to port %d\n", port)
 }
 
+func TestIntegrationRemoteAddr(t *testing.T) {
+	config := Config{}
+
+	c, err := DialConfig(amqpURL, config)
+	if err != nil {
+		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
+	}
+	defer c.Close()
+
+	a := c.RemoteAddr()
+	_, portString, err := net.SplitHostPort(a.String())
+	if err != nil {
+		t.Fatalf("expected to get a remote network address with config %+v integration server: %s", config, a.String())
+	}
+
+	port, err := strconv.Atoi(portString)
+	if err != nil {
+		t.Fatalf("expected to get a TCP port number with config %+v integration server: %s", config, err)
+	}
+	t.Logf("Connected to port %d\n", port)
+}
+
 // https://github.com/streadway/amqp/issues/94
 func TestExchangePassiveOnMissingExchangeShouldError(t *testing.T) {
 	c := integrationConnection(t, "exch")

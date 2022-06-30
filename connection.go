@@ -265,6 +265,18 @@ func (c *Connection) LocalAddr() net.Addr {
 	return &net.TCPAddr{}
 }
 
+/*
+RemoteAddr returns the remote TCP peer address, if known.
+*/
+func (c *Connection) RemoteAddr() net.Addr {
+	if conn, ok := c.conn.(interface {
+		RemoteAddr() net.Addr
+	}); ok {
+		return conn.RemoteAddr()
+	}
+	return &net.TCPAddr{}
+}
+
 // ConnectionState returns basic TLS details of the underlying transport.
 // Returns a zero value when the underlying connection does not implement
 // ConnectionState() tls.ConnectionState.
