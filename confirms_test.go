@@ -259,3 +259,45 @@ func TestDeferredConfirmationsClose(t *testing.T) {
 		t.Fatal("expected to receive false for nacked confirmations, received true")
 	}
 }
+
+func TestDeferredConfirmationsContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	dcs := newDeferredConfirmations()
+	var wg sync.WaitGroup
+	var result bool
+	dc1 := dcs.Add(ctx, 1)
+	dc2 := dcs.Add(ctx, 2)
+	dc3 := dcs.Add(ctx, 3)
+	wg.Add(1)
+	go func() {
+		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
+		wg.Done()
+	}()
+	wg.Wait()
+	if !result {
+		t.Fatal("expected to receive false for timeout confirmations, received true")
+	}
+}
+
+func TestDeferredConfirmationsContextTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+	defer cancel()
+
+	dcs := newDeferredConfirmations()
+	var wg sync.WaitGroup
+	var result bool
+	dc1 := dcs.Add(ctx, 1)
+	dc2 := dcs.Add(ctx, 2)
+	dc3 := dcs.Add(ctx, 3)
+	wg.Add(1)
+	go func() {
+		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
+		wg.Done()
+	}()
+	wg.Wait()
+	if !result {
+		t.Fatal("expected to receive false for timeout confirmations, received true")
+	}
+}
