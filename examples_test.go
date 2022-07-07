@@ -6,6 +6,7 @@
 package amqp091_test
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io/ioutil"
@@ -176,7 +177,7 @@ func ExampleChannel_Confirm_bridge() {
 			log.Fatalf("source channel closed, see the reconnect example for handling this")
 		}
 
-		err = chd.Publish("logs", msg.RoutingKey, false, false, amqp.Publishing{
+		err = chd.Publish(context.TODO(), "logs", msg.RoutingKey, false, false, amqp.Publishing{
 			// Copy all the properties
 			ContentType:     msg.ContentType,
 			ContentEncoding: msg.ContentEncoding,
@@ -377,7 +378,7 @@ func ExampleChannel_Publish() {
 
 	// This is not a mandatory delivery, so it will be dropped if there are no
 	// queues bound to the logs exchange.
-	err = c.Publish("logs", "info", false, false, msg)
+	err = c.Publish(context.TODO(), "logs", "info", false, false, msg)
 	if err != nil {
 		// Since publish is asynchronous this can happen if the network connection
 		// is reset or if the server has run out of resources.

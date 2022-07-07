@@ -6,6 +6,8 @@
 package amqp091
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -1359,9 +1361,10 @@ confirmations start at 1.  Exit when all publishings are confirmed.
 When Publish does not return an error and the channel is in confirm mode, the
 internal counter for DeliveryTags with the first confirmation starts at 1.
 
+Provided context should always be cancelled after use.
 */
-func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg Publishing) error {
-	_, err := ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
+func (ch *Channel) Publish(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
+	_, err := ch.PublishWithDeferredConfirm(ctx, exchange, key, mandatory, immediate, msg)
 	return err
 }
 
@@ -1370,8 +1373,14 @@ PublishWithDeferredConfirm behaves identically to Publish but additionally retur
 DeferredConfirmation, allowing the caller to wait on the publisher confirmation
 for this message. If the channel has not been put into confirm mode,
 the DeferredConfirmation will be nil.
+
+Provided context should always be cancelled after use.
 */
-func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
+func (ch *Channel) PublishWithDeferredConfirm(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
+	if ctx == nil {
+		return nil, errors.New("amqp091-go: nil Context")
+	}
+
 	if err := msg.Headers.Validate(); err != nil {
 		return nil, err
 	}
@@ -1405,7 +1414,7 @@ func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, i
 	}
 
 	if ch.confirming {
-		return ch.confirms.Publish(), nil
+		return ch.confirms.Publish(ctx), nil
 	}
 
 	return nil, nil

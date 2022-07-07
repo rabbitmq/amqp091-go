@@ -6,6 +6,7 @@
 package amqp091
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sync"
@@ -184,6 +185,7 @@ type Blocking struct {
 // allows users to directly correlate a publishing to a confirmation. These are
 // returned from PublishWithDeferredConfirm on Channels.
 type DeferredConfirmation struct {
+	ctx          context.Context
 	wg           sync.WaitGroup
 	DeliveryTag  uint64
 	confirmation Confirmation

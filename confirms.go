@@ -6,6 +6,7 @@
 package amqp091
 
 import (
+	"context"
 	"sync"
 )
 
@@ -38,11 +39,21 @@ func (c *confirms) Listen(l chan Confirmation) {
 }
 
 // Publish increments the publishing counter
-func (c *confirms) Publish() *DeferredConfirmation {
+func (c *confirms) Publish(ctx context.Context) *DeferredConfirmation {
 	c.publishedMut.Lock()
 	defer c.publishedMut.Unlock()
 
 	c.published++
+
+	// monitor context close and send nack
+	go func(ctx context.Context, tag uint64) {
+		<-ctx.Done() // Wait for context end
+		c.One(Confirmation{
+			DeliveryTag: tag,
+			Ack:         false,
+		})
+	}(ctx, c.published)
+
 	return c.deferredConfirmations.Add(c.published)
 }
 
@@ -75,7 +86,10 @@ func (c *confirms) One(confirmed Confirmation) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	c.deferredConfirmations.Confirm(confirmed)
+	if found := c.deferredConfirmations.Confirm(confirmed); !found && !confirmed.Ack {
+		// nothing to do it is context closing on already ack message
+		return
+	}
 
 	if c.expecting == confirmed.DeliveryTag {
 		c.confirm(confirmed)
@@ -134,18 +148,20 @@ func (d *deferredConfirmations) Add(tag uint64) *DeferredConfirmation {
 	return dc
 }
 
-func (d *deferredConfirmations) Confirm(confirmation Confirmation) {
+func (d *deferredConfirmations) Confirm(confirmation Confirmation) bool {
 	d.m.Lock()
 	defer d.m.Unlock()
 
 	dc, found := d.confirmations[confirmation.DeliveryTag]
 	if !found {
 		// we should never receive a confirmation for a tag that hasn't been published, but a test causes this to happen
-		return
+		return false
 	}
 	dc.confirmation = confirmation
 	dc.wg.Done()
 	delete(d.confirmations, confirmation.DeliveryTag)
+
+	return true
 }
 
 func (d *deferredConfirmations) ConfirmMultiple(confirmation Confirmation) {
