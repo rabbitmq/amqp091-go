@@ -10,6 +10,7 @@ package amqp091
 
 import (
 	"bytes"
+	"context"
 	devrand "crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -1335,6 +1336,10 @@ func TestIntegrationCancel(t *testing.T) {
 }
 
 func TestIntegrationConfirm(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if c, ch := integrationQueue(t, "confirm"); c != nil {
 		defer c.Close()
 
@@ -1459,6 +1464,10 @@ func TestDeclareArgsXMessageTTL(t *testing.T) {
 // Relates to https://github.com/streadway/amqp/issues/56
 //
 func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if conn := integrationConnection(t, "declareArgs"); conn != nil {
 		defer conn.Close()
 
@@ -1509,7 +1518,7 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 		}()
 
 		// Publish the 'poison'
-		if err := ch.Publish(ex, q, true, false, Publishing{Body: []byte("ignored")}); err != nil {
+		if err := ch.Publish(ctx, ex, q, true, false, Publishing{Body: []byte("ignored")}); err != nil {
 			t.Fatalf("publishing failed")
 		}
 
