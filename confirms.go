@@ -44,7 +44,6 @@ func (c *confirms) Publish(ctx context.Context) *DeferredConfirmation {
 	defer c.publishedMut.Unlock()
 
 	c.published++
-
 	return c.deferredConfirmations.Add(ctx, c.published)
 }
 
@@ -136,20 +135,18 @@ func (d *deferredConfirmations) Add(ctx context.Context, tag uint64) *DeferredCo
 	return dc
 }
 
-func (d *deferredConfirmations) Confirm(confirmation Confirmation) bool {
+func (d *deferredConfirmations) Confirm(confirmation Confirmation) {
 	d.m.Lock()
 	defer d.m.Unlock()
 
 	dc, found := d.confirmations[confirmation.DeliveryTag]
 	if !found {
 		// we should never receive a confirmation for a tag that hasn't been published, but a test causes this to happen
-		return false
+		return
 	}
 	dc.confirmation = confirmation
 	dc.cancel()
 	delete(d.confirmations, confirmation.DeliveryTag)
-
-	return true
 }
 
 func (d *deferredConfirmations) ConfirmMultiple(confirmation Confirmation) {
