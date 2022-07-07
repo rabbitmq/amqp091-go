@@ -13,6 +13,10 @@ import (
 )
 
 func TestConfirmOneResequences(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	var (
 		fixtures = []Confirmation{
 			{1, true},
@@ -26,7 +30,7 @@ func TestConfirmOneResequences(t *testing.T) {
 	c.Listen(l)
 
 	for i := range fixtures {
-		if want, got := uint64(i+1), c.Publish(context.TODO()); want != got.DeliveryTag {
+		if want, got := uint64(i+1), c.Publish(ctx); want != got.DeliveryTag {
 			t.Fatalf("expected publish to return the 1 based delivery tag published, want: %d, got: %d", want, got.DeliveryTag)
 		}
 	}
@@ -50,6 +54,10 @@ func TestConfirmOneResequences(t *testing.T) {
 }
 
 func TestConfirmAndPublishDoNotDeadlock(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	var (
 		c          = newConfirms()
 		l          = make(chan Confirmation)
@@ -64,12 +72,16 @@ func TestConfirmAndPublishDoNotDeadlock(t *testing.T) {
 	}()
 
 	for i := 0; i < iterations; i++ {
-		c.Publish(context.TODO())
+		c.Publish(ctx)
 		<-l
 	}
 }
 
 func TestConfirmMixedResequences(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	var (
 		fixtures = []Confirmation{
 			{1, true},
@@ -82,7 +94,7 @@ func TestConfirmMixedResequences(t *testing.T) {
 	c.Listen(l)
 
 	for range fixtures {
-		c.Publish(context.TODO())
+		c.Publish(ctx)
 	}
 
 	c.One(fixtures[0])
@@ -104,6 +116,10 @@ func TestConfirmMixedResequences(t *testing.T) {
 }
 
 func TestConfirmMultipleResequences(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	var (
 		fixtures = []Confirmation{
 			{1, true},
@@ -117,7 +133,7 @@ func TestConfirmMultipleResequences(t *testing.T) {
 	c.Listen(l)
 
 	for range fixtures {
-		c.Publish(context.TODO())
+		c.Publish(ctx)
 	}
 
 	c.Multiple(fixtures[len(fixtures)-1])
@@ -130,6 +146,9 @@ func TestConfirmMultipleResequences(t *testing.T) {
 }
 
 func BenchmarkSequentialBufferedConfirms(t *testing.B) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	var (
 		c = newConfirms()
 		l = make(chan Confirmation, 10)
@@ -141,11 +160,15 @@ func BenchmarkSequentialBufferedConfirms(t *testing.B) {
 		if i > cap(l)-1 {
 			<-l
 		}
-		c.One(Confirmation{c.Publish(context.TODO()).DeliveryTag, true})
+		c.One(Confirmation{c.Publish(ctx).DeliveryTag, true})
 	}
 }
 
 func TestConfirmsIsThreadSafe(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	const count = 1000
 	const timeout = 5 * time.Second
 	var (
@@ -159,7 +182,7 @@ func TestConfirmsIsThreadSafe(t *testing.T) {
 	c.Listen(l)
 
 	for i := 0; i < count; i++ {
-		go func() { pub <- Confirmation{c.Publish(context.TODO()).DeliveryTag, true} }()
+		go func() { pub <- Confirmation{c.Publish(ctx).DeliveryTag, true} }()
 	}
 
 	for i := 0; i < count; i++ {

@@ -644,6 +644,10 @@ func TestIntegrationNonBlockingClose(t *testing.T) {
 }
 
 func TestIntegrationPublishConsume(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	queue := "test.integration.publish.consume"
 
 	c1 := integrationConnection(t, "pub")
@@ -668,13 +672,13 @@ func TestIntegrationPublishConsume(t *testing.T) {
 
 		messages, _ := sub.Consume(queue, "", false, false, false, false, nil)
 
-		if e := pub.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("pub 1")}); e != nil {
+		if e := pub.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("pub 1")}); e != nil {
 			t.Fatalf("publish error: %v", e)
 		}
-		if e := pub.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("pub 2")}); e != nil {
+		if e := pub.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("pub 2")}); e != nil {
 			t.Fatalf("publish error: %v", e)
 		}
-		if e := pub.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("pub 3")}); e != nil {
+		if e := pub.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("pub 3")}); e != nil {
 			t.Fatalf("publish error: %v", e)
 		}
 
@@ -685,6 +689,10 @@ func TestIntegrationPublishConsume(t *testing.T) {
 }
 
 func TestIntegrationConsumeFlow(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	queue := "test.integration.consumer-flow"
 
 	c1 := integrationConnection(t, "pub-flow")
@@ -717,10 +725,10 @@ func TestIntegrationConsumeFlow(t *testing.T) {
 			t.Fatalf("error consuming: %v", err)
 		}
 
-		if e := pub.Publish(context.TODO(), "ontext.TODO(), "", queue, false, false, Publishing{Body: []byte("pub 1")}); e != nil {
+		if e := pub.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("pub 1")}); e != nil {
 			t.Fatalf("error publishing: %v", e)
 		}
-		if e := pub.Publish(context.TODO(), "ontext.TODO(), "ontext.TODO(), "", queue, false, false, Publishing{Body: []byte("pub 2")}); e != nil {
+		if e := pub.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("pub 2")}); e != nil {
 			t.Fatalf("error publishing: %v", e)
 		}
 
@@ -776,6 +784,10 @@ func TestIntegrationPublishFlow(t *testing.T) {
 }
 
 func TestIntegrationConsumeCancel(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	queue := "test.integration.consume-cancel"
 
 	c := integrationConnection(t, "pub")
@@ -793,7 +805,7 @@ func TestIntegrationConsumeCancel(t *testing.T) {
 
 		messages, _ := ch.Consume(queue, "integration-tag", false, false, false, false, nil)
 
-		if e := ch.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("1")}); e != nil {
+		if e := ch.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("1")}); e != nil {
 			t.Fatalf("error publishing: %v", e)
 		}
 
@@ -804,7 +816,7 @@ func TestIntegrationConsumeCancel(t *testing.T) {
 			t.Fatalf("error cancelling the consumer: %v", err)
 		}
 
-		if e := ch.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("2")}); e != nil {
+		if e := ch.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("2")}); e != nil {
 			t.Fatalf("error publishing: %v", e)
 		}
 
@@ -878,6 +890,10 @@ func (c Publishing) Generate(r *rand.Rand, _ int) reflect.Value {
 }
 
 func TestQuickPublishOnly(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if c := integrationConnection(t, "quick"); c != nil {
 		defer c.Close()
 		pub, err := c.Channel()
@@ -894,7 +910,7 @@ func TestQuickPublishOnly(t *testing.T) {
 		defer integrationQueueDelete(t, pub, queue)
 
 		chk := func(msg Publishing) bool {
-			return pub.Publish(context.TODO(), "", queue, false, false, msg) == nil
+			return pub.Publish(ctx, "", queue, false, false, msg) == nil
 		}
 		if err := quick.Check(chk, nil); err != nil {
 			t.Fatalf("check error: %v", err)
@@ -903,6 +919,10 @@ func TestQuickPublishOnly(t *testing.T) {
 }
 
 func TestPublishEmptyBody(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	c := integrationConnection(t, "empty")
 	if c != nil {
 		defer c.Close()
@@ -925,7 +945,7 @@ func TestPublishEmptyBody(t *testing.T) {
 			t.Fatalf("Could not consume")
 		}
 
-		err = ch.Publish(context.TODO(), "", queue, false, false, Publishing{})
+		err = ch.Publish(ctx, "", queue, false, false, Publishing{})
 		if err != nil {
 			t.Fatalf("Could not publish")
 		}
@@ -942,6 +962,10 @@ func TestPublishEmptyBody(t *testing.T) {
 }
 
 func TestPublishEmptyBodyWithHeadersIssue67(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	c := integrationConnection(t, "issue67")
 	if c != nil {
 		defer c.Close()
@@ -969,7 +993,7 @@ func TestPublishEmptyBodyWithHeadersIssue67(t *testing.T) {
 			"ham": "spam",
 		}
 
-		err = ch.Publish(context.TODO(), "", queue, false, false, Publishing{Headers: headers})
+		err = ch.Publish(ctx, "", queue, false, false, Publishing{Headers: headers})
 		if err != nil {
 			t.Fatalf("Could not publish")
 		}
@@ -989,6 +1013,10 @@ func TestPublishEmptyBodyWithHeadersIssue67(t *testing.T) {
 }
 
 func TestQuickPublishConsumeOnly(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	c1 := integrationConnection(t, "quick-pub")
 	c2 := integrationConnection(t, "quick-sub")
 
@@ -1028,7 +1056,7 @@ func TestQuickPublishConsumeOnly(t *testing.T) {
 		if chkerr := quick.CheckEqual(
 			func(msg Publishing) []byte {
 				empty := Publishing{Body: msg.Body}
-				if pub.Publish(context.TODO(), "", queue, false, false, empty) != nil {
+				if pub.Publish(ctx, "", queue, false, false, empty) != nil {
 					return []byte{'X'}
 				}
 				return msg.Body
@@ -1047,6 +1075,10 @@ func TestQuickPublishConsumeOnly(t *testing.T) {
 }
 
 func TestQuickPublishConsumeBigBody(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	c1 := integrationConnection(t, "big-pub")
 	c2 := integrationConnection(t, "big-sub")
 
@@ -1082,7 +1114,7 @@ func TestQuickPublishConsumeBigBody(t *testing.T) {
 			t.Fatalf("Failed to declare: %s", err)
 		}
 
-		err = pub.Publish(context.TODO(), "", queue, false, false, fixture)
+		err = pub.Publish(ctx, "", queue, false, false, fixture)
 		if err != nil {
 			t.Fatalf("Could not publish big body")
 		}
@@ -1099,6 +1131,10 @@ func TestQuickPublishConsumeBigBody(t *testing.T) {
 }
 
 func TestIntegrationGetOk(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if c := integrationConnection(t, "getok"); c != nil {
 		defer c.Close()
 
@@ -1109,7 +1145,7 @@ func TestIntegrationGetOk(t *testing.T) {
 			t.Fatalf("Failed to declare: %s", err)
 		}
 
-		if err := ch.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("ok")}); err != nil {
+		if err := ch.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("ok")}); err != nil {
 			t.Fatalf("Failed to publish: %s", err)
 		}
 
@@ -1153,6 +1189,10 @@ func TestIntegrationGetEmpty(t *testing.T) {
 }
 
 func TestIntegrationTxCommit(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if c := integrationConnection(t, "txcommit"); c != nil {
 		defer c.Close()
 
@@ -1167,7 +1207,7 @@ func TestIntegrationTxCommit(t *testing.T) {
 			t.Fatalf("tx.select failed")
 		}
 
-		if err := ch.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("ok")}); err != nil {
+		if err := ch.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("ok")}); err != nil {
 			t.Fatalf("Failed to publish: %s", err)
 		}
 
@@ -1188,6 +1228,10 @@ func TestIntegrationTxCommit(t *testing.T) {
 }
 
 func TestIntegrationTxRollback(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if c := integrationConnection(t, "txrollback"); c != nil {
 		defer c.Close()
 
@@ -1202,7 +1246,7 @@ func TestIntegrationTxRollback(t *testing.T) {
 			t.Fatalf("tx.select failed")
 		}
 
-		if err := ch.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("ok")}); err != nil {
+		if err := ch.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("ok")}); err != nil {
 			t.Fatalf("Failed to publish: %s", err)
 		}
 
@@ -1223,6 +1267,10 @@ func TestIntegrationTxRollback(t *testing.T) {
 }
 
 func TestIntegrationReturn(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if c, ch := integrationQueue(t, "return"); c != nil {
 		defer c.Close()
 
@@ -1231,7 +1279,7 @@ func TestIntegrationReturn(t *testing.T) {
 		ch.NotifyReturn(ret)
 
 		// mandatory publish to an exchange without a binding should be returned
-		if err := ch.Publish(context.TODO(), "", "return-without-binding", true, false, Publishing{Body: []byte("mandatory")}); err != nil {
+		if err := ch.Publish(ctx, "", "return-without-binding", true, false, Publishing{Body: []byte("mandatory")}); err != nil {
 			t.Fatalf("Failed to publish: %s", err)
 		}
 
@@ -1296,7 +1344,7 @@ func TestIntegrationConfirm(t *testing.T) {
 			t.Fatalf("could not confirm")
 		}
 
-		if err := ch.Publish(context.TODO(), "", "confirm", false, false, Publishing{Body: []byte("confirm")}); err != nil {
+		if err := ch.Publish(ctx, "", "confirm", false, false, Publishing{Body: []byte("confirm")}); err != nil {
 			t.Fatalf("Failed to publish: %s", err)
 		}
 
@@ -1313,6 +1361,10 @@ func TestIntegrationConfirm(t *testing.T) {
 
 // https://github.com/streadway/amqp/issues/61
 func TestRoundTripAllFieldValueTypes61(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if conn := integrationConnection(t, "issue61"); conn != nil {
 		defer conn.Close()
 		timestamp := time.Unix(100000000, 0)
@@ -1363,7 +1415,7 @@ func TestRoundTripAllFieldValueTypes61(t *testing.T) {
 			t.Fatalf("Could not consume")
 		}
 
-		err = ch.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("ignored"), Headers: headers})
+		err = ch.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("ignored"), Headers: headers})
 		if err != nil {
 			t.Fatalf("Could not publish: %v", err)
 		}
@@ -1496,6 +1548,10 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 
 // https://github.com/streadway/amqp/issues/48
 func TestDeadlockConsumerIssue48(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if conn := integrationConnection(t, "issue48"); conn != nil {
 		defer conn.Close()
 
@@ -1528,7 +1584,7 @@ func TestDeadlockConsumerIssue48(t *testing.T) {
 
 		for i := 0; i < cap(confirms); i++ {
 			// Fill the queue with some new or remaining publishings
-			if err := ch.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("")}); err != nil {
+			if err := ch.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("")}); err != nil {
 				t.Fatalf("error publishing: %v", err)
 			}
 		}
@@ -1561,6 +1617,10 @@ func TestDeadlockConsumerIssue48(t *testing.T) {
 
 // https://github.com/streadway/amqp/issues/46
 func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	conn := integrationConnection(t, "issue46")
 	if conn == nil {
 		t.Fatal("conn is nil")
@@ -1587,7 +1647,7 @@ func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 				}
 				break
 			}
-			err := ch.Publish(context.TODO(), "not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
+			err := ch.Publish(ctx, "not-existing-exchange", "some-key", false, false, Publishing{Body: []byte("some-data")})
 			if err != nil {
 				if publishError, ok := err.(*Error); !ok || publishError.Code != 504 {
 					t.Fatalf("expected channel only exception i: %d j: %d error: %+v", i, j, publishError)
@@ -1599,6 +1659,10 @@ func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 
 // https://github.com/streadway/amqp/issues/43
 func TestChannelExceptionWithCloseIssue43(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	conn := integrationConnection(t, "issue43")
 	if conn != nil {
 		t.Cleanup(func() { conn.Close() })
@@ -1634,7 +1698,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 		// Cause an asynchronous channel exception causing the server
 		// to send a "channel.close" method either before or after the next
 		// asynchronous method.
-		err = c1.Publish(context.TODO(), "nonexisting-exchange", "", false, false, Publishing{})
+		err = c1.Publish(ctx, "nonexisting-exchange", "", false, false, Publishing{})
 		if err != nil {
 			t.Fatalf("failed to publish, got: %v", err)
 		}
@@ -1654,6 +1718,10 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 
 // https://github.com/streadway/amqp/issues/7
 func TestCorruptedMessageIssue7(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	messageCount := 1024
 
 	c1 := integrationConnection(t, "")
@@ -1689,7 +1757,7 @@ func TestCorruptedMessageIssue7(t *testing.T) {
 		}
 
 		for i := 0; i < messageCount; i++ {
-			err := pub.Publish(context.TODO(), "", queue, false, false, Publishing{
+			err := pub.Publish(ctx, "", queue, false, false, Publishing{
 				Body: generateCrc32Random(t, 7*i),
 			})
 
@@ -1799,6 +1867,10 @@ func TestExchangeDeclarePrecondition(t *testing.T) {
 }
 
 func TestRabbitMQQueueTTLGet(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if c := integrationRabbitMQ(t, "ttl"); c != nil {
 		defer c.Close()
 
@@ -1819,7 +1891,7 @@ func TestRabbitMQQueueTTLGet(t *testing.T) {
 			t.Fatalf("queue declare: %s", err)
 		}
 
-		if err := channel.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("ttl")}); err != nil {
+		if err := channel.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("ttl")}); err != nil {
 			t.Fatalf("error publishing: %v", err)
 		}
 
@@ -1838,6 +1910,10 @@ func TestRabbitMQQueueTTLGet(t *testing.T) {
 }
 
 func TestRabbitMQQueueNackMultipleRequeue(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if c := integrationRabbitMQ(t, "nack"); c != nil {
 		defer c.Close()
 
@@ -1852,10 +1928,10 @@ func TestRabbitMQQueueNackMultipleRequeue(t *testing.T) {
 				t.Fatalf("queue declare: %s", err)
 			}
 
-			if err := channel.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("1")}); err != nil {
+			if err := channel.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("1")}); err != nil {
 				t.Fatalf("error publishing: %v", err)
 			}
-			if err := channel.Publish(context.TODO(), "", queue, false, false, Publishing{Body: []byte("2")}); err != nil {
+			if err := channel.Publish(ctx, "", queue, false, false, Publishing{Body: []byte("2")}); err != nil {
 				t.Fatalf("error publishing: %v", err)
 			}
 
@@ -1953,6 +2029,10 @@ func TestConcurrentChannelAndConnectionClose(t *testing.T) {
 }
 
 func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	if c := integrationConnection(t, "GetNextPublishSeqNo"); c != nil {
 		defer c.Close()
 
@@ -1975,7 +2055,7 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 			t.Fatalf("wrong next publish seqence number before any publish, expected: %d, got: %d", 1, n)
 		}
 
-		if err := ch.Publish(context.TODO(), "test-get-next-pub-seq", "", false, false, Publishing{}); err != nil {
+		if err := ch.Publish(ctx, "test-get-next-pub-seq", "", false, false, Publishing{}); err != nil {
 			t.Fatalf("publish error: %v", err)
 		}
 
@@ -1988,6 +2068,10 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 
 // https://github.com/rabbitmq/amqp091-go/pull/44
 func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	conn := integrationConnection(t, "TestShouldNotWaitAfterConnectionClosedIssue44")
 	ch, err := conn.Channel()
 	if err != nil {
@@ -2002,7 +2086,7 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 		<-closed
 	}()
 
-	confirm, err := ch.PublishWithDeferredConfirm(context.TODO(), "test-issue44", "issue44", false, false, Publishing{Body: []byte("abc")})
+	confirm, err := ch.PublishWithDeferredConfirm(ctx, "test-issue44", "issue44", false, false, Publishing{Body: []byte("abc")})
 	if err != nil {
 		t.Fatalf("PublishWithDeferredConfirm error: %v", err)
 	}
@@ -2085,6 +2169,10 @@ func assertConsumeBody(t *testing.T, messages <-chan Delivery, want []byte) (msg
 
 // https://github.com/rabbitmq/amqp091-go/issues/11
 func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T) {
+	deadLine, _ := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
+	defer cancel()
+
 	conn := integrationConnection(t, "TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11")
 	ch, err := conn.Channel()
 	if err != nil {
@@ -2093,7 +2181,7 @@ func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T
 
 	conn.NotifyClose(make(chan *Error, 1))
 
-	_, err = ch.PublishWithDeferredConfirm(context.TODO(), "issue11", "issue11", false, false, Publishing{Body: []byte("abc")})
+	_, err = ch.PublishWithDeferredConfirm(ctx, "issue11", "issue11", false, false, Publishing{Body: []byte("abc")})
 	if err != nil {
 		t.Fatalf("PublishWithDeferredConfirm error: %v", err)
 	}

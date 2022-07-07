@@ -243,8 +243,12 @@ func (client *Client) UnsafePush(data []byte) error {
 	if !client.isReady {
 		return errNotConnected
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	return client.channel.Publish(
-		context.TODO(),
+		ctx,
 		"",               // Exchange
 		client.queueName, // Routing key
 		false,            // Mandatory

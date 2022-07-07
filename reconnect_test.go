@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -50,6 +51,9 @@ func consume(url, queue string) (*amqp.Connection, <-chan amqp.Delivery, error) 
 }
 
 func ExampleConnection_reconnect() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	if url := os.Getenv("AMQP_URL"); url != "" {
 		queue := "example.reconnect"
 
@@ -82,7 +86,7 @@ func ExampleConnection_reconnect() {
 
 			// Simulate a producer on a different connection showing that consumers
 			// continue where they were left off after each reconnect.
-			if err := pub.Publish(context.TODO(), "", queue, false, false, amqp.Publishing{
+			if err := pub.Publish(ctx, "", queue, false, false, amqp.Publishing{
 				Body: []byte(fmt.Sprintf("%d", i)),
 			}); err != nil {
 				fmt.Println("err publish:", err)

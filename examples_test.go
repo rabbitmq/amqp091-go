@@ -177,7 +177,10 @@ func ExampleChannel_Confirm_bridge() {
 			log.Fatalf("source channel closed, see the reconnect example for handling this")
 		}
 
-		err = chd.Publish(context.TODO(), "logs", msg.RoutingKey, false, false, amqp.Publishing{
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		err = chd.Publish(ctx, "logs", msg.RoutingKey, false, false, amqp.Publishing{
 			// Copy all the properties
 			ContentType:     msg.ContentType,
 			ContentEncoding: msg.ContentEncoding,
@@ -376,9 +379,12 @@ func ExampleChannel_Publish() {
 		Body:         []byte("Go Go AMQP!"),
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// This is not a mandatory delivery, so it will be dropped if there are no
 	// queues bound to the logs exchange.
-	err = c.Publish(context.TODO(), "logs", "info", false, false, msg)
+	err = c.Publish(ctx, "logs", "info", false, false, msg)
 	if err != nil {
 		// Since publish is asynchronous this can happen if the network connection
 		// is reset or if the server has run out of resources.
