@@ -169,6 +169,9 @@ func ExampleChannel_Confirm_bridge() {
 		log.Fatalf("confirm.select destination: %s", err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Now pump the messages, one by one, a smarter implementation
 	// would batch the deliveries and use multiple ack/nacks
 	for {
@@ -176,9 +179,6 @@ func ExampleChannel_Confirm_bridge() {
 		if !ok {
 			log.Fatalf("source channel closed, see the reconnect example for handling this")
 		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
 
 		err = chd.Publish(ctx, "logs", msg.RoutingKey, false, false, amqp.Publishing{
 			// Copy all the properties
