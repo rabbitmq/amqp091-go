@@ -208,7 +208,7 @@ func TestDeferredConfirmationsConfirm(t *testing.T) {
 	for i, ack := range []bool{true, false} {
 		var result bool
 		deliveryTag := uint64(i + 1)
-		dc := dcs.Add(deliveryTag)
+		dc := dcs.Add(context.Background(), deliveryTag)
 		wg.Add(1)
 		go func() {
 			result = dc.Wait()
@@ -226,9 +226,9 @@ func TestDeferredConfirmationsConfirmMultiple(t *testing.T) {
 	dcs := newDeferredConfirmations()
 	var wg sync.WaitGroup
 	var result bool
-	dc1 := dcs.Add(1)
-	dc2 := dcs.Add(2)
-	dc3 := dcs.Add(3)
+	dc1 := dcs.Add(context.Background(), 1)
+	dc2 := dcs.Add(context.Background(), 2)
+	dc3 := dcs.Add(context.Background(), 3)
 	wg.Add(1)
 	go func() {
 		result = dc1.Wait() && dc2.Wait() && dc3.Wait()
@@ -245,9 +245,9 @@ func TestDeferredConfirmationsClose(t *testing.T) {
 	dcs := newDeferredConfirmations()
 	var wg sync.WaitGroup
 	var result bool
-	dc1 := dcs.Add(1)
-	dc2 := dcs.Add(2)
-	dc3 := dcs.Add(3)
+	dc1 := dcs.Add(context.Background(), 1)
+	dc2 := dcs.Add(context.Background(), 2)
+	dc3 := dcs.Add(context.Background(), 3)
 	wg.Add(1)
 	go func() {
 		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()

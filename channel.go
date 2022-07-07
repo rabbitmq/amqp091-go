@@ -1360,8 +1360,6 @@ confirmations start at 1.  Exit when all publishings are confirmed.
 
 When Publish does not return an error and the channel is in confirm mode, the
 internal counter for DeliveryTags with the first confirmation starts at 1.
-
-Provided context should always be cancelled after use.
 */
 func (ch *Channel) Publish(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
 	_, err := ch.PublishWithDeferredConfirm(ctx, exchange, key, mandatory, immediate, msg)
@@ -1373,8 +1371,6 @@ PublishWithDeferredConfirm behaves identically to Publish but additionally retur
 DeferredConfirmation, allowing the caller to wait on the publisher confirmation
 for this message. If the channel has not been put into confirm mode,
 the DeferredConfirmation will be nil.
-
-Provided context should always be cancelled after use.
 */
 func (ch *Channel) PublishWithDeferredConfirm(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
 	if ctx == nil {

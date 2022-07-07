@@ -45,16 +45,7 @@ func (c *confirms) Publish(ctx context.Context) *DeferredConfirmation {
 
 	c.published++
 
-	// monitor context close and send nack
-	go func(ctx context.Context, tag uint64) {
-		<-ctx.Done() // Wait for context end
-		c.One(Confirmation{
-			DeliveryTag: tag,
-			Ack:         false,
-		})
-	}(ctx, c.published)
-
-	return c.deferredConfirmations.Add(c.published)
+	return c.deferredConfirmations.Add(ctx, c.published)
 }
 
 // confirm confirms one publishing, increments the expecting delivery tag, and
@@ -86,10 +77,7 @@ func (c *confirms) One(confirmed Confirmation) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	if found := c.deferredConfirmations.Confirm(confirmed); !found && !confirmed.Ack {
-		// nothing to do it is context closing on already ack message
-		return
-	}
+	c.deferredConfirmations.Confirm(confirmed)
 
 	if c.expecting == confirmed.DeliveryTag {
 		c.confirm(confirmed)
@@ -138,12 +126,12 @@ func newDeferredConfirmations() *deferredConfirmations {
 	}
 }
 
-func (d *deferredConfirmations) Add(tag uint64) *DeferredConfirmation {
+func (d *deferredConfirmations) Add(ctx context.Context, tag uint64) *DeferredConfirmation {
 	d.m.Lock()
 	defer d.m.Unlock()
 
 	dc := &DeferredConfirmation{DeliveryTag: tag}
-	dc.wg.Add(1)
+	dc.ctx, dc.cancel = context.WithCancel(ctx)
 	d.confirmations[tag] = dc
 	return dc
 }
@@ -158,7 +146,7 @@ func (d *deferredConfirmations) Confirm(confirmation Confirmation) bool {
 		return false
 	}
 	dc.confirmation = confirmation
-	dc.wg.Done()
+	dc.cancel()
 	delete(d.confirmations, confirmation.DeliveryTag)
 
 	return true
@@ -171,7 +159,7 @@ func (d *deferredConfirmations) ConfirmMultiple(confirmation Confirmation) {
 	for k, v := range d.confirmations {
 		if k <= confirmation.DeliveryTag {
 			v.confirmation = Confirmation{DeliveryTag: k, Ack: confirmation.Ack}
-			v.wg.Done()
+			v.cancel()
 			delete(d.confirmations, k)
 		}
 	}
@@ -184,13 +172,13 @@ func (d *deferredConfirmations) Close() {
 
 	for k, v := range d.confirmations {
 		v.confirmation = Confirmation{DeliveryTag: k, Ack: false}
-		v.wg.Done()
+		v.cancel()
 		delete(d.confirmations, k)
 	}
 }
 
 // Waits for publisher confirmation. Returns true if server successfully received the publishing.
 func (d *DeferredConfirmation) Wait() bool {
-	d.wg.Wait()
+	<-d.ctx.Done()
 	return d.confirmation.Ack
 }
