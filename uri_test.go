@@ -368,3 +368,23 @@ func TestURIDefaultPortAmqps(t *testing.T) {
 		t.Fatal("Default port not correct for amqps, got:", uri.Port)
 	}
 }
+
+func TestURITLSConfig(t *testing.T) {
+	url := "amqps://foo.bar/?certfile=cert.pem&keyfile=key.pem&cacertfile=ca.pem&server_name_indication=example.com"
+	uri, err := ParseURI(url)
+	if err != nil {
+		t.Fatal("Could not parse")
+	}
+	if uri.CertFile != "cert.pem" {
+		t.Fatal("Certfile not set")
+	}
+	if uri.CACertFile != "ca.pem" {
+		t.Fatal("CA not set")
+	}
+	if uri.KeyFile != "key.pem" {
+		t.Fatal("Key not set")
+	}
+	if uri.ServerName != "example.com" {
+		t.Fatal("Server name not set")
+	}
+}
