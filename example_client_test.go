@@ -6,6 +6,7 @@
 package amqp091_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -243,7 +244,11 @@ func (client *Client) UnsafePush(data []byte) error {
 		return errNotConnected
 	}
 
-	return client.channel.Publish(
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	return client.channel.PublishWithContext(
+		ctx,
 		"",               // Exchange
 		client.queueName, // Routing key
 		false,            // Mandatory
