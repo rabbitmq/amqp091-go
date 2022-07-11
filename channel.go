@@ -1360,9 +1360,48 @@ confirmations start at 1.  Exit when all publishings are confirmed.
 
 When Publish does not return an error and the channel is in confirm mode, the
 internal counter for DeliveryTags with the first confirmation starts at 1.
+
+Deprecated: Use PublishWithContext instead.
 */
-func (ch *Channel) Publish(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
-	_, err := ch.PublishWithDeferredConfirm(ctx, exchange, key, mandatory, immediate, msg)
+func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg Publishing) error {
+	_, err := ch.PublishWithDeferredConfirmWithContext(context.Background(), exchange, key, mandatory, immediate, msg)
+	return err
+}
+
+/*
+PublishWithContext sends a Publishing from the client to an exchange on the server.
+
+When you want a single message to be delivered to a single queue, you can
+publish to the default exchange with the routingKey of the queue name.  This is
+because every declared queue gets an implicit route to the default exchange.
+
+Since publishings are asynchronous, any undeliverable message will get returned
+by the server.  Add a listener with Channel.NotifyReturn to handle any
+undeliverable message when calling publish with either the mandatory or
+immediate parameters as true.
+
+Publishings can be undeliverable when the mandatory flag is true and no queue is
+bound that matches the routing key, or when the immediate flag is true and no
+consumer on the matched queue is ready to accept the delivery.
+
+This can return an error when the channel, connection or socket is closed.  The
+error or lack of an error does not indicate whether the server has received this
+publishing.
+
+It is possible for publishing to not reach the broker if the underlying socket
+is shut down without pending publishing packets being flushed from the kernel
+buffers.  The easy way of making it probable that all publishings reach the
+server is to always call Connection.Close before terminating your publishing
+application.  The way to ensure that all publishings reach the server is to add
+a listener to Channel.NotifyPublish and put the channel in confirm mode with
+Channel.Confirm.  Publishing delivery tags and their corresponding
+confirmations start at 1.  Exit when all publishings are confirmed.
+
+When Publish does not return an error and the channel is in confirm mode, the
+internal counter for DeliveryTags with the first confirmation starts at 1.
+*/
+func (ch *Channel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
+	_, err := ch.PublishWithDeferredConfirmWithContext(ctx, exchange, key, mandatory, immediate, msg)
 	return err
 }
 
@@ -1371,8 +1410,20 @@ PublishWithDeferredConfirm behaves identically to Publish but additionally retur
 DeferredConfirmation, allowing the caller to wait on the publisher confirmation
 for this message. If the channel has not been put into confirm mode,
 the DeferredConfirmation will be nil.
+
+Deprecated: Use PublishWithDeferredConfirmWithContext instead.
 */
-func (ch *Channel) PublishWithDeferredConfirm(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
+func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
+	return ch.PublishWithDeferredConfirmWithContext(context.Background(), exchange, key, mandatory, immediate, msg)
+}
+
+/*
+PublishWithDeferredConfirmWithContext behaves identically to Publish but additionally returns a
+DeferredConfirmation, allowing the caller to wait on the publisher confirmation
+for this message. If the channel has not been put into confirm mode,
+the DeferredConfirmation will be nil.
+*/
+func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
 	if ctx == nil {
 		return nil, errors.New("amqp091-go: nil Context")
 	}
