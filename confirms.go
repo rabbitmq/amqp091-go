@@ -144,8 +144,7 @@ func (d *deferredConfirmations) Confirm(confirmation Confirmation) {
 		// we should never receive a confirmation for a tag that hasn't been published, but a test causes this to happen
 		return
 	}
-	dc.confirmation = confirmation
-	dc.cancel()
+	dc.Confirm(confirmation.Ack)
 	delete(d.confirmations, confirmation.DeliveryTag)
 }
 
@@ -155,8 +154,7 @@ func (d *deferredConfirmations) ConfirmMultiple(confirmation Confirmation) {
 
 	for k, v := range d.confirmations {
 		if k <= confirmation.DeliveryTag {
-			v.confirmation = Confirmation{DeliveryTag: k, Ack: confirmation.Ack}
-			v.cancel()
+			v.Confirm(confirmation.Ack)
 			delete(d.confirmations, k)
 		}
 	}
@@ -168,14 +166,25 @@ func (d *deferredConfirmations) Close() {
 	defer d.m.Unlock()
 
 	for k, v := range d.confirmations {
-		v.confirmation = Confirmation{DeliveryTag: k, Ack: false}
-		v.cancel()
+		v.Confirm(false)
 		delete(d.confirmations, k)
 	}
+}
+
+// Confirm ack confirmation.
+func (d *DeferredConfirmation) Confirm(ack bool) {
+	d.m.Lock()
+	defer d.m.Unlock()
+
+	d.confirmation.Ack = ack
+	d.cancel()
 }
 
 // Waits for publisher confirmation. Returns true if server successfully received the publishing.
 func (d *DeferredConfirmation) Wait() bool {
 	<-d.ctx.Done()
+
+	d.m.Lock()
+	defer d.m.Unlock()
 	return d.confirmation.Ack
 }
