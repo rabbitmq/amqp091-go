@@ -6,6 +6,7 @@
 package amqp091_test
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io/ioutil"
@@ -168,6 +169,9 @@ func ExampleChannel_Confirm_bridge() {
 		log.Fatalf("confirm.select destination: %s", err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Now pump the messages, one by one, a smarter implementation
 	// would batch the deliveries and use multiple ack/nacks
 	for {
@@ -176,7 +180,7 @@ func ExampleChannel_Confirm_bridge() {
 			log.Fatalf("source channel closed, see the reconnect example for handling this")
 		}
 
-		err = chd.Publish("logs", msg.RoutingKey, false, false, amqp.Publishing{
+		err = chd.PublishWithContext(ctx, "logs", msg.RoutingKey, false, false, amqp.Publishing{
 			// Copy all the properties
 			ContentType:     msg.ContentType,
 			ContentEncoding: msg.ContentEncoding,
@@ -340,7 +344,7 @@ func ExampleChannel_Consume() {
 	// process.
 }
 
-func ExampleChannel_Publish() {
+func ExampleChannel_PublishWithContext() {
 	// Connects opens an AMQP connection from the credentials in the URL.
 	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 	if err != nil {
@@ -375,9 +379,12 @@ func ExampleChannel_Publish() {
 		Body:         []byte("Go Go AMQP!"),
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// This is not a mandatory delivery, so it will be dropped if there are no
 	// queues bound to the logs exchange.
-	err = c.Publish("logs", "info", false, false, msg)
+	err = c.PublishWithContext(ctx, "logs", "info", false, false, msg)
 	if err != nil {
 		// Since publish is asynchronous this can happen if the network connection
 		// is reset or if the server has run out of resources.
