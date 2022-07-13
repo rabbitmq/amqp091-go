@@ -8,8 +8,11 @@ package amqp091
 import (
 	"bufio"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"reflect"
 	"strconv"
@@ -211,7 +214,11 @@ func DialConfig(url string, config Config) (*Connection, error) {
 
 	if uri.Scheme == "amqps" {
 		if config.TLSClientConfig == nil {
-			config.TLSClientConfig = new(tls.Config)
+			tlsConfig, err := tlsConfigFromURI(uri)
+			if err != nil {
+				return nil, fmt.Errorf("create TLS config from URI: %w", err)
+			}
+			config.TLSClientConfig = tlsConfig
 		}
 
 		// If ServerName has not been specified in TLSClientConfig,
@@ -876,6 +883,45 @@ func (c *Connection) openComplete() error {
 
 	c.allocator = newAllocator(1, c.Config.ChannelMax)
 	return nil
+}
+
+// tlsConfigFromURI tries to create TLS configuration based on query parameters.
+// Returns default (empty) config in case no suitable client cert and/or client key not provided.
+// Returns error in case certificates can not be parsed.
+func tlsConfigFromURI(uri URI) (*tls.Config, error) {
+	var certPool *x509.CertPool
+	if uri.CACertFile != "" {
+		data, err := ioutil.ReadFile(uri.CACertFile)
+		if err != nil {
+			return nil, fmt.Errorf("read CA certificate: %w", err)
+		}
+
+		certPool = x509.NewCertPool()
+		certPool.AppendCertsFromPEM(data)
+	} else if sysPool, err := x509.SystemCertPool(); err != nil {
+		return nil, fmt.Errorf("load system certificates: %w", err)
+	} else {
+		certPool = sysPool
+	}
+
+	if uri.CertFile == "" || uri.KeyFile == "" {
+		// no client auth (mTLS), just server auth
+		return &tls.Config{
+			RootCAs:    certPool,
+			ServerName: uri.ServerName,
+		}, nil
+	}
+
+	certificate, err := tls.LoadX509KeyPair(uri.CertFile, uri.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load client certificate: %w", err)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		RootCAs:      certPool,
+		ServerName:   uri.ServerName,
+	}, nil
 }
 
 func max(a, b int) int {
