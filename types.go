@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -184,6 +185,7 @@ type Blocking struct {
 // allows users to directly correlate a publishing to a confirmation. These are
 // returned from PublishWithDeferredConfirm on Channels.
 type DeferredConfirmation struct {
+	m            sync.Mutex
 	ctx          context.Context
 	cancel       context.CancelFunc
 	DeliveryTag  uint64

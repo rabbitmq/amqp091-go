@@ -301,3 +301,32 @@ func TestDeferredConfirmationsContextTimeout(t *testing.T) {
 		t.Fatal("expected to receive false for timeout confirmations, received true")
 	}
 }
+
+func TestDeferredConfirmationsContextConcurrency(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	dcs := newDeferredConfirmations()
+	var wg sync.WaitGroup
+	var result bool
+	dc1 := dcs.Add(ctx, 1)
+	dc2 := dcs.Add(ctx, 2)
+	dc3 := dcs.Add(ctx, 3)
+	wg.Add(1)
+
+	// wait confirmation
+	go func() {
+		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
+		t.Logf("result: %v", result)
+		wg.Done()
+	}()
+
+	// confirm
+	go func() {
+		dcs.ConfirmMultiple(Confirmation{4, true})
+	}()
+
+	// and cancel in //
+	go cancel()
+
+	wg.Wait()
+}
