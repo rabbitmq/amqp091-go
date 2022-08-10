@@ -268,3 +268,19 @@ func TestReaderGoRoutineTerminatesWhenMsgIsProcessedDuringClose(t *testing.T) {
 	t.Log("waiting for go-routines to terminate")
 	wg.Wait()
 }
+
+func TestConnectionConfigPropertiesWithClientProvidedConnectionName(t *testing.T) {
+	connectionProperties := NewConnectionProperties()
+	expectedConnectionName := "amqp091-go-test"
+	connectionProperties.SetClientConnectionName(expectedConnectionName)
+
+	currentConnectionName, ok := connectionProperties["connection_name"]
+	if !ok {
+		t.Fatal("Connection name was not set by Table.SetClientConnectionName")
+	}
+	if currentConnectionName != "amqp091-go-test" {
+		t.Fatalf("Connection name is set to: %s. Expected: %s",
+			currentConnectionName,
+			expectedConnectionName)
+	}
+}

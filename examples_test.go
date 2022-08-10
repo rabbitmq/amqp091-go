@@ -422,3 +422,15 @@ func ExampleConnection_NotifyBlocked() {
 	// Your application domain channel setup publishings
 	publishAllTheThings(conn)
 }
+
+func ExampleTable_SetClientConnectionName() {
+	// Sets the well-known connection_name property in amqp.Config. The connection
+	// name will be visible in RabbitMQ Management UI.
+	config := amqp.Config{Properties: amqp.NewConnectionProperties()}
+	config.Properties.SetClientConnectionName("my-client-app")
+	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
+	if err != nil {
+		log.Fatalf("connection.open: %s", err)
+	}
+	defer conn.Close()
+}

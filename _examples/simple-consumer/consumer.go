@@ -66,7 +66,7 @@ type Consumer struct {
 }
 
 func SetupCloseHandler(consumer *Consumer) {
-	c := make(chan os.Signal)
+	c := make(chan os.Signal, 2)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
@@ -88,8 +88,10 @@ func NewConsumer(amqpURI, exchange, exchangeType, queueName, key, ctag string) (
 
 	var err error
 
+	config := amqp.Config{Properties: amqp.NewConnectionProperties()}
+	config.Properties.SetClientConnectionName("sample-consumer")
 	Log.Printf("dialing %q", amqpURI)
-	c.conn, err = amqp.Dial(amqpURI)
+	c.conn, err = amqp.DialConfig(amqpURI, config)
 	if err != nil {
 		return nil, fmt.Errorf("Dial: %s", err)
 	}
