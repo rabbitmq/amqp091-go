@@ -76,6 +76,13 @@ type Config struct {
 	Dial func(network, addr string) (net.Conn, error)
 }
 
+// NewConnectionProperties initialises an amqp.Table struct to empty value. This
+// amqp.Table can be used as Properties in amqp.Config to set the connection
+// name, using amqp.DialConfig()
+func NewConnectionProperties() Table {
+	return make(Table)
+}
+
 // Connection manages the serialization and deserialization of frames from IO
 // and dispatches the frames to the appropriate channel.  All RPC methods and
 // asynchronous Publishing, Delivery, Ack, Nack and Return messages are

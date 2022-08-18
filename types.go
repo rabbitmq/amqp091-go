@@ -268,6 +268,14 @@ func (t Table) Validate() error {
 	return validateField(t)
 }
 
+// Sets the connection name property. This property can be used in
+// amqp.Config to set a custom connection name during amqp.DialConfig(). This
+// can be helpful to identify specific connections in RabbitMQ, for debugging or
+// tracing purposes.
+func (t Table) SetClientConnectionName(connName string) {
+	t["connection_name"] = connName
+}
+
 type message interface {
 	id() (uint16, uint16)
 	wait() bool

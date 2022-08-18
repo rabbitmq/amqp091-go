@@ -42,7 +42,7 @@ func main() {
 }
 
 func SetupCloseHandler(done chan bool) {
-	c := make(chan os.Signal)
+	c := make(chan os.Signal, 2)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
@@ -55,8 +55,10 @@ func publish(done chan bool, amqpURI, exchange, exchangeType, routingKey, body s
 	// This function dials, connects, declares, publishes, and tears down,
 	// all in one go. In a real service, you probably want to maintain a
 	// long-lived connection as state, and publish against that.
+	config := amqp.Config{Properties: amqp.NewConnectionProperties()}
+	config.Properties.SetClientConnectionName("sample-producer")
 	Log.Printf("dialing %q", amqpURI)
-	connection, err := amqp.Dial(amqpURI)
+	connection, err := amqp.DialConfig(amqpURI, config)
 	if err != nil {
 		return fmt.Errorf("Dial: %s", err)
 	}
