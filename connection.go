@@ -809,6 +809,8 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	config.Properties["capabilities"] = Table{
 		"connection.blocked":     true,
 		"consumer_cancel_notify": true,
+		"basic.nack": true,
+		"publisher_confirms": true,
 	}
 
 	ok := &connectionStartOk{
