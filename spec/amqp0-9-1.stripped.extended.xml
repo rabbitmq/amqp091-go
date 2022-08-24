@@ -1,4 +1,4 @@
-<?xml version="1.0"?>
+<?xml version="1.0" encoding="UTF-8"?>
 
 <!--
      WARNING: Modified from the official 0-9-1 specification XML by
@@ -50,13 +50,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   <constant name="frame-end" value="206"/>
   <constant name="reply-success" value="200"/>
   <constant name="content-too-large" value="311" class="soft-error"/>
-  <constant name="no-route" value="312" class = "soft-error">
-    <doc>
-      Errata: Section 1.2 ought to define an exception 312 "No route", which used to
-      exist in 0-9 and is what RabbitMQ sends back with 'basic.return' when a
-      'mandatory' message cannot be delivered to any queue.
-    </doc>
-  </constant>
+  <constant name="no-route" value="312" class="soft-error"/>
   <constant name="no-consumers" value="313" class="soft-error"/>
   <constant name="connection-forced" value="320" class="hard-error"/>
   <constant name="invalid-path" value="402" class="hard-error"/>
@@ -191,11 +185,22 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
       <chassis name="server" implement="MUST"/>
     </method>
     <method name="blocked" index="60">
-      <chassis name="server" implement="MAY"/>
-      <field name="reason" type="shortstr"/>
+      <chassis name="server" implement="MUST"/>
+      <chassis name="client" implement="MUST"/>
+      <field name="reason" domain="shortstr"/>
     </method>
     <method name="unblocked" index="61">
-      <chassis name="server" implement="MAY"/>
+      <chassis name="server" implement="MUST"/>
+      <chassis name="client" implement="MUST"/>
+    </method>
+    <method name="update-secret" synchronous="1" index="70">
+      <chassis name="client" implement="MUST"/>
+      <response name="update-secret-ok"/>
+      <field name="new-secret" domain="longstr"/>
+      <field name="reason" domain="shortstr"/>
+    </method>
+    <method name="update-secret-ok" synchronous="1" index="71">
+      <chassis name="server" implement="MUST"/>
     </method>
   </class>
   <class name="channel" handler="channel" index="20">
