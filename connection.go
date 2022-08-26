@@ -266,6 +266,16 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 	return c, c.open(config)
 }
 
+func (c *Connection) UpdateSecret(newSecret, reason string) error {
+	if c.IsClosed() {
+		return ErrClosed
+	}
+	return c.call(&connectionUpdateSecret{
+		NewSecret: newSecret,
+		Reason:    reason,
+	}, &connectionUpdateSecretOk{})
+}
+
 /*
 LocalAddr returns the local TCP peer address, or ":0" (the zero value of net.TCPAddr)
 as a fallback default value if the underlying transport does not support LocalAddr().
