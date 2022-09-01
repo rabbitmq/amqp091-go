@@ -1634,6 +1634,11 @@ If the deliveries cannot be recovered, an error will be returned and the channel
 will be closed.
 
 Note: this method is not implemented on RabbitMQ, use Delivery.Nack instead
+
+Deprecated: This method is deprecated in RabbitMQ. RabbitMQ used Recover(true)
+as a mechanism for consumers to tell the broker that they were ready for more
+deliveries, back in 2008-2009. Support for this will be removed from RabbitMQ in
+a future release. Use Nack() with requeue=true instead.
 */
 func (ch *Channel) Recover(requeue bool) error {
 	return ch.call(
