@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
@@ -433,4 +434,72 @@ func ExampleTable_SetClientConnectionName() {
 		log.Fatalf("connection.open: %s", err)
 	}
 	defer conn.Close()
+}
+
+func ExampleConnection_UpdateSecret() {
+	// In order to authenticate into RabbitMQ, the application must acquire a JWT token.
+	// This may be different, depending on the library used to communicate with the OAuth2
+	// server. This examples assumes that it's possible to obtain tokens using username+password.
+	//
+	// The authentication is successful if RabbitMQ can validate the JWT with the OAuth2 server.
+	// The permissions are determined from the scopes. Check the OAuth2 plugin readme for more details:
+	// https://github.com/rabbitmq/rabbitmq-server/tree/main/deps/rabbitmq_auth_backend_oauth2#scope-to-permission-translation
+	//
+	// Once the app has a JWT token, this can be used as credentials in the URI used in Connection.Dial()
+	//
+	// The app should have a long-running task that checks the validity of the JWT token, and renew it before
+	// the refresher time expires. Once a new JWT token is obtained, it shall be used in Connection.UpdateSecret().
+
+	token, _ := getJWToken("username", "password")
+
+	uri := fmt.Sprintf("amqp://%s:%s@localhost:5672", "client_id", token)
+	c, _ := amqp.Dial(uri)
+
+	defer c.Close()
+
+	// It also calls Connection.UpdateSecret()
+	tokenRefresherTask := func(conn *amqp.Connection, token string) {
+		// if token is expired
+		// then
+		renewedToken, _ := refreshJWToken(token)
+		_ = conn.UpdateSecret(renewedToken, "Token refreshed!")
+	}
+
+	go tokenRefresherTask(c, "my-JWT-token")
+
+	ch, _ := c.Channel()
+	defer ch.Close()
+
+	_, _ = ch.QueueDeclare(
+		"test-amqp",
+		false,
+		false,
+		false,
+		false,
+		amqp.Table{},
+	)
+	_ = ch.PublishWithContext(
+		context.Background(),
+		"",
+		"test-amqp",
+		false,
+		false,
+		amqp.Publishing{
+			Headers:         amqp.Table{},
+			ContentType:     "text/plain",
+			ContentEncoding: "",
+			DeliveryMode:    amqp.Persistent,
+			Body:            []byte("message"),
+		},
+	)
+}
+
+func getJWToken(username, password string) (string, error) {
+	// do OAuth2 things
+	return "a-token", nil
+}
+
+func refreshJWToken(token string) (string, error) {
+	// do OAuth2 things to refresh tokens
+	return "so fresh!", nil
 }
