@@ -267,6 +267,22 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 }
 
 /*
+UpdateSecret updates the secret used to authenticate this connection. It is used when
+secrets have an expiration date and need to be renewed, like OAuth 2 tokens.
+
+It returns an error if the operation is not successful, or if the connection is closed.
+*/
+func (c *Connection) UpdateSecret(newSecret, reason string) error {
+	if c.IsClosed() {
+		return ErrClosed
+	}
+	return c.call(&connectionUpdateSecret{
+		NewSecret: newSecret,
+		Reason:    reason,
+	}, &connectionUpdateSecretOk{})
+}
+
+/*
 LocalAddr returns the local TCP peer address, or ":0" (the zero value of net.TCPAddr)
 as a fallback default value if the underlying transport does not support LocalAddr().
 */
