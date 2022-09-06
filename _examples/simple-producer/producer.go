@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -101,12 +102,14 @@ func publish(done chan bool, amqpURI, exchange, exchangeType, routingKey, body s
 	}
 
 	Log.Println("declared Exchange, publishing messages")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	for {
 		seqNo := channel.GetNextPublishSeqNo()
 		Log.Printf("publishing %dB body (%q)", len(body), body)
 
-		if err := channel.Publish(
+		if err := channel.PublishWithContext(ctx,
 			exchange,   // publish to an exchange
 			routingKey, // routing to 0 or more queues
 			false,      // mandatory
