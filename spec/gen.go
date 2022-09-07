@@ -13,9 +13,8 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
-	"os"
 	"regexp"
 	"strings"
 	"text/template"
@@ -520,7 +519,7 @@ func export(delim *regexp.Regexp, parts ...string) (res string) {
 func main() {
 	var r renderer
 
-	spec, err := ioutil.ReadAll(os.Stdin)
+	spec, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		log.Fatalln("Please pass spec on stdin", err)
 	}

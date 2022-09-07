@@ -12,8 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -27,8 +27,8 @@ const (
 
 	defaultHeartbeat         = 10 * time.Second
 	defaultConnectionTimeout = 30 * time.Second
-	defaultProduct           = "Amqp 0.9.1 Client"
-	buildVersion             = "1.4.0"
+	defaultProduct           = "AMQP 0.9.1 Client"
+	buildVersion             = "1.5.0"
 	platform                 = "golang"
 	// Safer default that makes channel leaks a lot easier to spot
 	// before they create operational headaches. See https://github.com/rabbitmq/rabbitmq-server/issues/1593.
@@ -916,7 +916,7 @@ func (c *Connection) openComplete() error {
 func tlsConfigFromURI(uri URI) (*tls.Config, error) {
 	var certPool *x509.CertPool
 	if uri.CACertFile != "" {
-		data, err := ioutil.ReadFile(uri.CACertFile)
+		data, err := os.ReadFile(uri.CACertFile)
 		if err != nil {
 			return nil, fmt.Errorf("read CA certificate: %w", err)
 		}

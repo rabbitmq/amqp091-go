@@ -10,9 +10,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
+	"os"
 	"runtime"
 	"time"
 
@@ -94,7 +94,7 @@ func ExampleDialTLS() {
 	// see at the top
 	cfg.RootCAs = x509.NewCertPool()
 
-	if ca, err := ioutil.ReadFile("testca/cacert.pem"); err == nil {
+	if ca, err := os.ReadFile("testca/cacert.pem"); err == nil {
 		cfg.RootCAs.AppendCertsFromPEM(ca)
 	}
 
