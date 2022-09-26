@@ -454,25 +454,8 @@ func (c *Connection) shutdown(err *Error) {
 		c.m.Lock()
 		defer c.m.Unlock()
 
-		if err != nil {
-			for _, c := range c.closes {
-				c <- err
-			}
-		}
-
-		if err != nil {
-			c.errors <- err
-		}
-		// Shutdown handler goroutine can still receive the result.
-		close(c.errors)
-
-		for _, c := range c.closes {
-			close(c)
-		}
-
-		for _, c := range c.blocks {
-			close(c)
-		}
+		// Getting panic errors as the connection tries to recover on trying to publish
+		// to a closed channel and trying to close already closed channels
 
 		// Shutdown the channel, but do not use closeChannel() as it calls
 		// releaseChannel() which requires the connection lock.
@@ -825,8 +808,8 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	config.Properties["capabilities"] = Table{
 		"connection.blocked":     true,
 		"consumer_cancel_notify": true,
-		"basic.nack": true,
-		"publisher_confirms": true,
+		"basic.nack":             true,
+		"publisher_confirms":     true,
 	}
 
 	ok := &connectionStartOk{
