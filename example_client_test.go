@@ -290,12 +290,10 @@ func (client *Client) Push(data []byte) error {
 			}
 			continue
 		}
-		select {
-		case confirm := <-client.notifyConfirm:
-			if confirm.Ack {
-				client.logger.Printf("Push confirmed [%d]!", confirm.DeliveryTag)
-				return nil
-			}
+		confirm := <-client.notifyConfirm
+		if confirm.Ack {
+			client.logger.Printf("Push confirmed [%d]!", confirm.DeliveryTag)
+			return nil
 		}
 	}
 }
