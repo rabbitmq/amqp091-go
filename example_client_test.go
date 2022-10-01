@@ -68,7 +68,7 @@ func Example_consume() {
 	}
 
 	// This channel will receive a notification when a channel closed event
-	// happens. This must be different than Client.notifyChanClose because the
+	// happens. This must be different from Client.notifyChanClose because the
 	// library sends only one notification and Client.notifyChanClose already has
 	// a receiver in handleReconnect().
 	// Recommended to make it buffered to avoid deadlocks
@@ -273,8 +273,6 @@ func (client *Client) changeChannel(channel *amqp.Channel) {
 }
 
 // Push will push data onto the queue, and wait for a confirm.
-// If no confirms are received until within the resendTimeout,
-// it continuously re-sends messages until a confirm is received.
 // This will block until the server sends a confirm. Errors are
 // only returned if the push action itself fails, see UnsafePush.
 func (client *Client) Push(data []byte) error {
@@ -292,15 +290,11 @@ func (client *Client) Push(data []byte) error {
 			}
 			continue
 		}
-		select {
-		case confirm := <-client.notifyConfirm:
-			if confirm.Ack {
-				client.logger.Println("Push confirmed!")
-				return nil
-			}
-		case <-time.After(resendDelay):
+		confirm := <-client.notifyConfirm
+		if confirm.Ack {
+			client.logger.Printf("Push confirmed [%d]!", confirm.DeliveryTag)
+			return nil
 		}
-		client.logger.Println("Push didn't confirm. Retrying...")
 	}
 }
 
@@ -357,7 +351,7 @@ func (client *Client) Consume() (<-chan amqp.Delivery, error) {
 	)
 }
 
-// Close will cleanly shutdown the channel and connection.
+// Close will cleanly shut down the channel and connection.
 func (client *Client) Close() error {
 	if !client.isReady {
 		return errAlreadyClosed
