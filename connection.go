@@ -458,9 +458,6 @@ func (c *Connection) shutdown(err *Error) {
 			for _, c := range c.closes {
 				c <- err
 			}
-		}
-
-		if err != nil {
 			c.errors <- err
 		}
 		// Shutdown handler goroutine can still receive the result.
