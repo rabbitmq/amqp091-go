@@ -2,6 +2,7 @@
 
 [![amqp091-go](https://github.com/rabbitmq/amqp091-go/actions/workflows/tests.yml/badge.svg)](https://github.com/rabbitmq/amqp091-go/actions/workflows/tests.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rabbitmq/amqp091-go.svg)](https://pkg.go.dev/github.com/rabbitmq/amqp091-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/rabbitmq/amqp091-go)](https://goreportcard.com/report/github.com/rabbitmq/amqp091-go)
 
 This is a Go AMQP 0.9.1 client maintained by the [RabbitMQ core team](https://github.com/rabbitmq).
 It was [originally developed by Sean Treadway](https://github.com/streadway/amqp).
