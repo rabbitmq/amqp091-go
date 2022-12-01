@@ -112,10 +112,7 @@ func (ch *Channel) shutdown(e *Error) {
 			for _, c := range ch.closes {
 				c <- e
 			}
-		}
-
-		// Notify RPC if we're selecting
-		if e != nil {
+			// Notify RPC if we're selecting
 			ch.errors <- e
 		}
 
