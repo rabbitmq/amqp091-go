@@ -172,8 +172,6 @@ func (uri URI) String() string {
 		}
 	}
 
-	authority.Host = net.JoinHostPort(uri.Host, strconv.Itoa(uri.Port))
-
 	if defaultPort, found := schemePorts[uri.Scheme]; !found || defaultPort != uri.Port {
 		authority.Host = net.JoinHostPort(uri.Host, strconv.Itoa(uri.Port))
 	} else {
