@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const DefaultExchange = ""
+
 // Constants for standard AMQP 0-9-1 exchange types.
 const (
 	ExchangeDirect  = "direct"
