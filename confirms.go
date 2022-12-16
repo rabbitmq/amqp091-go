@@ -173,11 +173,6 @@ func (d *deferredConfirmations) Close() {
 	}
 }
 
-// Confirm does nothing. It exists for backwards compatibility.
-//
-// Deprecated: do not use.
-func (d *DeferredConfirmation) Confirm(_ bool) {}
-
 // setAck sets the acknowledgement status of the confirmation. Note that it is
 // not safe for concurrent use and must not be called more than once.
 func (d *DeferredConfirmation) setAck(ack bool) {
