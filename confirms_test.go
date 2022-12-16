@@ -13,10 +13,6 @@ import (
 )
 
 func TestConfirmOneResequences(t *testing.T) {
-	deadLine, _ := t.Deadline()
-	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
-	defer cancel()
-
 	var (
 		fixtures = []Confirmation{
 			{1, true},
@@ -30,7 +26,7 @@ func TestConfirmOneResequences(t *testing.T) {
 	c.Listen(l)
 
 	for i := range fixtures {
-		if want, got := uint64(i+1), c.Publish(ctx); want != got.DeliveryTag {
+		if want, got := uint64(i+1), c.Publish(); want != got.DeliveryTag {
 			t.Fatalf("expected publish to return the 1 based delivery tag published, want: %d, got: %d", want, got.DeliveryTag)
 		}
 	}
@@ -54,10 +50,6 @@ func TestConfirmOneResequences(t *testing.T) {
 }
 
 func TestConfirmAndPublishDoNotDeadlock(t *testing.T) {
-	deadLine, _ := t.Deadline()
-	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
-	defer cancel()
-
 	var (
 		c          = newConfirms()
 		l          = make(chan Confirmation)
@@ -72,16 +64,12 @@ func TestConfirmAndPublishDoNotDeadlock(t *testing.T) {
 	}()
 
 	for i := 0; i < iterations; i++ {
-		c.Publish(ctx)
+		c.Publish()
 		<-l
 	}
 }
 
 func TestConfirmMixedResequences(t *testing.T) {
-	deadLine, _ := t.Deadline()
-	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
-	defer cancel()
-
 	var (
 		fixtures = []Confirmation{
 			{1, true},
@@ -94,7 +82,7 @@ func TestConfirmMixedResequences(t *testing.T) {
 	c.Listen(l)
 
 	for range fixtures {
-		c.Publish(ctx)
+		c.Publish()
 	}
 
 	c.One(fixtures[0])
@@ -116,10 +104,6 @@ func TestConfirmMixedResequences(t *testing.T) {
 }
 
 func TestConfirmMultipleResequences(t *testing.T) {
-	deadLine, _ := t.Deadline()
-	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
-	defer cancel()
-
 	var (
 		fixtures = []Confirmation{
 			{1, true},
@@ -133,7 +117,7 @@ func TestConfirmMultipleResequences(t *testing.T) {
 	c.Listen(l)
 
 	for range fixtures {
-		c.Publish(ctx)
+		c.Publish()
 	}
 
 	c.Multiple(fixtures[len(fixtures)-1])
@@ -146,9 +130,6 @@ func TestConfirmMultipleResequences(t *testing.T) {
 }
 
 func BenchmarkSequentialBufferedConfirms(t *testing.B) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	var (
 		c = newConfirms()
 		l = make(chan Confirmation, 10)
@@ -160,15 +141,11 @@ func BenchmarkSequentialBufferedConfirms(t *testing.B) {
 		if i > cap(l)-1 {
 			<-l
 		}
-		c.One(Confirmation{c.Publish(ctx).DeliveryTag, true})
+		c.One(Confirmation{c.Publish().DeliveryTag, true})
 	}
 }
 
 func TestConfirmsIsThreadSafe(t *testing.T) {
-	deadLine, _ := t.Deadline()
-	ctx, cancel := context.WithDeadline(context.Background(), deadLine)
-	defer cancel()
-
 	const count = 1000
 	const timeout = 5 * time.Second
 	var (
@@ -182,7 +159,7 @@ func TestConfirmsIsThreadSafe(t *testing.T) {
 	c.Listen(l)
 
 	for i := 0; i < count; i++ {
-		go func() { pub <- Confirmation{c.Publish(ctx).DeliveryTag, true} }()
+		go func() { pub <- Confirmation{c.Publish().DeliveryTag, true} }()
 	}
 
 	for i := 0; i < count; i++ {
@@ -208,7 +185,7 @@ func TestDeferredConfirmationsConfirm(t *testing.T) {
 	for i, ack := range []bool{true, false} {
 		var result bool
 		deliveryTag := uint64(i + 1)
-		dc := dcs.Add(context.Background(), deliveryTag)
+		dc := dcs.Add(deliveryTag)
 		wg.Add(1)
 		go func() {
 			result = dc.Wait()
@@ -226,9 +203,9 @@ func TestDeferredConfirmationsConfirmMultiple(t *testing.T) {
 	dcs := newDeferredConfirmations()
 	var wg sync.WaitGroup
 	var result bool
-	dc1 := dcs.Add(context.Background(), 1)
-	dc2 := dcs.Add(context.Background(), 2)
-	dc3 := dcs.Add(context.Background(), 3)
+	dc1 := dcs.Add(1)
+	dc2 := dcs.Add(2)
+	dc3 := dcs.Add(3)
 	wg.Add(1)
 	go func() {
 		result = dc1.Wait() && dc2.Wait() && dc3.Wait()
@@ -245,9 +222,9 @@ func TestDeferredConfirmationsClose(t *testing.T) {
 	dcs := newDeferredConfirmations()
 	var wg sync.WaitGroup
 	var result bool
-	dc1 := dcs.Add(context.Background(), 1)
-	dc2 := dcs.Add(context.Background(), 2)
-	dc3 := dcs.Add(context.Background(), 3)
+	dc1 := dcs.Add(1)
+	dc2 := dcs.Add(2)
+	dc3 := dcs.Add(3)
 	wg.Add(1)
 	go func() {
 		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
@@ -260,73 +237,72 @@ func TestDeferredConfirmationsClose(t *testing.T) {
 	}
 }
 
-func TestDeferredConfirmationsContextCancel(t *testing.T) {
+func TestDeferredConfirmationsDoneAcked(t *testing.T) {
+	dcs := newDeferredConfirmations()
+	dc := dcs.Add(1)
+
+	if dc.Acked() {
+		t.Fatal("expected to receive false for pending confirmations, received true")
+	}
+
+	// Confirm twice to ensure that setAck is called once.
+	for i := 0; i < 2; i++ {
+		dcs.Confirm(Confirmation{dc.DeliveryTag, true})
+	}
+
+	<-dc.Done()
+
+	if !dc.Acked() {
+		t.Fatal("expected to receive true for acked confirmations, received false")
+	}
+}
+
+func TestDeferredConfirmationsWaitContextNack(t *testing.T) {
+	dcs := newDeferredConfirmations()
+	dc := dcs.Add(1)
+
+	dcs.Confirm(Confirmation{dc.DeliveryTag, false})
+
+	ack, err := dc.WaitContext(context.Background())
+	if err != nil {
+		t.Fatalf("expected to receive nil, got %v", err)
+	}
+	if ack {
+		t.Fatal("expected to receive false for nacked confirmations, received true")
+	}
+}
+
+func TestDeferredConfirmationsWaitContextCancel(t *testing.T) {
+	dc := newDeferredConfirmations().Add(1)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	dcs := newDeferredConfirmations()
-	var wg sync.WaitGroup
-	var result bool
-	dc1 := dcs.Add(ctx, 1)
-	dc2 := dcs.Add(ctx, 2)
-	dc3 := dcs.Add(ctx, 3)
-	wg.Add(1)
-	go func() {
-		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
-		wg.Done()
-	}()
-	wg.Wait()
-	if !result {
-		t.Fatal("expected to receive false for timeout confirmations, received true")
+	ack, err := dc.WaitContext(ctx)
+	if err == nil {
+		t.Fatal("expected to receive context error, got nil")
+	}
+	if ack {
+		t.Fatal("expected to receive false for pending confirmations, received true")
 	}
 }
 
-func TestDeferredConfirmationsContextTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
-	defer cancel()
-
+func TestDeferredConfirmationsConcurrency(t *testing.T) {
 	dcs := newDeferredConfirmations()
 	var wg sync.WaitGroup
 	var result bool
-	dc1 := dcs.Add(ctx, 1)
-	dc2 := dcs.Add(ctx, 2)
-	dc3 := dcs.Add(ctx, 3)
+	dc1 := dcs.Add(1)
+	dc2 := dcs.Add(2)
+	dc3 := dcs.Add(3)
 	wg.Add(1)
+
 	go func() {
-		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
-		wg.Done()
+		defer wg.Done()
+		result = dc1.Wait() && dc2.Wait() && dc3.Wait()
 	}()
+	dcs.ConfirmMultiple(Confirmation{4, true})
 	wg.Wait()
 	if !result {
-		t.Fatal("expected to receive false for timeout confirmations, received true")
+		t.Fatal("expected to receive true for concurrent confirmations, received false")
 	}
-}
-
-func TestDeferredConfirmationsContextConcurrency(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	dcs := newDeferredConfirmations()
-	var wg sync.WaitGroup
-	var result bool
-	dc1 := dcs.Add(ctx, 1)
-	dc2 := dcs.Add(ctx, 2)
-	dc3 := dcs.Add(ctx, 3)
-	wg.Add(1)
-
-	// wait confirmation
-	go func() {
-		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
-		t.Logf("result: %v", result)
-		wg.Done()
-	}()
-
-	// confirm
-	go func() {
-		dcs.ConfirmMultiple(Confirmation{4, true})
-	}()
-
-	// and cancel in //
-	go cancel()
-
-	wg.Wait()
 }
