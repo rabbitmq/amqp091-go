@@ -188,7 +188,7 @@ type DeferredConfirmation struct {
 	DeliveryTag uint64
 
 	done chan struct{}
-	ack  int32 // atomic bool
+	ack  bool
 }
 
 // Confirmation notifies the acknowledgment or negative acknowledgement of a
