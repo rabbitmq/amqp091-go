@@ -447,6 +447,66 @@ func (c *Connection) send(f frame) error {
 	return err
 }
 
+// sendUnflushed performs an *Unflushed* write. It is otherwise equivalent to
+// send(), and we provide a separate flush() function to explicitly flush the
+// buffer after all Frames are written.
+//
+// Why is this a thing?
+//
+// send() method uses writer.WriteFrame(), which will write the Frame then
+// flush the buffer. For cases like the sendOpen() method on Channel, which
+// sends multiple Frames (methodFrame, headerFrame, N x bodyFrame), flushing
+// after each Frame is inefficient as it negates much of the benefit of using a
+// buffered writer, and results in more syscalls than necessary. Flushing buffers
+// after every frame can have a significant performance impact when sending
+// (basicPublish) small messages, so this method performs an *Unflushed* write
+// but is otherwise equivalent to send() method, and we provide a separate
+// flush method to explicitly flush the buffer after all Frames are written.
+func (c *Connection) sendUnflushed(f frame) error {
+	if c.IsClosed() {
+		return ErrClosed
+	}
+
+	c.sendM.Lock()
+	err := f.write(c.writer.w)
+	c.sendM.Unlock()
+
+	if err != nil {
+		// shutdown could be re-entrant from signaling notify chans
+		go c.shutdown(&Error{
+			Code:   FrameError,
+			Reason: err.Error(),
+		})
+	}
+
+	return err
+}
+
+// This method is intended to be used with sendUnflushed() to explicitly flush
+// the buffer after all required Frames have been written to the buffer.
+func (c *Connection) flush() (err error) {
+	if buf, ok := c.writer.w.(*bufio.Writer); ok {
+		err = buf.Flush()
+
+		// Moving send notifier to flush increases basicPublish for the small message
+		// case. As sendUnflushed + flush is used for the case of sending semantically
+		// related Frames (e.g. a Message like basicPublish) there is no real advantage
+		// to sending per Frame vice per "group of related Frames" and for the case of
+		// small messages time.Now() is (relatively) expensive.
+		if err == nil {
+			// Broadcast we sent a frame, reducing heartbeats, only
+			// if there is something that can receive - like a non-reentrant
+			// call or if the heartbeater isn't running
+			select {
+			case c.sends <- time.Now():
+			default:
+			}
+		}
+	}
+
+	return
+}
+
 func (c *Connection) shutdown(err *Error) {
 	atomic.StoreInt32(&c.closed, 1)
 
