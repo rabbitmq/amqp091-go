@@ -209,6 +209,68 @@ type Decimal struct {
 	Value int32
 }
 
+// Most common queue argument keys in queue declaration. For a comprehensive list
+// of queue arguments, visit [RabbitMQ Queue docs].
+//
+// QueueTypeArg queue argument is used to declare quorum and stream queues.
+// Accepted values are QueueTypeClassic (default), QueueTypeQuorum and
+// QueueTypeStream. [Quorum Queues] accept (almost) all queue arguments as their
+// Classic Queues counterparts. Check [feature comparison] docs for more
+// information.
+//
+// Queues can define their [max length] using QueueMaxLenArg and
+// QueueMaxLenBytesArg queue arguments. Overflow behaviour is set using
+// QueueOverflowArg. Accepted values are QueueOverflowDropHead (default),
+// QueueOverflowRejectPublish and QueueOverflowRejectPublishDLX.
+//
+// [Queue TTL] can be defined using QueueTTLArg. That is, the time-to-live for an
+// unused queue. [Queue Message TTL] can be defined using QueueMessageTTLArg.
+// This will set a time-to-live for **messages** in the queue.
+//
+// [Stream retention] can be configured using StreamMaxLenBytesArg, to set the
+// maximum size of the stream. Please note that stream queues always keep, at
+// least, one segment. [Stream retention] can also be set using StreamMaxAgeArg,
+// to set time-based retention. Values are string with unit suffix. Valid
+// suffixes are Y, M, D, h, m, s. E.g. "7D" for one week. The maximum segment
+// size can be set using StreamMaxSegmentSizeBytesArg. The default value is
+// 500_000_000 bytes ~= 500 megabytes
+//
+// [RabbitMQ Queue docs]: https://rabbitmq.com/queues.html
+// [Stream retention]: https://rabbitmq.com/streams.html#retention
+// [max length]: https://rabbitmq.com/maxlength.html
+// [Queue TTL]: https://rabbitmq.com/ttl.html#queue-ttl
+// [Queue Message TTL]: https://rabbitmq.com/ttl.html#per-queue-message-ttl
+// [Quorum Queues]: https://rabbitmq.com/quorum-queues.html
+// [feature comparison]: https://rabbitmq.com/quorum-queues.html#feature-comparison
+const (
+	QueueTypeArg        = "x-queue-type"
+	QueueMaxLenArg      = "x-max-length"
+	QueueMaxLenBytesArg = "x-max-length-bytes"
+	StreamMaxLenBytesArg
+	QueueOverflowArg             = "x-overflow"
+	QueueMessageTTLArg           = "x-message-ttl"
+	QueueTTLArg                  = "x-expires"
+	StreamMaxAgeArg              = "x-max-age"
+	StreamMaxSegmentSizeBytesArg = "x-stream-max-segment-size-bytes"
+)
+
+// Values for queue arguments. Use as values for queue arguments during queue declaration.
+// The following argument table will create a classic queue, with max length set to 100 messages,
+// and a queue TTL of 30 minutes.
+// 		args := amqp.Table{
+//			amqp.QueueTypeArg: QueueTypeClassic,
+//			amqp.QueueMaxLenArg: 100,
+//			amqp.QueueTTLArg: 1800000,
+//		}
+const (
+	QueueTypeClassic              = "classic"
+	QueueTypeQuorum               = "quorum"
+	QueueTypeStream               = "stream"
+	QueueOverflowDropHead         = "drop-head"
+	QueueOverflowRejectPublish    = "reject-publish"
+	QueueOverflowRejectPublishDLX = "reject-publish-dlx"
+)
+
 // Table stores user supplied fields of the following types:
 //
 //   bool

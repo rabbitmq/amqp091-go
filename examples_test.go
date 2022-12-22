@@ -503,3 +503,39 @@ func refreshJWToken(token string) (string, error) {
 	// do OAuth2 things to refresh tokens
 	return "so fresh!", nil
 }
+
+func ExampleChannel_QueueDeclare_quorum() {
+	conn, _ := amqp.Dial("amqp://localhost")
+	ch, _ := conn.Channel()
+	args := amqp.Table{ // queue args
+		amqp.QueueTypeArg: amqp.QueueTypeQuorum,
+	}
+	q, _ := ch.QueueDeclare(
+		"my-quorum-queue", // queue name
+		true,              // durable
+		false,             // auto-delete
+		false,             // exclusive
+		false,             // noWait
+		args,
+	)
+	log.Printf("Declared queue: %s with arguments: %v", q.Name, args)
+}
+
+func ExampleChannel_QueueDeclare_stream() {
+	conn, _ := amqp.Dial("amqp://localhost")
+	ch, _ := conn.Channel()
+	q, _ := ch.QueueDeclare(
+		"my-stream-queue", // queue name
+		true,              // durable
+		false,             // auto-delete
+		false,             // exclusive
+		false,             // noWait
+		amqp.Table{ // queue args
+			amqp.QueueTypeArg:                 amqp.QueueTypeStream,
+			amqp.StreamMaxLenBytesArg:         5_000_000_000, // 5 Gb
+			amqp.StreamMaxSegmentSizeBytesArg: 500_000_000,   // 500 Mb
+			amqp.StreamMaxAgeArg:              "3D",          // 3 days
+		},
+	)
+	log.Printf("Declared queue: %s", q.Name)
+}
