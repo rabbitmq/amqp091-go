@@ -1386,7 +1386,6 @@ func TestRoundTripAllFieldValueTypes61(t *testing.T) {
 // serialization.
 //
 // Relates to https://github.com/streadway/amqp/issues/60
-//
 func TestDeclareArgsXMessageTTL(t *testing.T) {
 	if conn := integrationConnection(t, "declareTTL"); conn != nil {
 		defer conn.Close()
@@ -1405,7 +1404,6 @@ func TestDeclareArgsXMessageTTL(t *testing.T) {
 // to a fanout exchange, with a single queue bound.
 //
 // Relates to https://github.com/streadway/amqp/issues/56
-//
 func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 	if conn := integrationConnection(t, "declareArgs"); conn != nil {
 		defer conn.Close()

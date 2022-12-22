@@ -9,13 +9,13 @@ Package amqp091 is an AMQP 0.9.1 client with RabbitMQ extensions
 Understand the AMQP 0.9.1 messaging model by reviewing these links first. Much
 of the terminology in this library directly relates to AMQP concepts.
 
-  Resources
+	Resources
 
-  http://www.rabbitmq.com/tutorials/amqp-concepts.html
-  http://www.rabbitmq.com/getstarted.html
-  http://www.rabbitmq.com/amqp-0-9-1-reference.html
+	http://www.rabbitmq.com/tutorials/amqp-concepts.html
+	http://www.rabbitmq.com/getstarted.html
+	http://www.rabbitmq.com/amqp-0-9-1-reference.html
 
-Design
+# Design
 
 Most other broker clients publish to queues, but in AMQP, clients publish
 Exchanges instead.  AMQP is programmable, meaning that both the producers and
@@ -47,7 +47,7 @@ asynchronous like Channel.Publish.  The error values should still be checked for
 these methods as they will indicate IO failures like when the underlying
 connection closes.
 
-Asynchronous Events
+# Asynchronous Events
 
 Clients of this library may be interested in receiving some of the protocol
 messages other than Deliveries like basic.ack methods while a channel is in
@@ -61,34 +61,34 @@ Any asynchronous events, including Deliveries and Publishings must always have
 a receiver until the corresponding chans are closed.  Without asynchronous
 receivers, the synchronous methods will block.
 
-Use Case
+# Use Case
 
 It's important as a client to an AMQP topology to ensure the state of the
 broker matches your expectations.  For both publish and consume use cases,
 make sure you declare the queues, exchanges and bindings you expect to exist
 prior to calling Channel.Publish or Channel.Consume.
 
-  // Connections start with amqp.Dial() typically from a command line argument
-  // or environment variable.
-  connection, err := amqp.Dial(os.Getenv("AMQP_URL"))
+	// Connections start with amqp.Dial() typically from a command line argument
+	// or environment variable.
+	connection, err := amqp.Dial(os.Getenv("AMQP_URL"))
 
-  // To cleanly shutdown by flushing kernel buffers, make sure to close and
-  // wait for the response.
-  defer connection.Close()
+	// To cleanly shutdown by flushing kernel buffers, make sure to close and
+	// wait for the response.
+	defer connection.Close()
 
-  // Most operations happen on a channel.  If any error is returned on a
-  // channel, the channel will no longer be valid, throw it away and try with
-  // a different channel.  If you use many channels, it's useful for the
-  // server to
-  channel, err := connection.Channel()
+	// Most operations happen on a channel.  If any error is returned on a
+	// channel, the channel will no longer be valid, throw it away and try with
+	// a different channel.  If you use many channels, it's useful for the
+	// server to
+	channel, err := connection.Channel()
 
-  // Declare your topology here, if it doesn't exist, it will be created, if
-  // it existed already and is not what you expect, then that's considered an
-  // error.
+	// Declare your topology here, if it doesn't exist, it will be created, if
+	// it existed already and is not what you expect, then that's considered an
+	// error.
 
-  // Use your connection on this topology with either Publish or Consume, or
-  // inspect your queues with QueueInspect.  It's unwise to mix Publish and
-  // Consume to let TCP do its job well.
+	// Use your connection on this topology with either Publish or Consume, or
+	// inspect your queues with QueueInspect.  It's unwise to mix Publish and
+	// Consume to let TCP do its job well.
 
 SSL/TLS - Secure connections
 
@@ -115,34 +115,34 @@ No errors will be sent in case of a graceful connection close.
 In case of a non-graceful close, because of a network issue of forced disconnection from the UI, the error will be notified synchronously by the library.
 You can see that in the shutdown function of connection and channel (see connection.go and channel.go)
 
- if err != nil {
-      for _, c := range c.closes {
-        c <- err
-      }
-    }
+	if err != nil {
+	     for _, c := range c.closes {
+	       c <- err
+	     }
+	   }
 
 The error is sent synchronously to the channel so that the flow will wait until the channel will be consumed by the caller.
 To avoid deadlocks it is necessary to consume the messages from the channels.
 This could be done inside a different goroutine with a select listening on the two channels inside a for loop like:
 
-  go func() {
-    for notifyConnClose != nil || notifyChanClose != nil {
-      select {
-        case err, ok := <-notifyConnClose:
-          if !(ok) {
-            notifyConnClose = nil
-          } else {
-            fmt.Printf("connection closed, error %s", err)
-          }
-        case err, ok := <-notifyChanClose:
-          if !(ok) {
-            notifyChanClose = nil
-          } else {
-            fmt.Printf("channel closed, error %s", err)
-          }
-        }
-    }
-  }()
+	go func() {
+	  for notifyConnClose != nil || notifyChanClose != nil {
+	    select {
+	      case err, ok := <-notifyConnClose:
+	        if !(ok) {
+	          notifyConnClose = nil
+	        } else {
+	          fmt.Printf("connection closed, error %s", err)
+	        }
+	      case err, ok := <-notifyChanClose:
+	        if !(ok) {
+	          notifyChanClose = nil
+	        } else {
+	          fmt.Printf("channel closed, error %s", err)
+	        }
+	      }
+	  }
+	}()
 
 Best practises for NotifyPublish notifications:
 
@@ -152,17 +152,16 @@ It's advisable to wait for all Confirmations to arrive before calling Channel.Cl
 It is also necessary for the caller to always consume from this channel till it get closed from the library to avoid possible deadlocks.
 Confirmations go channel are indeed notified inside the confirm function of the Confirm struct synchronously:
 
-  // confirm confirms one publishing, increments the expecting delivery tag, and
-  // removes bookkeeping for that delivery tag.
-  func (c *confirms) confirm(confirmation Confirmation) {
-	  delete(c.sequencer, c.expecting)
-	  c.expecting++
-	  for _, l := range c.listeners {
-		  l <- confirmation
+	  // confirm confirms one publishing, increments the expecting delivery tag, and
+	  // removes bookkeeping for that delivery tag.
+	  func (c *confirms) confirm(confirmation Confirmation) {
+		  delete(c.sequencer, c.expecting)
+		  c.expecting++
+		  for _, l := range c.listeners {
+			  l <- confirmation
+		  }
 	  }
-  }
 
 It is so necessary to have a goroutine consuming from this channel till it get closed.
-
 */
 package amqp091
