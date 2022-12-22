@@ -245,8 +245,8 @@ type Decimal struct {
 const (
 	QueueTypeArg        = "x-queue-type"
 	QueueMaxLenArg      = "x-max-length"
-	QueueMaxLenBytesArg = "x-max-length-bytes"
-	StreamMaxLenBytesArg
+	QueueMaxLenBytesArg  = "x-max-length-bytes"
+	StreamMaxLenBytesArg = "x-max-length-bytes"
 	QueueOverflowArg             = "x-overflow"
 	QueueMessageTTLArg           = "x-message-ttl"
 	QueueTTLArg                  = "x-expires"
