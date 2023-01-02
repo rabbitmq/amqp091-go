@@ -8,6 +8,7 @@ list: ## list Makefile targets
 
 .PHONY: check-fmt
 check-fmt: ## Ensure code is formatted
+	gofmt -l -d . 	# For the sake of debugging
 	test -z "$$(gofmt -l .)"
 
 .PHONY: fmt
