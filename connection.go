@@ -820,19 +820,23 @@ func (c *Connection) call(req message, res ...message) error {
 	return ErrCommandInvalid
 }
 
-// Connection          = open-Connection *use-Connection close-Connection
-// open-Connection     = C:protocol-header
+// Communication flow to open, use and close a connection. 'C:' are
+// frames sent by the Client. 'S:' are frames sent by the Server.
 //
-//	S:START C:START-OK
-//	*challenge
-//	S:TUNE C:TUNE-OK
-//	C:OPEN S:OPEN-OK
+//	Connection          = open-Connection *use-Connection close-Connection
 //
-// challenge           = S:SECURE C:SECURE-OK
-// use-Connection      = *channel
-// close-Connection    = C:CLOSE S:CLOSE-OK
+//	open-Connection     = C:protocol-header
+//	                      S:START C:START-OK
+//	                      *challenge
+//	                      S:TUNE C:TUNE-OK
+//	                      C:OPEN S:OPEN-OK
 //
-//	/ S:CLOSE C:CLOSE-OK
+//	challenge           = S:SECURE C:SECURE-OK
+//
+//	use-Connection      = *channel
+//
+//	close-Connection    = C:CLOSE S:CLOSE-OK
+//	                      S:CLOSE C:CLOSE-OK
 func (c *Connection) open(config Config) error {
 	if err := c.send(&protocolHeader{}); err != nil {
 		return err
