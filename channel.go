@@ -655,7 +655,6 @@ func (ch *Channel) NotifyPublish(confirm chan Confirmation) chan Confirmation {
 	}
 
 	return confirm
-
 }
 
 /*
@@ -1471,7 +1470,7 @@ func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, ex
 	}
 
 	if ch.confirming {
-		return ch.confirms.Publish(ctx), nil
+		return ch.confirms.Publish(), nil
 	}
 
 	return nil, nil
