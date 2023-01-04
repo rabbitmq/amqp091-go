@@ -601,13 +601,17 @@ func (c *Connection) dispatch0(f frame) {
 
 func (c *Connection) dispatchN(f frame) {
 	c.m.Lock()
-	channel := c.channels[f.channel()]
-	updateChannel(f, channel)
+	channel, ok := c.channels[f.channel()]
+	if ok {
+		updateChannel(f, channel)
+	} else {
+		Logger.Printf("[debug] dropping frame, channel %d does not exist", f.channel())
+	}
 	c.m.Unlock()
 
 	// Note: this could result in concurrent dispatch depending on
 	// how channels are managed in an application
-	if channel != nil {
+	if ok {
 		channel.recv(channel, f)
 	} else {
 		c.dispatchClosed(f)
