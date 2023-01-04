@@ -240,10 +240,10 @@ type Decimal struct {
 // [Quorum Queues]: https://rabbitmq.com/quorum-queues.html
 // [feature comparison]: https://rabbitmq.com/quorum-queues.html#feature-comparison
 const (
-	QueueTypeArg        = "x-queue-type"
-	QueueMaxLenArg      = "x-max-length"
-	QueueMaxLenBytesArg  = "x-max-length-bytes"
-	StreamMaxLenBytesArg = "x-max-length-bytes"
+	QueueTypeArg                 = "x-queue-type"
+	QueueMaxLenArg               = "x-max-length"
+	QueueMaxLenBytesArg          = "x-max-length-bytes"
+	StreamMaxLenBytesArg         = "x-max-length-bytes"
 	QueueOverflowArg             = "x-overflow"
 	QueueMessageTTLArg           = "x-message-ttl"
 	QueueTTLArg                  = "x-expires"
@@ -254,11 +254,12 @@ const (
 // Values for queue arguments. Use as values for queue arguments during queue declaration.
 // The following argument table will create a classic queue, with max length set to 100 messages,
 // and a queue TTL of 30 minutes.
-// 		args := amqp.Table{
-//			amqp.QueueTypeArg: QueueTypeClassic,
-//			amqp.QueueMaxLenArg: 100,
-//			amqp.QueueTTLArg: 1800000,
-//		}
+//
+//	args := amqp.Table{
+//		amqp.QueueTypeArg: QueueTypeClassic,
+//		amqp.QueueMaxLenArg: 100,
+//		amqp.QueueTTLArg: 1800000,
+//	}
 const (
 	QueueTypeClassic              = "classic"
 	QueueTypeQuorum               = "quorum"
