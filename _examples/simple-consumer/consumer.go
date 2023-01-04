@@ -1,7 +1,6 @@
 // This example declares a durable Exchange, an ephemeral (auto-delete) Queue,
 // binds the Queue to the Exchange with a binding key, and consumes every
 // message published to that Exchange with that routing key.
-//
 package main
 
 import (
