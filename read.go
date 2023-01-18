@@ -168,7 +168,7 @@ func readField(r io.Reader) (v interface{}, err error) {
 		if err = binary.Read(r, binary.BigEndian, &value); err != nil {
 			return
 		}
-		return (value != 0), nil
+		return value != 0, nil
 
 	case 'B':
 		var value [1]byte

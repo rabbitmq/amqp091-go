@@ -819,7 +819,7 @@ func TestIntegrationConsumeCancel(t *testing.T) {
 	}
 }
 
-func (c *Connection) Generate(r *rand.Rand, _ int) reflect.Value {
+func (c *Connection) Generate(_ *rand.Rand, _ int) reflect.Value {
 	urlStr := amqpURL
 
 	conn, err := Dial(urlStr)
@@ -1259,22 +1259,22 @@ func TestIntegrationCancel(t *testing.T) {
 		defer c.Close()
 
 		cancels := ch.NotifyCancel(make(chan string, 1))
-		consume_err := make(chan error, 1)
-		delete_err := make(chan error, 1)
+		consumeErr := make(chan error, 1)
+		deleteErr := make(chan error, 1)
 
 		go func() {
 			if _, err := ch.Consume(queue, consumerTag, false, false, false, false, nil); err != nil {
-				consume_err <- err
+				consumeErr <- err
 			}
 			if _, err := ch.QueueDelete(queue, false, false, false); err != nil {
-				delete_err <- err
+				deleteErr <- err
 			}
 		}()
 
 		select {
-		case err := <-consume_err:
+		case err := <-consumeErr:
 			t.Fatalf("cannot consume from %q to test NotifyCancel: %v", queue, err)
-		case err := <-delete_err:
+		case err := <-deleteErr:
 			t.Fatalf("cannot delete integration queue: %v", err)
 		case tag := <-cancels:
 			if want, got := consumerTag, tag; want != got {
@@ -1445,11 +1445,11 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 		}
 
 		// Reject everything consumed
-		reject_errs := make(chan error, len(fails))
+		rejectErrs := make(chan error, len(fails))
 		go func() {
 			for d := range fails {
 				if err := d.Reject(false); err != nil {
-					reject_errs <- err
+					rejectErrs <- err
 				}
 			}
 		}()
@@ -1479,16 +1479,6 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 			}
 		}
 		t.Fatalf("expected dead-letter after 10 get attempts")
-
-		if err := ch.Close(); err != nil {
-			t.Fatalf("channel close error: %v", err)
-		}
-		close(reject_errs)
-		for err := range reject_errs {
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		}
 	}
 }
 
@@ -1915,7 +1905,6 @@ func TestConsumerCancelNotification(t *testing.T) {
 			// do nothing
 		case <-time.After(time.Second * 10):
 			t.Fatalf("basic.cancel wasn't received")
-			t.Fail()
 		}
 		// we don't close ccnChan because channel shutdown
 		// does it
@@ -2058,7 +2047,7 @@ func integrationQueueDelete(t *testing.T, c *Channel, queue string) {
 // Delegates to integrationConnection and only returns a connection if the
 // product is RabbitMQ
 func integrationRabbitMQ(t *testing.T, name string) *Connection {
-	if conn := integrationConnection(t, "connect"); conn != nil {
+	if conn := integrationConnection(t, name); conn != nil {
 		if server, ok := conn.Properties["product"]; ok && server == "RabbitMQ" {
 			return conn
 		}
