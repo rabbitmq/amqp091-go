@@ -37,9 +37,6 @@ This client uses the same 2-clause BSD license as the original project.
 
 This project is based on a mature Go client that's been around for over a decade.
 
-We expect this client to undergo moderate breaking public API changes in 2021.
-Major and minor versions will be updated accordingly.
-
 
 ## Supported Go Versions
 
