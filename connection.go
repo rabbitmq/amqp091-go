@@ -76,11 +76,15 @@ type Config struct {
 	Dial func(network, addr string) (net.Conn, error)
 }
 
-// NewConnectionProperties initialises an amqp.Table struct to empty value. This
-// amqp.Table can be used as Properties in amqp.Config to set the connection
-// name, using amqp.DialConfig()
+// NewConnectionProperties creates an amqp.Table to be used as amqp.Config.Properties.
+//
+// Defaults to library-defined values. For empty properties, use make(amqp.Table) instead.
 func NewConnectionProperties() Table {
-	return make(Table)
+	return Table{
+		"product":  defaultProduct,
+		"version":  buildVersion,
+		"platform": platform,
+	}
 }
 
 // Connection manages the serialization and deserialization of frames from IO
@@ -875,11 +879,7 @@ func (c *Connection) openStart(config Config) error {
 
 func (c *Connection) openTune(config Config, auth Authentication) error {
 	if len(config.Properties) == 0 {
-		config.Properties = Table{
-			"product":  defaultProduct,
-			"version":  buildVersion,
-			"platform": platform,
-		}
+		config.Properties = NewConnectionProperties()
 	}
 
 	config.Properties["capabilities"] = Table{
