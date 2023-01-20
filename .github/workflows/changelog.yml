@@ -1,0 +1,30 @@
+name: Update CHANGELOG.md
+on:
+  release:
+    types:
+      - published
+jobs:
+  run:
+    name: Update CHANGELOG.md
+    runs-on: ubuntu-latest
+    env:
+      CHANGELOG_GITHUB_TOKEN: ${{ secrets.CHANGELOG_GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: main
+      - uses: addnab/docker-run-action@v3
+        with:
+          image: githubchangeloggenerator/github-changelog-generator
+          options: "-v ${{ github.workspace }}:/github/workspace --env SRC_PATH=/github/workspace --env CHANGELOG_GITHUB_TOKEN --workdir /github/workspace"
+          run: "github_changelog_generator --user php-amqplib --project php-amqplib"
+      - name: Commit CHANGELOG.md
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add CHANGELOG.md
+          git commit -m "Update CHANGELOG.md"
+      - uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: main
