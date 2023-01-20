@@ -11,6 +11,7 @@ package amqp091
 import (
 	"crypto/tls"
 	"net"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -283,5 +284,55 @@ func TestConnectionConfigPropertiesWithClientProvidedConnectionName(t *testing.T
 		t.Fatalf("Connection name is set to: %s. Expected: %s",
 			currentConnectionName,
 			expectedConnectionName)
+	}
+}
+
+func TestNewConnectionProperties_HasContantProperties(t *testing.T) {
+	expectedProductName := defaultProduct
+	expectedPlatform := platform
+
+	props := NewConnectionProperties()
+
+	productName, ok := props["product"]
+	if !ok {
+		t.Fatal("Product name was not set by NewConnectionProperties")
+	}
+	if productName != expectedProductName {
+		t.Fatalf("Product name is set to: %s. Expected: %s",
+			productName,
+			expectedProductName,
+		)
+	}
+
+	platform, ok := props["platform"]
+	if !ok {
+		t.Fatal("Platform was not set by NewConnectionProperties")
+	}
+	if platform != expectedPlatform {
+		t.Fatalf("Platform is set to: %s. Expected: %s",
+			platform,
+			expectedPlatform,
+		)
+	}
+}
+
+func TestNewConnectionProperties_HasReleaseSemver(t *testing.T) {
+	props := NewConnectionProperties()
+
+	versionUntyped, ok := props["version"]
+	if !ok {
+		t.Fatal("Version was not set by NewConnectionProperties")
+	}
+
+	version, ok := versionUntyped.(string)
+	if !ok {
+		t.Fatalf("Version in NewConnectionProperties should be string. Type given was: %T", versionUntyped)
+	}
+
+	// semver regexp as specified by https://semver.org/
+	semverRegexp := regexp.MustCompile(`^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
+
+	if !semverRegexp.MatchString(version) {
+		t.Fatalf("Version in NewConnectionProperties is not a valid semver value: %s", version)
 	}
 }
