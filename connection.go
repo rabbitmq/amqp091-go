@@ -417,7 +417,7 @@ func (c *Connection) closeWith(err *Error) error {
 // IsClosed returns true if the connection is marked as closed, otherwise false
 // is returned.
 func (c *Connection) IsClosed() bool {
-	return (atomic.LoadInt32(&c.closed) == 1)
+	return atomic.LoadInt32(&c.closed) == 1
 }
 
 func (c *Connection) send(f frame) error {
