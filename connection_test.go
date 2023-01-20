@@ -287,7 +287,7 @@ func TestConnectionConfigPropertiesWithClientProvidedConnectionName(t *testing.T
 	}
 }
 
-func TestNewConnectionProperties_HasContantProperties(t *testing.T) {
+func TestNewConnectionProperties_HasDefaultProperties(t *testing.T) {
 	expectedProductName := defaultProduct
 	expectedPlatform := platform
 
@@ -314,10 +314,6 @@ func TestNewConnectionProperties_HasContantProperties(t *testing.T) {
 			expectedPlatform,
 		)
 	}
-}
-
-func TestNewConnectionProperties_HasReleaseSemver(t *testing.T) {
-	props := NewConnectionProperties()
 
 	versionUntyped, ok := props["version"]
 	if !ok {
