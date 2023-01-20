@@ -1,8 +1,8 @@
 # Changelog
 
-## [Unreleased](https://github.com/rabbitmq/amqp091-go/tree/HEAD)
+## [v1.6.0](https://github.com/rabbitmq/amqp091-go/tree/v1.6.0) (2023-01-20)
 
-[Full Changelog](https://github.com/rabbitmq/amqp091-go/compare/v1.5.0...HEAD)
+[Full Changelog](https://github.com/rabbitmq/amqp091-go/compare/v1.5.0...v1.6.0)
 
 **Implemented enhancements:**
 
