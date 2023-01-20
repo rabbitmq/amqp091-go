@@ -11,6 +11,7 @@
 **Closed issues:**
 
 - README not up to date [\#154](https://github.com/rabbitmq/amqp091-go/issues/154)
+- Allow re-using default connection config \(custom properties\) [\#152](https://github.com/rabbitmq/amqp091-go/issues/152)
 - Rename package name to amqp in V2 [\#151](https://github.com/rabbitmq/amqp091-go/issues/151)
 - Helper types to declare quorum queues [\#144](https://github.com/rabbitmq/amqp091-go/issues/144)
 - Inefficient use of buffers reduces potential throughput for basicPublish with small messages. [\#141](https://github.com/rabbitmq/amqp091-go/issues/141)
@@ -21,6 +22,8 @@
 
 **Merged pull requests:**
 
+- Add automatic CHANGELOG.md generation [\#158](https://github.com/rabbitmq/amqp091-go/pull/158) ([lukebakken](https://github.com/lukebakken))
+- Supply library-defined props with NewConnectionProperties [\#157](https://github.com/rabbitmq/amqp091-go/pull/157) ([slagiewka](https://github.com/slagiewka))
 - Fix linter warnings [\#156](https://github.com/rabbitmq/amqp091-go/pull/156) ([Zerpet](https://github.com/Zerpet))
 - Remove outdated information from README [\#155](https://github.com/rabbitmq/amqp091-go/pull/155) ([scriptcoded](https://github.com/scriptcoded))
 - Add example producer using DeferredConfirm [\#149](https://github.com/rabbitmq/amqp091-go/pull/149) ([Zerpet](https://github.com/Zerpet))
