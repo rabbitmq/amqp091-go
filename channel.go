@@ -250,7 +250,6 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 			ch.connection.endSendUnflushed()
 		}()
 
-
 		// We use sendUnflushed() in this method as sending the message requires
 		// sending multiple Frames (methodFrame, headerFrame, N x bodyFrame).
 		// Flushing after each Frame is inefficient, as it negates much of the
