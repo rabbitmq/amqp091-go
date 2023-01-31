@@ -237,8 +237,6 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 			return ch.sendClosed(msg)
 		}
 
-		ch.connection.startSendUnflushed()
-
 		// Flush the buffer only after all the Frames that comprise the Message
 		// have been written to maximise benefits of using a buffered writer.
 		defer func() {
