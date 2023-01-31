@@ -448,6 +448,18 @@ func (c *Connection) send(f frame) error {
 	return err
 }
 
+// This method is intended to be used with sendUnflushed() to start a sequence
+// of sendUnflushed() calls
+func (c *Connection) startSendUnflushed() {
+	c.sendM.Lock()
+}
+
+// This method is intended to be used with sendUnflushed() to end a sequence
+// of sendUnflushed() calls
+func (c *Connection) endSendUnflushed() {
+	c.sendM.Unlock()
+}
+
 // sendUnflushed performs an *Unflushed* write. It is otherwise equivalent to
 // send(), and we provide a separate flush() function to explicitly flush the
 // buffer after all Frames are written.
@@ -468,9 +480,7 @@ func (c *Connection) sendUnflushed(f frame) error {
 		return ErrClosed
 	}
 
-	c.sendM.Lock()
-	err := f.write(c.writer.w)
-	c.sendM.Unlock()
+	err := c.writer.WriteFrameNoFlush(f)
 
 	if err != nil {
 		// shutdown could be re-entrant from signaling notify chans
