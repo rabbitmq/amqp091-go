@@ -455,9 +455,10 @@ func (c *Connection) startSendUnflushed() {
 }
 
 // This method is intended to be used with sendUnflushed() to end a sequence
-// of sendUnflushed() calls
-func (c *Connection) endSendUnflushed() {
-	c.sendM.Unlock()
+// of sendUnflushed() calls and flush the connection
+func (c *Connection) endSendUnflushed() error {
+	defer c.sendM.Unlock()
+	return c.flush()
 }
 
 // sendUnflushed performs an *Unflushed* write. It is otherwise equivalent to

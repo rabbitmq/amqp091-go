@@ -242,12 +242,11 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 		// Flush the buffer only after all the Frames that comprise the Message
 		// have been written to maximise benefits of using a buffered writer.
 		defer func() {
-			if flushErr := ch.connection.flush(); flushErr != nil {
+			if endError := ch.connection.endSendUnflushed(); endError != nil {
 				if err == nil {
-					err = flushErr
+					err = endError
 				}
 			}
-			ch.connection.endSendUnflushed()
 		}()
 
 		// We use sendUnflushed() in this method as sending the message requires
