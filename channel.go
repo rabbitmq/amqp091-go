@@ -237,6 +237,18 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 			return ch.sendClosed(msg)
 		}
 
+		ch.connection.startSendUnflushed()
+
+		// Flush the buffer only after all the Frames that comprise the Message
+		// have been written to maximise benefits of using a buffered writer.
+		defer func() {
+			if endError := ch.connection.endSendUnflushed(); endError != nil {
+				if err == nil {
+					err = endError
+				}
+			}
+		}()
+
 		// We use sendUnflushed() in this method as sending the message requires
 		// sending multiple Frames (methodFrame, headerFrame, N x bodyFrame).
 		// Flushing after each Frame is inefficient, as it negates much of the
@@ -275,10 +287,6 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 				return
 			}
 		}
-
-		// Flush the buffer only after all the Frames that comprise the Message
-		// have been written to maximise benefits of using a buffered writer.
-		err = ch.connection.flush()
 	} else {
 		// If the channel is closed, use Channel.sendClosed()
 		if ch.IsClosed() {

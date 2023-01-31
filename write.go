@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+func (w *writer) WriteFrameNoFlush(frame frame) (err error) {
+	err = frame.write(w.w)
+	return
+}
+
 func (w *writer) WriteFrame(frame frame) (err error) {
 	if err = frame.write(w.w); err != nil {
 		return
