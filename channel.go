@@ -876,6 +876,8 @@ declared with specific parameters.
 
 If a queue by this name does not exist, an error will be returned and the
 channel will be closed.
+
+Deprecated: Use QueueDeclare with "Passive: true" instead.
 */
 func (ch *Channel) QueueInspect(name string) (Queue, error) {
 	req := &queueDeclare{
