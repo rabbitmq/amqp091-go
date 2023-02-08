@@ -551,8 +551,8 @@ func (c *Connection) shutdown(err *Error) {
 
 		c.conn.Close()
 
-		c.channels = map[uint16]*Channel{}
-		c.allocator = newAllocator(1, c.Config.ChannelMax)
+		c.channels = nil
+		c.allocator = nil
 		c.noNotify = true
 	})
 }
@@ -766,8 +766,10 @@ func (c *Connection) releaseChannel(id uint16) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	delete(c.channels, id)
-	c.allocator.release(int(id))
+	if !c.IsClosed() {
+		delete(c.channels, id)
+		c.allocator.release(int(id))
+	}
 }
 
 // openChannel allocates and opens a channel, must be paired with closeChannel
@@ -915,6 +917,7 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	// Edge case that may race with c.shutdown()
 	// https://github.com/rabbitmq/amqp091-go/issues/170
 	c.m.Lock()
+
 	// When the server and client both use default 0, then the max channel is
 	// only limited by uint16.
 	c.Config.ChannelMax = pick(config.ChannelMax, int(tune.ChannelMax))
@@ -922,6 +925,9 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 		c.Config.ChannelMax = defaultChannelMax
 	}
 	c.Config.ChannelMax = min(c.Config.ChannelMax, maxChannelMax)
+
+	c.allocator = newAllocator(1, c.Config.ChannelMax)
+
 	c.m.Unlock()
 
 	// Frame size includes headers and end byte (len(payload)+8), even if
@@ -978,9 +984,6 @@ func (c *Connection) openComplete() error {
 		_ = deadliner.SetDeadline(time.Time{})
 	}
 
-	c.m.Lock()
-	c.allocator = newAllocator(1, c.Config.ChannelMax)
-	c.m.Unlock()
 	return nil
 }
 
