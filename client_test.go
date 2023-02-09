@@ -288,7 +288,41 @@ func TestOpen(t *testing.T) {
 	if c, err := Open(rwc, defaultConfig()); err != nil {
 		t.Fatalf("could not create connection: %v (%s)", c, err)
 	}
+}
 
+func TestOpenClose_ShouldNotPanic(t *testing.T) {
+	rwc, srv := newSession(t)
+	t.Cleanup(func() {
+		_ = rwc.Close()
+	})
+
+	go func() {
+		srv.connectionOpen()
+		srv.connectionClose()
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("could not close connection: %s", err)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("creating a channel on a closed connection should not panic: %s", r)
+		}
+	}()
+
+	ch, err := c.Channel()
+	if ch != nil {
+		t.Fatalf("creating a channel on a closed connection should not succeed: %v, (%s)", ch, err)
+	}
+	if err != ErrClosed {
+		t.Fatalf("error should be closed: %s", err)
+	}
 }
 
 func TestChannelOpen(t *testing.T) {
