@@ -825,6 +825,10 @@ func (ch *Channel) QueueDeclare(name string, durable, autoDelete, exclusive, noW
 	return Queue{Name: name}, nil
 }
 
+func (ch *Channel) QueueDeclareStruct(params QueueDeclareStruct) (Queue, error) {
+	return ch.QueueDeclare(params.Name, params.Durable, params.AutoDelete, params.Exclusive, params.NoWait, params.Args)
+}
+
 /*
 QueueDeclarePassive is functionally and parametrically equivalent to
 QueueDeclare, except that it sets the "passive" attribute to true. A passive
@@ -861,6 +865,10 @@ func (ch *Channel) QueueDeclarePassive(name string, durable, autoDelete, exclusi
 	}
 
 	return Queue{Name: name}, nil
+}
+
+func (ch *Channel) QueueDeclarePassiveStruct(params QueueDeclareStruct) (Queue, error) {
+	return ch.QueueDeclarePassive(params.Name, params.Durable, params.AutoDelete, params.Exclusive, params.NoWait, params.Args)
 }
 
 /*
@@ -957,6 +965,10 @@ func (ch *Channel) QueueBind(name, key, exchange string, noWait bool, args Table
 	)
 }
 
+func (ch *Channel) QueueBindStruct(params QueueBindStruct) error {
+	return ch.QueueBind(params.Name, params.Key, params.Exchange, params.NoWait, params.Args)
+}
+
 /*
 QueueUnbind removes a binding between an exchange and queue matching the key and
 arguments.
@@ -978,6 +990,10 @@ func (ch *Channel) QueueUnbind(name, key, exchange string, args Table) error {
 		},
 		&queueUnbindOk{},
 	)
+}
+
+func (ch *Channel) QueueUnbindStruct(params QueueBindStruct) error {
+	return ch.QueueUnbind(params.Name, params.Key, params.Exchange, params.Args)
 }
 
 /*
@@ -1032,6 +1048,10 @@ func (ch *Channel) QueueDelete(name string, ifUnused, ifEmpty, noWait bool) (int
 	err := ch.call(req, res)
 
 	return int(res.MessageCount), err
+}
+
+func (ch *Channel) QueueDeleteStruct(params QueueDeleteStruct) (int, error) {
+	return ch.QueueDelete(params.Name, params.IfUnused, params.IfEmpty, params.NoWait)
 }
 
 /*
@@ -1126,6 +1146,10 @@ func (ch *Channel) Consume(queue, consumer string, autoAck, exclusive, noLocal, 
 	return deliveries, nil
 }
 
+func (ch *Channel) ConsumeStruct(params ConsumeStruct) (<-chan Delivery, error) {
+	return ch.Consume(params.Queue, params.Consumer, params.AutoAck, params.Exclusive, params.NoLocal, params.NoWait, params.Args)
+}
+
 /*
 ExchangeDeclare declares an exchange on the server. If the exchange does not
 already exist, the server will create it.  If the exchange exists, the server
@@ -1198,6 +1222,10 @@ func (ch *Channel) ExchangeDeclare(name, kind string, durable, autoDelete, inter
 	)
 }
 
+func (ch *Channel) ExchangeDeclareStruct(params ExchangeDeclareStruct) error {
+	return ch.ExchangeDeclare(params.Name, params.Kind, params.Durable, params.AutoDelete, params.Internal, params.NoWait, params.Args)
+}
+
 /*
 ExchangeDeclarePassive is functionally and parametrically equivalent to
 ExchangeDeclare, except that it sets the "passive" attribute to true. A passive
@@ -1225,6 +1253,10 @@ func (ch *Channel) ExchangeDeclarePassive(name, kind string, durable, autoDelete
 	)
 }
 
+func (ch *Channel) ExchangeDeclarePassiveStruct(params ExchangeDeclareStruct) error {
+	return ch.ExchangeDeclarePassive(params.Name, params.Kind, params.Durable, params.AutoDelete, params.Internal, params.NoWait, params.Args)
+}
+
 /*
 ExchangeDelete removes the named exchange from the server. When an exchange is
 deleted all queue bindings on the exchange are also deleted.  If this exchange
@@ -1248,6 +1280,10 @@ func (ch *Channel) ExchangeDelete(name string, ifUnused, noWait bool) error {
 		},
 		&exchangeDeleteOk{},
 	)
+}
+
+func (ch *Channel) ExchangeDeleteStruct(params ExchangeDeleteStruct) error {
+	return ch.ExchangeDelete(params.Name, params.IfUnused, params.NoWait)
 }
 
 /*
@@ -1298,6 +1334,10 @@ func (ch *Channel) ExchangeBind(destination, key, source string, noWait bool, ar
 	)
 }
 
+func (ch *Channel) ExchangeBindStruct(params ExchangeBindStruct) error {
+	return ch.ExchangeBind(params.Destination, params.Key, params.Source, params.NoWait, params.Args)
+}
+
 /*
 ExchangeUnbind unbinds the destination exchange from the source exchange on the
 server by removing the routing key between them.  This is the inverse of
@@ -1327,6 +1367,10 @@ func (ch *Channel) ExchangeUnbind(destination, key, source string, noWait bool, 
 		},
 		&exchangeUnbindOk{},
 	)
+}
+
+func (ch *Channel) ExchangeUnbindStruct(params ExchangeUnbindStruct) error {
+	return ch.ExchangeUnbind(params.Destination, params.Key, params.Source, params.NoWait, params.Args)
 }
 
 /*
@@ -1367,6 +1411,9 @@ func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg 
 	_, err := ch.PublishWithDeferredConfirmWithContext(context.Background(), exchange, key, mandatory, immediate, msg)
 	return err
 }
+func (ch *Channel) PublishStruct(params PublishStruct) error {
+	return ch.Publish(params.Exchange, params.Key, params.Mandatory, params.Immediate, params.Msg)
+}
 
 /*
 PublishWithContext sends a Publishing from the client to an exchange on the server.
@@ -1405,6 +1452,10 @@ func (ch *Channel) PublishWithContext(ctx context.Context, exchange, key string,
 	return err
 }
 
+func (ch *Channel) PublishWithContextStruct(ctx context.Context, params PublishStruct) error {
+	return ch.PublishWithContext(ctx, params.Exchange, params.Key, params.Mandatory, params.Immediate, params.Msg)
+}
+
 /*
 PublishWithDeferredConfirm behaves identically to Publish but additionally returns a
 DeferredConfirmation, allowing the caller to wait on the publisher confirmation
@@ -1415,6 +1466,10 @@ Deprecated: Use PublishWithDeferredConfirmWithContext instead.
 */
 func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
 	return ch.PublishWithDeferredConfirmWithContext(context.Background(), exchange, key, mandatory, immediate, msg)
+}
+
+func (ch *Channel) PublishWithDeferredConfirmStruct(params PublishStruct) (*DeferredConfirmation, error) {
+	return ch.PublishWithDeferredConfirm(params.Exchange, params.Key, params.Mandatory, params.Immediate, params.Msg)
 }
 
 /*
@@ -1465,6 +1520,10 @@ func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, ex
 	}
 
 	return nil, nil
+}
+
+func (ch *Channel) PublishWithDeferredConfirmWithContextStruct(ctx context.Context, params PublishStruct) (*DeferredConfirmation, error) {
+	return ch.PublishWithDeferredConfirmWithContext(ctx, params.Exchange, params.Key, params.Mandatory, params.Immediate, params.Msg)
 }
 
 /*

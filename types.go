@@ -507,3 +507,64 @@ type bodyFrame struct {
 }
 
 func (f *bodyFrame) channel() uint16 { return f.ChannelId }
+
+// Declare with struct
+type QueueDeclareStruct struct {
+	Name                                   string
+	Durable, AutoDelete, Exclusive, NoWait bool
+	Args                                   Table
+}
+
+type QueueBindStruct struct {
+	Name, Key, Exchange string
+	NoWait              bool
+	Args                Table
+}
+
+type QueueUnbindStruct struct {
+	Name, Key, Exchange string
+	Args                Table
+}
+
+// For QueueDeclareStruct and QueueDeclareStructPassive
+type QueueDeleteStruct struct {
+	Name                      string
+	IfUnused, IfEmpty, NoWait bool
+}
+
+type ConsumeStruct struct {
+	Queue, Consumer                     string
+	AutoAck, Exclusive, NoLocal, NoWait bool
+	Args                                Table
+}
+
+// For ExchangeDeclareStruct and ExchangeDeclareStructPassive
+type ExchangeDeclareStruct struct {
+	Name, Kind                            string
+	Durable, AutoDelete, Internal, NoWait bool
+	Args                                  Table
+}
+
+type ExchangeDeleteStruct struct {
+	Name             string
+	IfUnused, NoWait bool
+}
+
+type ExchangeBindStruct struct {
+	Destination, Key, Source string
+	NoWait                   bool
+	Args                     Table
+}
+
+type ExchangeUnbindStruct struct {
+	Destination, Key, Source string
+	NoWait                   bool
+	Args                     Table
+}
+
+// For PublishStruct, PublishStructContext, PublishWithDeferredConfirm
+type PublishStruct struct {
+	Exchange, Key        string
+	Mandatory, Immediate bool
+	Msg                  Publishing
+}
