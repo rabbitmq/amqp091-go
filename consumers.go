@@ -75,6 +75,7 @@ func (subs *consumers) buffer(in chan *Delivery, out chan Delivery) {
 				}
 
 			case out <- *queue[0]:
+				queue[0] = nil // Make the memory recycle normally
 				queue = queue[1:]
 			}
 		}
