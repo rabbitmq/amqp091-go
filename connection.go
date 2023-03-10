@@ -399,6 +399,46 @@ func (c *Connection) Close() error {
 	)
 }
 
+// CloseDeadline requests and waits for the response to close this AMQP connection.
+//
+// Accepts a deadline for waiting the server response. The deadline is passed
+// to the low-level connection i.e. network socket.
+//
+// Regardless of the error returned, the connection is considered closed, and it
+// should not be used after calling this function.
+//
+// In the event of an I/O timeout, connection-closed listeners are NOT informed.
+//
+// After returning from this call, all resources associated with this connection,
+// including the underlying io, Channels, Notify listeners and Channel consumers
+// will also be closed.
+func (c *Connection) CloseDeadline(deadline time.Time) error {
+	if c.IsClosed() {
+		return ErrClosed
+	}
+
+	err := c.setDeadline(deadline)
+	if err != nil {
+		return err
+	}
+
+	err = c.call(
+		&connectionClose{
+			ReplyCode: replySuccess,
+			ReplyText: "kthxbai",
+		},
+		&connectionCloseOk{},
+	)
+
+	if err != nil {
+		c.shutdown(nil)
+		return err
+	}
+
+	c.shutdown(nil)
+	return nil
+}
+
 func (c *Connection) closeWith(err *Error) error {
 	if c.IsClosed() {
 		return ErrClosed
@@ -418,6 +458,42 @@ func (c *Connection) closeWith(err *Error) error {
 // is returned.
 func (c *Connection) IsClosed() bool {
 	return atomic.LoadInt32(&c.closed) == 1
+}
+
+// setDeadline is a wrapper to type assert Connection.conn and set an I/O
+// deadline in the underlying TCP connection socket, by calling
+// net.Conn.SetDeadline(). It returns an error, in case the type assertion fails,
+// although this should never happen.
+func (c *Connection) setDeadline(t time.Time) error {
+	con, ok := c.conn.(net.Conn)
+	if !ok {
+		return errInvalidTypeAssertion
+	}
+	return con.SetDeadline(t)
+}
+
+// setReadDeadline is a wrapper to type assert Connection.conn and set an I/O
+// deadline in the underlying TCP connection socket, by calling
+// net.Conn.SetReadDeadline(). It returns an error, in case the type assertion
+// fails, although this should never happen.
+func (c *Connection) setReadDeadline(t time.Time) error {
+	con, ok := c.conn.(net.Conn)
+	if !ok {
+		return errInvalidTypeAssertion
+	}
+	return con.SetReadDeadline(t)
+}
+
+// setWriteDeadline is a wrapper to type assert Connection.conn and set an I/O
+// deadline in the underlying TCP connection socket, by calling
+// net.Conn.WriteSetDeadline(). It returns an error, in case the type assertion
+// fails, although this should never happen.
+func (c *Connection) setWriteDeadline(t time.Time) error {
+	con, ok := c.conn.(net.Conn)
+	if !ok {
+		return errInvalidTypeAssertion
+	}
+	return con.SetWriteDeadline(t)
 }
 
 func (c *Connection) send(f frame) error {

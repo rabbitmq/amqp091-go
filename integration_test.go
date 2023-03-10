@@ -2023,7 +2023,7 @@ func integrationConnection(t *testing.T, name string) *Connection {
 		t.Fatalf("cannot dial integration server. Is the rabbitmq-server service running? %s", err)
 		return nil
 	}
-	return loggedConnection(t, conn, name)
+	return conn
 }
 
 // Returns a connection, channel and declares a queue when the AMQP_URL is in the environment
