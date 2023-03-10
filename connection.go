@@ -417,26 +417,20 @@ func (c *Connection) CloseDeadline(deadline time.Time) error {
 		return ErrClosed
 	}
 
+	defer c.shutdown(nil)
+
 	err := c.setDeadline(deadline)
 	if err != nil {
 		return err
 	}
 
-	err = c.call(
+	return c.call(
 		&connectionClose{
 			ReplyCode: replySuccess,
 			ReplyText: "kthxbai",
 		},
 		&connectionCloseOk{},
 	)
-
-	if err != nil {
-		c.shutdown(nil)
-		return err
-	}
-
-	c.shutdown(nil)
-	return nil
 }
 
 func (c *Connection) closeWith(err *Error) error {
@@ -445,6 +439,7 @@ func (c *Connection) closeWith(err *Error) error {
 	}
 
 	defer c.shutdown(err)
+
 	return c.call(
 		&connectionClose{
 			ReplyCode: uint16(err.Code),
