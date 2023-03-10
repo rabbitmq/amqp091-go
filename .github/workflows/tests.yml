@@ -49,4 +49,6 @@ jobs:
           go-version: ${{ matrix.go-version }}
           check-latest: true
       - name: Tests
+        env:
+          RABBITMQ_RABBITMQCTL_PATH: DOCKER:${{ job.services.rabbitmq.id }}
         run: make check-fmt tests
