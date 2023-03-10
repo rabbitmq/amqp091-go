@@ -2008,13 +2008,6 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
  * Support for integration tests
  */
 
-func loggedConnection(t *testing.T, conn *Connection, name string) *Connection {
-	if name != "" {
-		conn.conn = &logIO{t, name, conn.conn}
-	}
-	return conn
-}
-
 // Returns a connection to the AMQP if the AMQP_URL environment
 // variable is set and a connection can be established.
 func integrationConnection(t *testing.T, name string) *Connection {
