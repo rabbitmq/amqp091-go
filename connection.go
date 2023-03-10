@@ -472,30 +472,6 @@ func (c *Connection) setDeadline(t time.Time) error {
 	return con.SetDeadline(t)
 }
 
-// setReadDeadline is a wrapper to type assert Connection.conn and set an I/O
-// deadline in the underlying TCP connection socket, by calling
-// net.Conn.SetReadDeadline(). It returns an error, in case the type assertion
-// fails, although this should never happen.
-func (c *Connection) setReadDeadline(t time.Time) error {
-	con, ok := c.conn.(net.Conn)
-	if !ok {
-		return errInvalidTypeAssertion
-	}
-	return con.SetReadDeadline(t)
-}
-
-// setWriteDeadline is a wrapper to type assert Connection.conn and set an I/O
-// deadline in the underlying TCP connection socket, by calling
-// net.Conn.WriteSetDeadline(). It returns an error, in case the type assertion
-// fails, although this should never happen.
-func (c *Connection) setWriteDeadline(t time.Time) error {
-	con, ok := c.conn.(net.Conn)
-	if !ok {
-		return errInvalidTypeAssertion
-	}
-	return con.SetWriteDeadline(t)
-}
-
 func (c *Connection) send(f frame) error {
 	if c.IsClosed() {
 		return ErrClosed
