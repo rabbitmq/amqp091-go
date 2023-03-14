@@ -9,13 +9,19 @@
 package amqp091
 
 import (
+	"context"
 	"crypto/tls"
 	"net"
+	"os"
+	"os/exec"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+const rabbitmqctlEnvKey = "RABBITMQ_RABBITMQCTL_PATH"
 
 func TestRequiredServerLocale(t *testing.T) {
 	conn := integrationConnection(t, "AMQP 0-9-1 required server locale")
@@ -331,4 +337,57 @@ func TestNewConnectionProperties_HasDefaultProperties(t *testing.T) {
 	if !semverRegexp.MatchString(version) {
 		t.Fatalf("Version in NewConnectionProperties is not a valid semver value: %s", version)
 	}
+}
+
+// Connection and channels should be closeable when a memory alarm is active.
+// https://github.com/rabbitmq/amqp091-go/issues/178
+func TestConnection_Close_WhenMemoryAlarmIsActive(t *testing.T) {
+	err := rabbitmqctl(t, "set_vm_memory_high_watermark", "0.0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = rabbitmqctl(t, "set_vm_memory_high_watermark", "0.4")
+		conn, ch := integrationQueue(t, t.Name())
+		integrationQueueDelete(t, ch, t.Name())
+		_ = ch.Close()
+		_ = conn.Close()
+	})
+
+	conn, ch := integrationQueue(t, t.Name())
+
+	go func() {
+		// simulate a producer
+		// required to block the connection
+		_ = ch.PublishWithContext(context.Background(), "", t.Name(), false, false, Publishing{
+			Body: []byte("this is a test"),
+		})
+	}()
+	<-time.After(time.Second * 1)
+
+	err = conn.CloseDeadline(time.Now().Add(time.Second * 2))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !conn.IsClosed() {
+		t.Fatal("expected connection to be closed")
+	}
+}
+
+func rabbitmqctl(t *testing.T, args ...string) error {
+	rabbitmqctlPath, found := os.LookupEnv(rabbitmqctlEnvKey)
+	if !found {
+		t.Skipf("variable for %s for rabbitmqctl not found, skipping", rabbitmqctlEnvKey)
+	}
+
+	var cmd *exec.Cmd
+	if strings.HasPrefix(rabbitmqctlPath, "DOCKER:") {
+		containerName := strings.Split(rabbitmqctlPath, ":")[1]
+		cmd = exec.Command("docker", "exec", containerName, "rabbitmqctl")
+		cmd.Args = append(cmd.Args, args...)
+	} else {
+		cmd = exec.Command(rabbitmqctlPath, args...)
+	}
+
+	return cmd.Run()
 }
