@@ -47,6 +47,15 @@ func (c *confirms) Publish() *DeferredConfirmation {
 	return c.deferredConfirmations.Add(c.published)
 }
 
+// unpublish decrements the publishing counter and removes the
+// DeferredConfirmation. It must be called immediately after a publish fails.
+func (c *confirms) unpublish() {
+	c.publishedMut.Lock()
+	defer c.publishedMut.Unlock()
+	c.deferredConfirmations.remove(c.published)
+	c.published--
+}
+
 // confirm confirms one publishing, increments the expecting delivery tag, and
 // removes bookkeeping for that delivery tag.
 func (c *confirms) confirm(confirmation Confirmation) {
@@ -133,6 +142,18 @@ func (d *deferredConfirmations) Add(tag uint64) *DeferredConfirmation {
 	dc.done = make(chan struct{})
 	d.confirmations[tag] = dc
 	return dc
+}
+
+// remove is only used to drop a tag whose publish failed
+func (d *deferredConfirmations) remove(tag uint64) {
+	d.m.Lock()
+	defer d.m.Unlock()
+	dc, found := d.confirmations[tag]
+	if !found {
+		return
+	}
+	close(dc.done)
+	delete(d.confirmations, tag)
 }
 
 func (d *deferredConfirmations) Confirm(confirmation Confirmation) {
