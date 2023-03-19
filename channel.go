@@ -1437,7 +1437,7 @@ func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, ex
 
 	var dc *DeferredConfirmation
 	if ch.confirming {
-		dc = ch.confirms.Publish()
+		dc = ch.confirms.publish()
 	}
 
 	if err := ch.send(&basicPublish{

@@ -39,7 +39,7 @@ func (c *confirms) Listen(l chan Confirmation) {
 }
 
 // Publish increments the publishing counter
-func (c *confirms) Publish() *DeferredConfirmation {
+func (c *confirms) publish() *DeferredConfirmation {
 	c.publishedMut.Lock()
 	defer c.publishedMut.Unlock()
 
