@@ -26,7 +26,7 @@ func TestConfirmOneResequences(t *testing.T) {
 	c.Listen(l)
 
 	for i := range fixtures {
-		if want, got := uint64(i+1), c.Publish(); want != got.DeliveryTag {
+		if want, got := uint64(i+1), c.publish(); want != got.DeliveryTag {
 			t.Fatalf("expected publish to return the 1 based delivery tag published, want: %d, got: %d", want, got.DeliveryTag)
 		}
 	}
@@ -64,7 +64,7 @@ func TestConfirmAndPublishDoNotDeadlock(t *testing.T) {
 	}()
 
 	for i := 0; i < iterations; i++ {
-		c.Publish()
+		c.publish()
 		<-l
 	}
 }
@@ -82,7 +82,7 @@ func TestConfirmMixedResequences(t *testing.T) {
 	c.Listen(l)
 
 	for range fixtures {
-		c.Publish()
+		c.publish()
 	}
 
 	c.One(fixtures[0])
@@ -117,7 +117,7 @@ func TestConfirmMultipleResequences(t *testing.T) {
 	c.Listen(l)
 
 	for range fixtures {
-		c.Publish()
+		c.publish()
 	}
 
 	c.Multiple(fixtures[len(fixtures)-1])
@@ -141,7 +141,7 @@ func BenchmarkSequentialBufferedConfirms(t *testing.B) {
 		if i > cap(l)-1 {
 			<-l
 		}
-		c.One(Confirmation{c.Publish().DeliveryTag, true})
+		c.One(Confirmation{c.publish().DeliveryTag, true})
 	}
 }
 
@@ -159,7 +159,7 @@ func TestConfirmsIsThreadSafe(t *testing.T) {
 	c.Listen(l)
 
 	for i := 0; i < count; i++ {
-		go func() { pub <- Confirmation{c.Publish().DeliveryTag, true} }()
+		go func() { pub <- Confirmation{c.publish().DeliveryTag, true} }()
 	}
 
 	for i := 0; i < count; i++ {
