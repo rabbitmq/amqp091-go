@@ -204,6 +204,9 @@ func (client *Client) handleReInit(conn *amqp.Connection) bool {
 			select {
 			case <-client.done:
 				return true
+			case <-client.notifyConnClose:
+				client.logger.Println("Connection closed. Reconnecting...")
+				return false
 			case <-time.After(reInitDelay):
 			}
 			continue
