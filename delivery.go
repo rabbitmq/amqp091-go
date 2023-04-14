@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var errDeliveryNotInitialized = errors.New("delivery not initialized")
+var ErrDeliveryNotInitialized = errors.New("delivery not initialized")
 
 // Acknowledger notifies the server of successful or failed consumption of
 // deliveries via identifier found in the Delivery.DeliveryTag field.
@@ -122,7 +122,7 @@ delivery that is not automatically acknowledged.
 */
 func (d Delivery) Ack(multiple bool) error {
 	if d.Acknowledger == nil {
-		return errDeliveryNotInitialized
+		return ErrDeliveryNotInitialized
 	}
 	return d.Acknowledger.Ack(d.DeliveryTag, multiple)
 }
@@ -142,7 +142,7 @@ delivery that is not automatically acknowledged.
 */
 func (d Delivery) Reject(requeue bool) error {
 	if d.Acknowledger == nil {
-		return errDeliveryNotInitialized
+		return ErrDeliveryNotInitialized
 	}
 	return d.Acknowledger.Reject(d.DeliveryTag, requeue)
 }
@@ -167,7 +167,7 @@ delivery that is not automatically acknowledged.
 */
 func (d Delivery) Nack(multiple, requeue bool) error {
 	if d.Acknowledger == nil {
-		return errDeliveryNotInitialized
+		return ErrDeliveryNotInitialized
 	}
 	return d.Acknowledger.Nack(d.DeliveryTag, multiple, requeue)
 }
