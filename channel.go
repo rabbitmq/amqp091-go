@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"sync"
 	"sync/atomic"
+
+	"go.opentelemetry.io/otel"
 )
 
 // 0      1         3             7                  size+7 size+8
@@ -1427,6 +1429,8 @@ func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, ex
 	if ctx == nil {
 		return nil, errors.New("amqp091-go: nil Context")
 	}
+
+	otel.GetTextMapPropagator().Inject(ctx, &msg)
 
 	if err := msg.Headers.Validate(); err != nil {
 		return nil, err
