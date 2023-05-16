@@ -1191,7 +1191,7 @@ func (ch *Channel) ConsumeWithContext(ctx context.Context, queue, consumer strin
 			return
 		case <-ctx.Done():
 			if ch != nil {
-				ch.Cancel(consumer, false)
+				_ = ch.Cancel(consumer, false)
 			}
 		}
 	}()
