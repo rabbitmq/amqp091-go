@@ -1089,8 +1089,6 @@ be dropped.
 
 When the consumer tag is cancelled, all inflight messages will be delivered until
 the returned chan is closed.
-
-Deprecated: Use ConsumeWithContext instead.
 */
 func (ch *Channel) Consume(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args Table) (<-chan Delivery, error) {
 	return ch.ConsumeWithContext(context.Background(), queue, consumer, autoAck, exclusive, noLocal, noWait, args)
@@ -1099,58 +1097,9 @@ func (ch *Channel) Consume(queue, consumer string, autoAck, exclusive, noLocal, 
 /*
 ConsumeWithContext immediately starts delivering queued messages.
 
-Begin receiving on the returned chan Delivery before any other operation on the
-Connection or Channel.
-
-Continues deliveries to the returned chan Delivery until Channel.Cancel,
-Connection.Close, Channel.Close, or an AMQP exception occurs.  Consumers must
-range over the chan to ensure all deliveries are received.  Unreceived
-deliveries will block all methods on the same connection.
-
-All deliveries in AMQP must be acknowledged.  It is expected of the consumer to
-call Delivery.Ack after it has successfully processed the delivery.  If the
-consumer is cancelled or the channel or connection is closed any unacknowledged
-deliveries will be requeued at the end of the same queue.
-
-The consumer is identified by a string that is unique and scoped for all
-consumers on this channel.  If you wish to eventually cancel the consumer, use
-the same non-empty identifier in Channel.Cancel.  An empty string will cause
-the library to generate a unique identity.  The consumer identity will be
-included in every Delivery in the ConsumerTag field
-
-When autoAck (also known as noAck) is true, the server will acknowledge
-deliveries to this consumer prior to writing the delivery to the network.  When
-autoAck is true, the consumer should not call Delivery.Ack. Automatically
-acknowledging deliveries means that some deliveries may get lost if the
-consumer is unable to process them after the server delivers them.
-See http://www.rabbitmq.com/confirms.html for more details.
-
-When exclusive is true, the server will ensure that this is the sole consumer
-from this queue. When exclusive is false, the server will fairly distribute
-deliveries across multiple consumers.
-
-The noLocal flag is not supported by RabbitMQ.
-
-It's advisable to use separate connections for
-Channel.Publish and Channel.Consume so not to have TCP pushback on publishing
-affect the ability to consume messages, so this parameter is here mostly for
-completeness.
-
-When noWait is true, do not wait for the server to confirm the request and
-immediately begin deliveries.  If it is not possible to consume, a channel
-exception will be raised and the channel will be closed.
-
-Optional arguments can be provided that have specific semantics for the queue
-or server.
-
-Inflight messages, limited by Channel.Qos will be buffered until received from
-the returned chan.
-
-When the Channel or Connection is closed, all buffered and inflight messages will
-be dropped.
-
-When the consumer tag is cancelled, all inflight messages will be delivered until
-the returned chan is closed.
+This is similar to Consume() function but has different semantics.
+The caller can cancel via the given context, then call ch.Cancel() and stop
+receiving messages.
 */
 func (ch *Channel) ConsumeWithContext(ctx context.Context, queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args Table) (<-chan Delivery, error) {
 	// When we return from ch.call, there may be a delivery already for the
