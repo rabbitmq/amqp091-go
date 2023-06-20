@@ -254,6 +254,8 @@ const (
 	QueueTTLArg                  = "x-expires"
 	StreamMaxAgeArg              = "x-max-age"
 	StreamMaxSegmentSizeBytesArg = "x-stream-max-segment-size-bytes"
+	// QueueVersionArg declares the Classic Queue version to use. Expects an integer, either 1 or 2.
+	QueueVersionArg = "x-queue-version"
 )
 
 // Values for queue arguments. Use as values for queue arguments during queue declaration.

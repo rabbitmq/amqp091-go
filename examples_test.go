@@ -539,3 +539,19 @@ func ExampleChannel_QueueDeclare_stream() {
 	)
 	log.Printf("Declared queue: %s", q.Name)
 }
+
+func ExampleChannel_QueueDeclare_classicQueueV2() {
+	conn, _ := amqp.Dial("amqp://localhost")
+	ch, _ := conn.Channel()
+	q, _ := ch.QueueDeclare(
+		"my-classic-queue-v2", // queue name
+		true,                  // durable
+		false,                 // auto-delete
+		false,                 // exclusive
+		false,                 // noWait
+		amqp.Table{
+			amqp.QueueVersionArg: 2,
+		},
+	)
+	log.Printf("Declared Classic Queue v2: %s", q.Name)
+}
