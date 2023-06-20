@@ -1091,6 +1091,17 @@ When the consumer tag is cancelled, all inflight messages will be delivered unti
 the returned chan is closed.
 */
 func (ch *Channel) Consume(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args Table) (<-chan Delivery, error) {
+	return ch.ConsumeWithContext(context.Background(), queue, consumer, autoAck, exclusive, noLocal, noWait, args)
+}
+
+/*
+ConsumeWithContext immediately starts delivering queued messages.
+
+This is similar to Consume() function but has different semantics.
+The caller can cancel via the given context, then call ch.Cancel() and stop
+receiving messages.
+*/
+func (ch *Channel) ConsumeWithContext(ctx context.Context, queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args Table) (<-chan Delivery, error) {
 	// When we return from ch.call, there may be a delivery already for the
 	// consumer that hasn't been added to the consumer hash yet.  Because of
 	// this, we never rely on the server picking a consumer tag for us.
@@ -1122,6 +1133,17 @@ func (ch *Channel) Consume(queue, consumer string, autoAck, exclusive, noLocal, 
 		ch.consumers.cancel(consumer)
 		return nil, err
 	}
+
+	go func() {
+		select {
+		case <-ch.consumers.closed:
+			return
+		case <-ctx.Done():
+			if ch != nil {
+				_ = ch.Cancel(consumer, false)
+			}
+		}
+	}()
 
 	return deliveries, nil
 }

@@ -10,6 +10,7 @@ package amqp091
 
 import (
 	"bytes"
+	"context"
 	devrand "crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -803,6 +804,49 @@ func TestIntegrationConsumeCancel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("error cancelling the consumer: %v", err)
 		}
+
+		if e := ch.Publish("", queue, false, false, Publishing{Body: []byte("2")}); e != nil {
+			t.Fatalf("error publishing: %v", e)
+		}
+
+		select {
+		case <-time.After(100 * time.Millisecond):
+			t.Fatalf("Timeout on Close")
+		case _, ok := <-messages:
+			if ok {
+				t.Fatalf("Extra message on consumer when consumer should have been closed")
+			}
+		}
+	}
+}
+
+func TestIntegrationConsumeCancelWithContext(t *testing.T) {
+	queue := "test.integration.consume-cancel-with-context"
+
+	c := integrationConnection(t, "pub")
+
+	if c != nil {
+		defer c.Close()
+
+		ch, _ := c.Channel()
+
+		if _, e := ch.QueueDeclare(queue, false, true, false, false, nil); e != nil {
+			t.Fatalf("error declaring queue %s: %v", queue, e)
+		}
+
+		defer integrationQueueDelete(t, ch, queue)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		messages, _ := ch.ConsumeWithContext(ctx, queue, "integration-tag-with-context", false, false, false, false, nil)
+
+		if e := ch.Publish("", queue, false, false, Publishing{Body: []byte("1")}); e != nil {
+			t.Fatalf("error publishing: %v", e)
+		}
+
+		assertConsumeBody(t, messages, []byte("1"))
+
+		cancel()
+		<-time.After(100 * time.Millisecond) // wait to call cancel asynchronously
 
 		if e := ch.Publish("", queue, false, false, Publishing{Body: []byte("2")}); e != nil {
 			t.Fatalf("error publishing: %v", e)
