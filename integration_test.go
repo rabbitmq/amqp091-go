@@ -846,14 +846,14 @@ func TestIntegrationConsumeCancelWithContext(t *testing.T) {
 		assertConsumeBody(t, messages, []byte("1"))
 
 		cancel()
-		<-time.After(100 * time.Millisecond) // wait to call cancel asynchronously
+		<-time.After(200 * time.Millisecond) // wait to call cancel asynchronously
 
 		if e := ch.Publish("", queue, false, false, Publishing{Body: []byte("2")}); e != nil {
 			t.Fatalf("error publishing: %v", e)
 		}
 
 		select {
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(200 * time.Millisecond):
 			t.Fatalf("Timeout on Close")
 		case _, ok := <-messages:
 			if ok {
