@@ -532,9 +532,9 @@ func ExampleChannel_QueueDeclare_stream() {
 		false,             // noWait
 		amqp.Table{ // queue args
 			amqp.QueueTypeArg:                 amqp.QueueTypeStream,
-			amqp.StreamMaxLenBytesArg:         5_000_000_000, // 5 Gb
-			amqp.StreamMaxSegmentSizeBytesArg: 500_000_000,   // 500 Mb
-			amqp.StreamMaxAgeArg:              "3D",          // 3 days
+			amqp.StreamMaxLenBytesArg:         int64(5_000_000_000), // 5 Gb
+			amqp.StreamMaxSegmentSizeBytesArg: 500_000_000,          // 500 Mb
+			amqp.StreamMaxAgeArg:              "3D",                 // 3 days
 		},
 	)
 	log.Printf("Declared queue: %s", q.Name)
