@@ -550,7 +550,26 @@ func ExampleChannel_QueueDeclare_classicQueueV2() {
 		false,                 // exclusive
 		false,                 // noWait
 		amqp.Table{
+			amqp.QueueTypeArg:    amqp.QueueTypeClassic,
 			amqp.QueueVersionArg: 2,
+		},
+	)
+	log.Printf("Declared Classic Queue v2: %s", q.Name)
+}
+
+func ExampleChannel_QueueDeclare_consumerTimeout() {
+	conn, _ := amqp.Dial("amqp://localhost")
+	ch, _ := conn.Channel()
+	// this works only with RabbitMQ 3.12+
+	q, _ := ch.QueueDeclare(
+		"my-classic-queue-v2", // queue name
+		true,                  // durable
+		false,                 // auto-delete
+		false,                 // exclusive
+		false,                 // noWait
+		amqp.Table{
+			amqp.QueueTypeArg:       amqp.QueueTypeQuorum, // also works with classic queues
+			amqp.ConsumerTimeoutArg: 600_000,              // 10 minute consumer timeout
 		},
 	)
 	log.Printf("Declared Classic Queue v2: %s", q.Name)
