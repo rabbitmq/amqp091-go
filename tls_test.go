@@ -66,7 +66,7 @@ func (s *tlsServer) Serve(t *testing.T) {
 }
 
 func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
-	l, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
+	l, err := tls.Listen("tcp", "127.0.0.1:3456", cfg)
 	if err != nil {
 		t.Fatalf("TLS server Listen error: %+v", err)
 	}
@@ -105,6 +105,7 @@ func TestTLSHandshake(t *testing.T) {
 		c, err := DialTLS(srv.URL, tlsClientConfig(t))
 		if err != nil {
 			errs <- fmt.Errorf("expected to open a TLS connection, got err: %v", err)
+			return
 		}
 		defer c.Close()
 
