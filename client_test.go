@@ -7,6 +7,7 @@ package amqp091
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"reflect"
 	"testing"
@@ -484,16 +485,16 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 
 	go func() {
 		var e error
-		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 1")}); e != nil {
+		if e = ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub 1")}); e != nil {
 			t.Errorf("publish error: %v", err)
 		}
-		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 2")}); e != nil {
+		if e = ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub 2")}); e != nil {
 			t.Errorf("publish error: %v", err)
 		}
-		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 3")}); e != nil {
+		if e = ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub 3")}); e != nil {
 			t.Errorf("publish error: %v", err)
 		}
-		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 4")}); e != nil {
+		if e = ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub 4")}); e != nil {
 			t.Errorf("publish error: %v", err)
 		}
 	}()
@@ -507,16 +508,16 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 
 	go func() {
 		var e error
-		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 5")}); e != nil {
+		if e = ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub 5")}); e != nil {
 			t.Errorf("publish error: %v", err)
 		}
-		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 6")}); e != nil {
+		if e = ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub 6")}); e != nil {
 			t.Errorf("publish error: %v", err)
 		}
-		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 7")}); e != nil {
+		if e = ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub 7")}); e != nil {
 			t.Errorf("publish error: %v", err)
 		}
-		if e = ch.Publish("", "q", false, false, Publishing{Body: []byte("pub 8")}); e != nil {
+		if e = ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub 8")}); e != nil {
 			t.Errorf("publish error: %v", err)
 		}
 	}()
@@ -563,7 +564,7 @@ func TestDeferredConfirmations(t *testing.T) {
 
 	var results []*DeferredConfirmation
 	for i := 1; i < 5; i++ {
-		dc, err := ch.PublishWithDeferredConfirm("", "q", false, false, Publishing{Body: []byte("pub")})
+		dc, err := ch.PublishWithDeferredConfirmWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub")})
 		if err != nil {
 			t.Fatalf("failed to PublishWithDeferredConfirm: %v", err)
 		}
@@ -732,7 +733,7 @@ func TestPublishBodySliceIssue74(t *testing.T) {
 
 	for i := 0; i < publishings; i++ {
 		go func(ii int) {
-			if err := ch.Publish("", "q", false, false, Publishing{Body: base[0:ii]}); err != nil {
+			if err := ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: base[0:ii]}); err != nil {
 				t.Errorf("publish error: %v", err)
 			}
 		}(i)
@@ -780,7 +781,7 @@ func TestPublishZeroFrameSizeIssue161(t *testing.T) {
 
 	for i := 0; i < publishings; i++ {
 		go func() {
-			if err := ch.Publish("", "q", false, false, Publishing{Body: []byte("anything")}); err != nil {
+			if err := ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("anything")}); err != nil {
 				t.Errorf("publish error: %v", err)
 			}
 		}()
@@ -813,7 +814,7 @@ func TestPublishAndShutdownDeadlockIssue84(t *testing.T) {
 
 	defer time.AfterFunc(500*time.Millisecond, func() { t.Fatalf("Publish deadlock") }).Stop()
 	for {
-		if err := ch.Publish("exchange", "q", false, false, Publishing{Body: []byte("test")}); err != nil {
+		if err := ch.PublishWithContext(context.TODO(), "exchange", "q", false, false, Publishing{Body: []byte("test")}); err != nil {
 			t.Log("successfully caught disconnect error", err)
 			return
 		}
