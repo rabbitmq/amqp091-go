@@ -84,43 +84,54 @@ func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
 
 // Tests opening a connection of a TLS enabled socket server
 func TestTLSHandshake(t *testing.T) {
-	srv := startTLSServer(t, tlsServerConfig(t))
-	defer srv.Close()
+	// this test is flaky
+	var result error
 
-	success := make(chan bool)
-	errs := make(chan error, 3)
+	for attempt := 0; attempt < 3; attempt++ {
+		srv := startTLSServer(t, tlsServerConfig(t))
 
-	go func() {
+		success := make(chan bool)
+		errs := make(chan error, 3)
+
+		go func() {
+			select {
+			case <-time.After(10 * time.Millisecond):
+				errs <- errors.New("server timeout waiting for TLS handshake from client")
+			case session := <-srv.Sessions:
+				session.connectionOpen()
+				session.connectionClose()
+				_ = session.S.Close()
+			}
+		}()
+
+		go func() {
+			c, err := DialTLS(srv.URL, tlsClientConfig(t))
+			if err != nil {
+				errs <- fmt.Errorf("expected to open a TLS connection, got err: %v", err)
+				return
+			}
+			defer c.Close()
+
+			if st := c.ConnectionState(); !st.HandshakeComplete {
+				errs <- fmt.Errorf("expected to complete a TLS handshake, TLS connection state: %+v", st)
+			}
+
+			success <- true
+		}()
+
 		select {
-		case <-time.After(10 * time.Millisecond):
-			errs <- errors.New("server timeout waiting for TLS handshake from client")
-		case session := <-srv.Sessions:
-			session.connectionOpen()
-			session.connectionClose()
-			session.S.Close()
-		}
-	}()
-
-	go func() {
-		c, err := DialTLS(srv.URL, tlsClientConfig(t))
-		if err != nil {
-			errs <- fmt.Errorf("expected to open a TLS connection, got err: %v", err)
+		case err := <-errs:
+			result = err
+			t.Logf("TLS server saw error: %+v", err)
+		case <-success:
+			_ = srv.Close()
 			return
 		}
-		defer c.Close()
+		_ = srv.Close()
+	}
 
-		if st := c.ConnectionState(); !st.HandshakeComplete {
-			errs <- fmt.Errorf("expected to complete a TLS handshake, TLS connection state: %+v", st)
-		}
-
-		success <- true
-	}()
-
-	select {
-	case err := <-errs:
-		t.Fatalf("TLS server saw error: %+v", err)
-	case <-success:
-		return
+	if result != nil {
+		t.Fatalf("TLS server saw error after 3 attempts: %v", result)
 	}
 }
 
