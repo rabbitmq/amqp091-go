@@ -6,6 +6,7 @@
 package amqp091
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -28,4 +29,16 @@ func TestGoFuzzCrashers(t *testing.T) {
 			t.Errorf("%d. frame is not nil: %#v err = %v", idx, frame, err)
 		}
 	}
+}
+
+func FuzzReadFrame(f *testing.F) {
+
+	f.Add([]byte("\b000000"))
+	f.Add([]byte("\x02\x16\x10�[��\t\xbdui�" + "\x10\x01\x00\xff\xbf\xef\xbfｻn\x99\x00\x10r"))
+	f.Add([]byte("\x0300\x00\x00\x00\x040000"))
+
+	f.Fuzz(func(t *testing.T, input_data []byte) {
+		r := reader{bytes.NewReader(input_data)}
+		_, _ = r.ReadFrame()
+	})
 }
