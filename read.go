@@ -114,6 +114,12 @@ func readLongstr(r io.Reader) (v string, err error) {
 		return
 	}
 
+	// LRB TODO obviously this is not realistic
+	if length > 65536 {
+		err = ErrMsgSize
+		return
+	}
+
 	bytes := make([]byte, length)
 	if _, err = io.ReadFull(r, bytes); err != nil {
 		return
