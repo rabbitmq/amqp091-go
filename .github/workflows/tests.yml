@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        go-version: ['1.19', '1.20']
+        go-version: ['oldstable', 'stable']
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v3
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.19', '1.20']
+        go-version: ['oldstable', 'stable']
     services:
       rabbitmq:
         image: rabbitmq
