@@ -640,9 +640,12 @@ func (c *Connection) dispatch0(f frame) {
 		// kthx - all reads reset our deadline.  so we can drop this
 	default:
 		// lolwat - channel0 only responds to methods and heartbeats
-		if err := c.closeWith(ErrUnexpectedFrame); err != nil {
-			Logger.Printf("error sending connectionCloseOk with ErrUnexpectedFrame, error: %+v", err)
-		}
+		// closeWith use call don't block reader
+		go func() {
+			if err := c.closeWith(ErrUnexpectedFrame); err != nil {
+				Logger.Printf("error sending connectionCloseOk with ErrUnexpectedFrame, error: %+v", err)
+			}
+		}()
 	}
 }
 
@@ -689,9 +692,12 @@ func (c *Connection) dispatchClosed(f frame) {
 			// we are already closed, so do nothing
 		default:
 			// unexpected method on closed channel
-			if err := c.closeWith(ErrClosed); err != nil {
-				Logger.Printf("error sending connectionCloseOk with ErrClosed, error: %+v", err)
-			}
+			// closeWith use call don't block reader
+			go func() {
+				if err := c.closeWith(ErrClosed); err != nil {
+					Logger.Printf("error sending connectionCloseOk with ErrClosed, error: %+v", err)
+				}
+			}()
 		}
 	}
 }
@@ -866,13 +872,14 @@ func (c *Connection) call(req message, res ...message) error {
 		}
 	}
 
-	msg, ok := <-c.rpc
-	if !ok {
-		err, errorsChanIsOpen := <-c.errors
-		if !errorsChanIsOpen {
-			return ErrClosed
+	var msg message
+	select {
+	case e, ok := <-c.errors:
+		if ok {
+			return e
 		}
-		return err
+		return ErrClosed
+	case msg = <-c.rpc:
 	}
 
 	// Try to match one of the result types
