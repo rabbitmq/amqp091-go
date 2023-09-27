@@ -813,13 +813,16 @@ func (c *Connection) allocateChannel() (*Channel, error) {
 
 // releaseChannel removes a channel from the registry as the final part of the
 // channel lifecycle
-func (c *Connection) releaseChannel(id uint16) {
+func (c *Connection) releaseChannel(ch *Channel) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
 	if !c.IsClosed() {
-		delete(c.channels, id)
-		c.allocator.release(int(id))
+		got, ok := c.channels[ch.id]
+		if ok && got == ch {
+			delete(c.channels, ch.id)
+			c.allocator.release(int(ch.id))
+		}
 	}
 }
 
@@ -831,7 +834,7 @@ func (c *Connection) openChannel() (*Channel, error) {
 	}
 
 	if err := ch.open(); err != nil {
-		c.releaseChannel(ch.id)
+		c.releaseChannel(ch)
 		return nil, err
 	}
 	return ch, nil
@@ -842,7 +845,7 @@ func (c *Connection) openChannel() (*Channel, error) {
 // this connection.
 func (c *Connection) closeChannel(ch *Channel, e *Error) {
 	ch.shutdown(e)
-	c.releaseChannel(ch.id)
+	c.releaseChannel(ch)
 }
 
 /*

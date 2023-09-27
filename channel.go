@@ -468,6 +468,10 @@ code set to '200'.
 It is safe to call this method multiple times.
 */
 func (ch *Channel) Close() error {
+	if ch.IsClosed() {
+		return nil
+	}
+
 	defer ch.connection.closeChannel(ch, nil)
 	return ch.call(
 		&channelClose{ReplyCode: replySuccess},
