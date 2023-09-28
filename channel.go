@@ -41,6 +41,7 @@ type Channel struct {
 
 	// closed is set to 1 when the channel has been closed - see Channel.send()
 	closed int32
+	close  chan struct{}
 
 	// true when we will never notify again
 	noNotify bool
@@ -86,6 +87,7 @@ func newChannel(c *Connection, id uint16) *Channel {
 		confirms:   newConfirms(),
 		recv:       (*Channel).recvMethod,
 		errors:     make(chan *Error, 1),
+		close:      make(chan struct{}),
 	}
 }
 
@@ -146,6 +148,7 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 
 		close(ch.errors)
+		close(ch.close)
 		ch.noNotify = true
 	})
 }
@@ -368,7 +371,11 @@ func (ch *Channel) dispatch(msg message) {
 		// deliveries are in flight and a no-wait cancel has happened
 
 	default:
-		ch.rpc <- msg
+		select {
+		case <-ch.close:
+			return
+		case ch.rpc <- msg:
+		}
 	}
 }
 

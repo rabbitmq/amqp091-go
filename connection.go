@@ -112,6 +112,8 @@ type Connection struct {
 	blocks   []chan Blocking
 
 	errors chan *Error
+	// if connection is closed should close this chan
+	close chan struct{}
 
 	Config Config // The negotiated Config after connection.open
 
@@ -263,6 +265,7 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 		rpc:       make(chan message),
 		sends:     make(chan time.Time),
 		errors:    make(chan *Error, 1),
+		close:     make(chan struct{}),
 		deadlines: make(chan readDeadliner, 1),
 	}
 	go c.reader(conn)
@@ -597,6 +600,8 @@ func (c *Connection) shutdown(err *Error) {
 		}
 
 		c.conn.Close()
+		// reader exit
+		close(c.close)
 
 		c.channels = nil
 		c.allocator = nil
@@ -634,7 +639,12 @@ func (c *Connection) dispatch0(f frame) {
 				c <- Blocking{Active: false}
 			}
 		default:
-			c.rpc <- m
+			select {
+			case <-c.close:
+				return
+			case c.rpc <- m:
+			}
+
 		}
 	case *heartbeatFrame:
 		// kthx - all reads reset our deadline.  so we can drop this
