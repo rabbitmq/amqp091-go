@@ -144,14 +144,14 @@ const (
 	flagReserved1       = 0x0004
 )
 
-// Expiration. These constants should be used to set a messages expiration TTL.
+// Expiration. These constants can be used to set a messages expiration TTL.
 // They should be viewed as a clarification of the expiration functionality in
 // messages and their usage is not enforced by this pkg.
 //
-// The server requires a string value that is interpreted as milliseconds. If
-// no value is set, which translates to the nil value of string, the message
-// will never expire by itself. This does not influence queue configured TTL
-// configurations.
+// The server requires a string value that is interpreted by the server as
+// milliseconds. If no value is set, which translates to the nil value of
+// string, the message will never expire by itself. This does not influence queue
+// configured TTL configurations.
 const (
 	NeverExpire       string = ""  // empty value means never expire
 	ImmediatelyExpire string = "0" // 0 means immediately expire
@@ -185,9 +185,9 @@ type Publishing struct {
 	// indicates that the message will immediately expire if the message arrives
 	// at its destination and the message is not directly handled by a consumer
 	// that currently has the capacatity to do so. If you wish the message to
-	// not expire on its own, set this value to empty string or use the
-	// corresponding constant NeverExpire. This does not influence queue
-	// configured TTL values.
+	// not expire on its own, set this value to any ttl value, empty string or
+	// use the corresponding constants NeverExpire and ImmediatelyExpire. This
+	// does not influence queue configured TTL values.
 	Expiration string
 	MessageId  string    // message identifier
 	Timestamp  time.Time // message timestamp
