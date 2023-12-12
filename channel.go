@@ -505,7 +505,7 @@ graceful close, no error will be sent.
 In case of a non graceful close the error will be notified synchronously by the library
 so that it will be necessary to consume the Channel from the caller in order to avoid deadlocks
 */
-func (ch *Channel) NotifyClose(c chan *Error) chan *Error {
+func (ch *Channel) NotifyClose(c chan *Error, middlewares ...NotifyMiddlewares) chan *Error {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
@@ -513,6 +513,22 @@ func (ch *Channel) NotifyClose(c chan *Error) chan *Error {
 		close(c)
 	} else {
 		ch.closes = append(ch.closes, c)
+	}
+
+	if len(middlewares) > 0 {
+		sc := &SubChannel{
+			connection: ch.connection,
+			rpc:        ch.rpc,
+			consumers:  ch.consumers,
+			id:         ch.id,
+			errors:     ch.errors,
+			message:    ch.message,
+			header:     ch.header,
+			body:       ch.body,
+		}
+		for _, middleware := range middlewares {
+			middleware(sc)
+		}
 	}
 
 	return c
@@ -550,7 +566,7 @@ including acknowledgments from deliveries.  Use different Connections if you
 desire to interleave consumers and producers in the same process to avoid your
 basic.ack messages from getting rate limited with your basic.publish messages.
 */
-func (ch *Channel) NotifyFlow(c chan bool) chan bool {
+func (ch *Channel) NotifyFlow(c chan bool, middlewares ...NotifyMiddlewares) chan bool {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
@@ -558,6 +574,22 @@ func (ch *Channel) NotifyFlow(c chan bool) chan bool {
 		close(c)
 	} else {
 		ch.flows = append(ch.flows, c)
+	}
+
+	if len(middlewares) > 0 {
+		sc := &SubChannel{
+			connection: ch.connection,
+			rpc:        ch.rpc,
+			consumers:  ch.consumers,
+			id:         ch.id,
+			errors:     ch.errors,
+			message:    ch.message,
+			header:     ch.header,
+			body:       ch.body,
+		}
+		for _, middleware := range middlewares {
+			middleware(sc)
+		}
 	}
 
 	return c
@@ -571,7 +603,7 @@ immediate flags.
 A return struct has a copy of the Publishing along with some error
 information about why the publishing failed.
 */
-func (ch *Channel) NotifyReturn(c chan Return) chan Return {
+func (ch *Channel) NotifyReturn(c chan Return, middlewares ...NotifyMiddlewares) chan Return {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
@@ -579,6 +611,22 @@ func (ch *Channel) NotifyReturn(c chan Return) chan Return {
 		close(c)
 	} else {
 		ch.returns = append(ch.returns, c)
+	}
+
+	if len(middlewares) > 0 {
+		sc := &SubChannel{
+			connection: ch.connection,
+			rpc:        ch.rpc,
+			consumers:  ch.consumers,
+			id:         ch.id,
+			errors:     ch.errors,
+			message:    ch.message,
+			header:     ch.header,
+			body:       ch.body,
+		}
+		for _, middleware := range middlewares {
+			middleware(sc)
+		}
 	}
 
 	return c
@@ -591,7 +639,7 @@ where the master has just failed (and was moved to another node).
 
 The subscription tag is returned to the listener.
 */
-func (ch *Channel) NotifyCancel(c chan string) chan string {
+func (ch *Channel) NotifyCancel(c chan string, middlewares ...NotifyMiddlewares) chan string {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
@@ -599,6 +647,22 @@ func (ch *Channel) NotifyCancel(c chan string) chan string {
 		close(c)
 	} else {
 		ch.cancels = append(ch.cancels, c)
+	}
+
+	if len(middlewares) > 0 {
+		sc := &SubChannel{
+			connection: ch.connection,
+			rpc:        ch.rpc,
+			consumers:  ch.consumers,
+			id:         ch.id,
+			errors:     ch.errors,
+			message:    ch.message,
+			header:     ch.header,
+			body:       ch.body,
+		}
+		for _, middleware := range middlewares {
+			middleware(sc)
+		}
 	}
 
 	return c
@@ -610,7 +674,7 @@ ordered Ack and Nack DeliveryTag to the respective channels.
 
 For strict ordering, use NotifyPublish instead.
 */
-func (ch *Channel) NotifyConfirm(ack, nack chan uint64) (chan uint64, chan uint64) {
+func (ch *Channel) NotifyConfirm(ack, nack chan uint64, middlewares ...NotifyMiddlewares) (chan uint64, chan uint64) {
 	confirms := ch.NotifyPublish(make(chan Confirmation, cap(ack)+cap(nack)))
 
 	go func() {
@@ -626,6 +690,22 @@ func (ch *Channel) NotifyConfirm(ack, nack chan uint64) (chan uint64, chan uint6
 			close(nack)
 		}
 	}()
+
+	if len(middlewares) > 0 {
+		sc := &SubChannel{
+			connection: ch.connection,
+			rpc:        ch.rpc,
+			consumers:  ch.consumers,
+			id:         ch.id,
+			errors:     ch.errors,
+			message:    ch.message,
+			header:     ch.header,
+			body:       ch.body,
+		}
+		for _, middleware := range middlewares {
+			middleware(sc)
+		}
+	}
 
 	return ack, nack
 }
@@ -655,7 +735,7 @@ Channel.Close() or Connection.Close().
 It is also advisable for the caller to consume from the channel returned till it is closed
 to avoid possible deadlocks
 */
-func (ch *Channel) NotifyPublish(confirm chan Confirmation) chan Confirmation {
+func (ch *Channel) NotifyPublish(confirm chan Confirmation, middlewares ...NotifyMiddlewares) chan Confirmation {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
@@ -663,6 +743,22 @@ func (ch *Channel) NotifyPublish(confirm chan Confirmation) chan Confirmation {
 		close(confirm)
 	} else {
 		ch.confirms.Listen(confirm)
+	}
+
+	if len(middlewares) > 0 {
+		sc := &SubChannel{
+			connection: ch.connection,
+			rpc:        ch.rpc,
+			consumers:  ch.consumers,
+			id:         ch.id,
+			errors:     ch.errors,
+			message:    ch.message,
+			header:     ch.header,
+			body:       ch.body,
+		}
+		for _, middleware := range middlewares {
+			middleware(sc)
+		}
 	}
 
 	return confirm
