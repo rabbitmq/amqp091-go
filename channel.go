@@ -971,9 +971,6 @@ func (ch *Channel) QueueBind(name, key, exchange string, noWait bool, args Table
 /*
 QueueUnbind removes a binding between an exchange and queue matching the key and
 arguments.
-
-It is possible to send and empty string for the exchange name which means to
-unbind the queue from the default exchange.
 */
 func (ch *Channel) QueueUnbind(name, key, exchange string, args Table) error {
 	if err := args.Validate(); err != nil {
