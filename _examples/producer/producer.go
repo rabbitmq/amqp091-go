@@ -6,12 +6,13 @@ package main
 import (
 	"context"
 	"flag"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 var (
@@ -58,7 +59,6 @@ func setupCloseHandler(exitCh chan struct{}) {
 
 func publish(ctx context.Context, publishOkCh <-chan struct{}, confirmsCh chan<- *amqp.DeferredConfirmation, confirmsDoneCh <-chan struct{}, exitCh chan struct{}) {
 	config := amqp.Config{
-		Vhost:      "/",
 		Properties: amqp.NewConnectionProperties(),
 	}
 	config.Properties.SetClientConnectionName("producer-with-confirms")
