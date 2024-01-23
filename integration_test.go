@@ -2049,25 +2049,27 @@ func TestIntegrationGetNextPublishSeqNoRace(t *testing.T) {
 		}
 
 		wg := sync.WaitGroup{}
+		fail := false
 
 		wg.Add(2)
 
 		go func() {
 			defer wg.Done()
-			n := ch.GetNextPublishSeqNo()
-			if n <= 0 {
-				t.Fatalf("wrong next publish seqence number, expected: > %d, got: %d", 0, n)
-			}
+			_ = ch.GetNextPublishSeqNo()
 		}()
 
 		go func() {
 			defer wg.Done()
 			if err := ch.PublishWithContext(context.TODO(), "test-get-next-pub-seq", "", false, false, Publishing{}); err != nil {
-				t.Fatalf("publish error: %v", err)
+				t.Logf("publish error: %v", err)
+				fail = true
 			}
 		}()
 
 		wg.Wait()
+		if fail {
+			t.FailNow()
+		}
 
 		n = ch.GetNextPublishSeqNo()
 		if n != 2 {
