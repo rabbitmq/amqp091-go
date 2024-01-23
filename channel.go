@@ -1826,8 +1826,8 @@ func (ch *Channel) Reject(tag uint64, requeue bool) error {
 // GetNextPublishSeqNo returns the sequence number of the next message to be
 // published, when in confirm mode.
 func (ch *Channel) GetNextPublishSeqNo() uint64 {
-	ch.confirms.m.Lock()
-	defer ch.confirms.m.Unlock()
+	ch.confirms.publishedMut.Lock()
+	defer ch.confirms.publishedMut.Unlock()
 
 	return ch.confirms.published + 1
 }
