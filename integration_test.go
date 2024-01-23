@@ -2025,6 +2025,57 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 	}
 }
 
+func TestIntegrationGetNextPublishSeqNoRace(t *testing.T) {
+	if c := integrationConnection(t, "GetNextPublishSeqNoRace"); c != nil {
+		defer c.Close()
+
+		ch, err := c.Channel()
+		if err != nil {
+			t.Fatalf("channel: %v", err)
+		}
+
+		if err = ch.Confirm(false); err != nil {
+			t.Fatalf("could not confirm")
+		}
+
+		ex := "test-get-next-pub"
+		if err = ch.ExchangeDeclare(ex, "direct", false, false, false, false, nil); err != nil {
+			t.Fatalf("cannot declare %v: got: %v", ex, err)
+		}
+
+		n := ch.GetNextPublishSeqNo()
+		if n != 1 {
+			t.Fatalf("wrong next publish seqence number before any publish, expected: %d, got: %d", 1, n)
+		}
+
+		wg := sync.WaitGroup{}
+
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			n := ch.GetNextPublishSeqNo()
+			if n <= 0 {
+				t.Fatalf("wrong next publish seqence number, expected: > %d, got: %d", 0, n)
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			if err := ch.PublishWithContext(context.TODO(), "test-get-next-pub-seq", "", false, false, Publishing{}); err != nil {
+				t.Fatalf("publish error: %v", err)
+			}
+		}()
+
+		wg.Wait()
+
+		n = ch.GetNextPublishSeqNo()
+		if n != 2 {
+			t.Fatalf("wrong next publish seqence number after 15 publishing, expected: %d, got: %d", 2, n)
+		}
+	}
+}
+
 // https://github.com/rabbitmq/amqp091-go/pull/44
 func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 	conn := integrationConnection(t, "TestShouldNotWaitAfterConnectionClosedIssue44")
