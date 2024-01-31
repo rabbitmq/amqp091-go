@@ -41,6 +41,7 @@ type Channel struct {
 
 	// closed is set to 1 when the channel has been closed - see Channel.send()
 	closed int32
+	close  chan struct{}
 
 	// true when we will never notify again
 	noNotify bool
@@ -86,6 +87,7 @@ func newChannel(c *Connection, id uint16) *Channel {
 		confirms:   newConfirms(),
 		recv:       (*Channel).recvMethod,
 		errors:     make(chan *Error, 1),
+		close:      make(chan struct{}),
 	}
 }
 
@@ -146,6 +148,7 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 
 		close(ch.errors)
+		close(ch.close)
 		ch.noNotify = true
 	})
 }
@@ -368,7 +371,11 @@ func (ch *Channel) dispatch(msg message) {
 		// deliveries are in flight and a no-wait cancel has happened
 
 	default:
-		ch.rpc <- msg
+		select {
+		case <-ch.close:
+			return
+		case ch.rpc <- msg:
+		}
 	}
 }
 
@@ -468,6 +475,10 @@ code set to '200'.
 It is safe to call this method multiple times.
 */
 func (ch *Channel) Close() error {
+	if ch.IsClosed() {
+		return nil
+	}
+
 	defer ch.connection.closeChannel(ch, nil)
 	return ch.call(
 		&channelClose{ReplyCode: replySuccess},
@@ -960,9 +971,6 @@ func (ch *Channel) QueueBind(name, key, exchange string, noWait bool, args Table
 /*
 QueueUnbind removes a binding between an exchange and queue matching the key and
 arguments.
-
-It is possible to send and empty string for the exchange name which means to
-unbind the queue from the default exchange.
 */
 func (ch *Channel) QueueUnbind(name, key, exchange string, args Table) error {
 	if err := args.Validate(); err != nil {
@@ -1283,7 +1291,7 @@ Note: RabbitMQ declares the default exchange types like 'amq.fanout' as
 durable, so queues that bind to these pre-declared exchanges must also be
 durable.
 
-Exchanges declared as `internal` do not accept accept publishings. Internal
+Exchanges declared as `internal` do not accept publishings. Internal
 exchanges are useful when you wish to implement inter-exchange topologies
 that should not be exposed to users of the broker.
 
@@ -1818,8 +1826,8 @@ func (ch *Channel) Reject(tag uint64, requeue bool) error {
 // GetNextPublishSeqNo returns the sequence number of the next message to be
 // published, when in confirm mode.
 func (ch *Channel) GetNextPublishSeqNo() uint64 {
-	ch.confirms.m.Lock()
-	defer ch.confirms.m.Unlock()
+	ch.confirms.publishedMut.Lock()
+	defer ch.confirms.publishedMut.Unlock()
 
 	return ch.confirms.published + 1
 }

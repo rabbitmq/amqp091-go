@@ -190,7 +190,7 @@ func (client *Client) connect(addr string) (*amqp.Connection, error) {
 	return conn, nil
 }
 
-// handleReconnect will wait for a channel error
+// handleReInit will wait for a channel error
 // and then continuously attempt to re-initialize both channels
 func (client *Client) handleReInit(conn *amqp.Connection) bool {
 	for {
