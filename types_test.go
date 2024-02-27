@@ -6,29 +6,29 @@ import (
 )
 
 func TestNewError(t *testing.T) {
-    testCases := []struct {
-        code uint16
-        text string
-        expectedServer bool
-    }{
+	testCases := []struct {
+		code           uint16
+		text           string
+		expectedServer bool
+	}{
 		// Just three basics samples
-        {404, "Not Found", true},
-        {500, "Internal Server Error", true},
-        {403, "Forbidden", true},        
-    }
+		{404, "Not Found", true},
+		{500, "Internal Server Error", true},
+		{403, "Forbidden", true},
+	}
 
-    for _, tc := range testCases {
-        err := newError(tc.code, tc.text)
-        if err.Code != int(tc.code) {
-            t.Errorf("expected Code %d, got %d", tc.code, err.Code)
-        }
-        if err.Reason != tc.text {
-            t.Errorf("expected Reason %s, got %s", tc.text, err.Reason)
-        }
-        if err.Server != tc.expectedServer {
-            t.Errorf("expected Server to be %v", tc.expectedServer)
-        }
-    }
+	for _, tc := range testCases {
+		err := newError(tc.code, tc.text)
+		if err.Code != int(tc.code) {
+			t.Errorf("expected Code %d, got %d", tc.code, err.Code)
+		}
+		if err.Reason != tc.text {
+			t.Errorf("expected Reason %s, got %s", tc.text, err.Reason)
+		}
+		if err.Server != tc.expectedServer {
+			t.Errorf("expected Server to be %v", tc.expectedServer)
+		}
+	}
 }
 
 func TestValidateField(t *testing.T) {
@@ -68,4 +68,3 @@ func TestValidateField(t *testing.T) {
 		t.Error("validateField should fail for unsupported type but it didn't")
 	}
 }
-
