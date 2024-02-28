@@ -91,11 +91,12 @@ func publish(sessions chan chan session, messages <-chan message) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	pending := make(chan message, 1)
+
 	for session := range sessions {
 		var (
 			running bool
 			reading = messages
-			pending = make(chan message, 1)
 			confirm = make(chan amqp.Confirmation, 1)
 		)
 
