@@ -118,6 +118,7 @@ func publish(sessions chan chan session, messages <-chan message) {
 			select {
 			case confirmed, ok := <-confirm:
 				if !ok {
+					pub.Close()
 					break Publish
 				}
 				if !confirmed.Ack {
@@ -191,6 +192,7 @@ func subscribe(sessions chan chan session, messages chan<- message) {
 			messages <- msg.Body
 			sub.Ack(msg.DeliveryTag, false)
 		}
+		sub.Close()
 	}
 }
 
