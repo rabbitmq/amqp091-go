@@ -91,11 +91,12 @@ func publish(sessions chan chan session, messages <-chan message) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	pending := make(chan message, 1)
+
 	for session := range sessions {
 		var (
 			running bool
 			reading = messages
-			pending = make(chan message, 1)
 			confirm = make(chan amqp.Confirmation, 1)
 		)
 
@@ -117,6 +118,7 @@ func publish(sessions chan chan session, messages <-chan message) {
 			select {
 			case confirmed, ok := <-confirm:
 				if !ok {
+					pub.Close()
 					break Publish
 				}
 				if !confirmed.Ack {
@@ -190,6 +192,7 @@ func subscribe(sessions chan chan session, messages chan<- message) {
 			messages <- msg.Body
 			sub.Ack(msg.DeliveryTag, false)
 		}
+		sub.Close()
 	}
 }
 
