@@ -553,3 +553,16 @@ type bodyFrame struct {
 }
 
 func (f *bodyFrame) channel() uint16 { return f.ChannelId }
+
+type heartbeatDuration struct {
+	value    time.Duration
+	hasValue bool
+}
+
+func newHeartbeatDurationFromSeconds(s int) heartbeatDuration {
+	v := time.Duration(s) * time.Second
+	return heartbeatDuration{
+		value:    v,
+		hasValue: true,
+	}
+}

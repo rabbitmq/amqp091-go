@@ -6,7 +6,9 @@
 package amqp091
 
 import (
+	"reflect"
 	"testing"
+	"time"
 )
 
 // Test matrix defined on http://www.rabbitmq.com/uri-spec.html
@@ -386,5 +388,28 @@ func TestURITLSConfig(t *testing.T) {
 	}
 	if uri.ServerName != "example.com" {
 		t.Fatal("Server name not set")
+	}
+}
+
+func TestURIParameters(t *testing.T) {
+	url := "amqps://foo.bar/?auth_mechanism=plain&auth_mechanism=amqpplain&heartbeat=2&connection_timeout=5000&channel_max=8"
+	uri, err := ParseURI(url)
+	if err != nil {
+		t.Fatal("Could not parse")
+	}
+	if !reflect.DeepEqual(uri.AuthMechanism, []string{"plain", "amqpplain"}) {
+		t.Fatal("AuthMechanism not set")
+	}
+	if !uri.Heartbeat.hasValue {
+		t.Fatal("Heartbeat not set")
+	}
+	if uri.Heartbeat.value != time.Duration(2)*time.Second {
+		t.Fatal("Heartbeat not set")
+	}
+	if uri.ConnectionTimeout != 5000 {
+		t.Fatal("ConnectionTimeout not set")
+	}
+	if uri.ChannelMax != 8 {
+		t.Fatal("ChannelMax name not set")
 	}
 }

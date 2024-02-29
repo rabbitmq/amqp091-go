@@ -157,8 +157,7 @@ func DefaultDial(connectionTimeout time.Duration) func(network, addr string) (ne
 // scheme.  It is equivalent to calling DialTLS(amqp, nil).
 func Dial(url string) (*Connection, error) {
 	return DialConfig(url, Config{
-		Heartbeat: defaultHeartbeat,
-		Locale:    defaultLocale,
+		Locale: defaultLocale,
 	})
 }
 
@@ -169,7 +168,6 @@ func Dial(url string) (*Connection, error) {
 // DialTLS uses the provided tls.Config when encountering an amqps:// scheme.
 func DialTLS(url string, amqps *tls.Config) (*Connection, error) {
 	return DialConfig(url, Config{
-		Heartbeat:       defaultHeartbeat,
 		TLSClientConfig: amqps,
 		Locale:          defaultLocale,
 	})
@@ -186,7 +184,6 @@ func DialTLS(url string, amqps *tls.Config) (*Connection, error) {
 // amqps:// scheme.
 func DialTLS_ExternalAuth(url string, amqps *tls.Config) (*Connection, error) {
 	return DialConfig(url, Config{
-		Heartbeat:       defaultHeartbeat,
 		TLSClientConfig: amqps,
 		SASL:            []Authentication{&ExternalAuth{}},
 	})
@@ -195,7 +192,9 @@ func DialTLS_ExternalAuth(url string, amqps *tls.Config) (*Connection, error) {
 // DialConfig accepts a string in the AMQP URI format and a configuration for
 // the transport and connection setup, returning a new Connection.  Defaults to
 // a server heartbeat interval of 10 seconds and sets the initial read deadline
-// to 30 seconds.
+// to 30 seconds. The heartbeat interval specified in the AMQP URI takes precedence
+// over the value specified in the config. To disable heartbeats, you must use
+// the AMQP URI and set heartbeat=0 there.
 func DialConfig(url string, config Config) (*Connection, error) {
 	var err error
 	var conn net.Conn
@@ -206,18 +205,50 @@ func DialConfig(url string, config Config) (*Connection, error) {
 	}
 
 	if config.SASL == nil {
-		config.SASL = []Authentication{uri.PlainAuth()}
+		if uri.AuthMechanism != nil {
+			for _, identifier := range uri.AuthMechanism {
+				switch strings.ToUpper(identifier) {
+				case "PLAIN":
+					config.SASL = append(config.SASL, uri.PlainAuth())
+				case "AMQPLAIN":
+					config.SASL = append(config.SASL, uri.AMQPlainAuth())
+				case "EXTERNAL":
+					config.SASL = append(config.SASL, &ExternalAuth{})
+				default:
+					return nil, fmt.Errorf("unsupported auth_mechanism: %v", identifier)
+				}
+			}
+		} else {
+			config.SASL = []Authentication{uri.PlainAuth()}
+		}
 	}
 
 	if config.Vhost == "" {
 		config.Vhost = uri.Vhost
 	}
 
+	if uri.Heartbeat.hasValue {
+		config.Heartbeat = uri.Heartbeat.value
+	} else {
+		if config.Heartbeat == 0 {
+			config.Heartbeat = defaultHeartbeat
+		}
+	}
+
+	if config.ChannelMax == 0 {
+		config.ChannelMax = uri.ChannelMax
+	}
+
+	connectionTimeout := defaultConnectionTimeout
+	if uri.ConnectionTimeout != 0 {
+		connectionTimeout = time.Duration(uri.ConnectionTimeout) * time.Millisecond
+	}
+
 	addr := net.JoinHostPort(uri.Host, strconv.FormatInt(int64(uri.Port), 10))
 
 	dialer := config.Dial
 	if dialer == nil {
-		dialer = DefaultDial(defaultConnectionTimeout)
+		dialer = DefaultDial(connectionTimeout)
 	}
 
 	conn, err = dialer("tcp", addr)
