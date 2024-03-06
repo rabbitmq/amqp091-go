@@ -32,7 +32,7 @@ const (
 	platform                 = "golang"
 	// Safer default that makes channel leaks a lot easier to spot
 	// before they create operational headaches. See https://github.com/rabbitmq/rabbitmq-server/issues/1593.
-	defaultChannelMax = (2 << 10) - 1
+	defaultChannelMax = uint16((2 << 10) - 1)
 	defaultLocale     = "en_US"
 )
 
@@ -49,7 +49,7 @@ type Config struct {
 	// bindings on the server.  Dial sets this to the path parsed from the URL.
 	Vhost string
 
-	ChannelMax int           // 0 max channels means 2^16 - 1
+	ChannelMax uint16        // 0 max channels means 2^16 - 1
 	FrameSize  int           // 0 max bytes means unlimited
 	Heartbeat  time.Duration // less than 1s uses the server's interval
 
@@ -991,13 +991,13 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 
 	// When the server and client both use default 0, then the max channel is
 	// only limited by uint16.
-	c.Config.ChannelMax = pick(config.ChannelMax, int(tune.ChannelMax))
+	c.Config.ChannelMax = pickUInt16(config.ChannelMax, tune.ChannelMax)
 	if c.Config.ChannelMax == 0 {
 		c.Config.ChannelMax = defaultChannelMax
 	}
-	c.Config.ChannelMax = min(c.Config.ChannelMax, maxChannelMax)
+	c.Config.ChannelMax = minUInt16(c.Config.ChannelMax, maxChannelMax)
 
-	c.allocator = newAllocator(1, c.Config.ChannelMax)
+	c.allocator = newAllocator(1, int(c.Config.ChannelMax))
 
 	c.m.Unlock()
 
@@ -1104,11 +1104,33 @@ func max(a, b int) int {
 	return b
 }
 
+func maxUInt16(a, b uint16) uint16 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
+}
+
+func minUInt16(a, b uint16) uint16 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func pickUInt16(client, server uint16) uint16 {
+	if client == 0 || server == 0 {
+		return maxUInt16(client, server)
+	} else {
+		return minUInt16(client, server)
+	}
 }
 
 func pick(client, server int) int {

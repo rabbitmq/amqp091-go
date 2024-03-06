@@ -478,7 +478,7 @@ func TestIntegrationChannelIDsExhausted(t *testing.T) {
 	}
 	defer c.Close()
 
-	for i := 1; i <= c.Config.ChannelMax; i++ {
+	for i := uint16(1); i <= c.Config.ChannelMax; i++ {
 		if _, err := c.Channel(); err != nil {
 			t.Fatalf("expected allocating all channel ids to succed, failed on %d with %v", i, err)
 		}
