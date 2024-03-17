@@ -63,6 +63,9 @@ var (
 
 	// ErrFieldType is returned when writing a message containing a Go type unsupported by AMQP.
 	ErrFieldType = &Error{Code: SyntaxError, Reason: "unsupported table field type"}
+
+	// ErrMsgSize is returned when the length specifier for a frame or its data exceeds 128 MiB
+	ErrMsgSize = &Error{Code: FrameError, Reason: "frame or message is too large"}
 )
 
 // internal errors used inside the library
