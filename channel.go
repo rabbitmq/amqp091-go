@@ -504,8 +504,14 @@ graceful close, no error will be sent.
 
 In case of a non graceful close the error will be notified synchronously by the library
 so that it will be necessary to consume the Channel from the caller in order to avoid deadlocks
+
+The chan provided must be a buffered channel of size 1.
 */
 func (ch *Channel) NotifyClose(c chan *Error) chan *Error {
+	if cap(c) != 1 {
+		panic("channel.NotifyClose expectes cap=1 buffered channel")
+	}
+
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 

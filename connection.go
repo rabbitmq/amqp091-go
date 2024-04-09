@@ -368,8 +368,14 @@ so that it will be necessary to consume the Channel from the caller in order to 
 
 To reconnect after a transport or protocol error, register a listener here and
 re-run your setup process.
+
+The chan provided must be a buffered channel of size 1.
 */
 func (c *Connection) NotifyClose(receiver chan *Error) chan *Error {
+	if cap(receiver) != 1 {
+		panic("channel.NotifyClose expectes cap=1 buffered channel")
+	}
+
 	c.m.Lock()
 	defer c.m.Unlock()
 
