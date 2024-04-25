@@ -110,40 +110,11 @@ In order to be notified when a connection or channel gets closed, both
 structures offer the possibility to register channels using
 [Channel.NotifyClose] and [Connection.NotifyClose] functions:
 
-	notifyConnCloseCh := conn.NotifyClose(make(chan *amqp.Error))
+	notifyConnCloseCh := conn.NotifyClose(make(chan *amqp.Error, 1))
 
 No errors will be sent in case of a graceful connection close. In case of a
 non-graceful closure due to e.g. network issue, or forced connection closure
-from the Management UI, the error will be notified synchronously by the library.
-
-The error is sent synchronously to the channel, so that the flow will wait until
-the receiver consumes from the channel. To avoid deadlocks in the library, it is
-necessary to consume from the channels. This could be done inside a
-different goroutine with a select listening on the two channels inside a for
-loop like:
-
-	go func() {
-	  for notifyConnClose != nil || notifyChanClose != nil {
-	    select {
-	      case err, ok := <-notifyConnClose:
-	        if !ok {
-	          notifyConnClose = nil
-	        } else {
-	          fmt.Printf("connection closed, error %s", err)
-	        }
-	      case err, ok := <-notifyChanClose:
-	        if !ok {
-	          notifyChanClose = nil
-	        } else {
-	          fmt.Printf("channel closed, error %s", err)
-	        }
-	      }
-	  }
-	}()
-
-Another approach is to use buffered channels:
-
-	notifyConnCloseCh := conn.NotifyClose(make(chan *amqp.Error, 1))
+from the Management UI, the error will be notified by the library.
 
 The library sends to notification channels just once. After sending a notification
 to all channels, the library closes all registered notification channels. After

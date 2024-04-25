@@ -1644,7 +1644,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 		t.Cleanup(func() { conn.Close() })
 
 		go func() {
-			for err := range conn.NotifyClose(make(chan *Error)) {
+			for err := range conn.NotifyClose(make(chan *Error, 1)) {
 				t.Log(err.Error())
 			}
 		}()
@@ -1655,7 +1655,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 		}
 
 		go func() {
-			for err := range c1.NotifyClose(make(chan *Error)) {
+			for err := range c1.NotifyClose(make(chan *Error, 1)) {
 				t.Log("Channel1 Close: " + err.Error())
 			}
 		}()
@@ -1666,7 +1666,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 		}
 
 		go func() {
-			for err := range c2.NotifyClose(make(chan *Error)) {
+			for err := range c2.NotifyClose(make(chan *Error, 1)) {
 				t.Log("Channel2 Close: " + err.Error())
 			}
 		}()

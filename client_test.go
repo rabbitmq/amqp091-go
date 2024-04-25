@@ -632,6 +632,81 @@ func TestNotifyClosesReusedPublisherConfirmChan(t *testing.T) {
 	}
 }
 
+func TestConnectionNotifyCloseAcceptsOnlyBufferedChannels(t *testing.T) {
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
+
+	go func() {
+		srv.connectionOpen()
+
+		srv.recv(0, &connectionClose{})
+		srv.send(0, &connectionCloseOk{})
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("could not close connection: %v (%s)", c, err)
+	}
+
+	defer func() {
+		_ = recover()
+	}()
+
+	select {
+	case <-c.NotifyClose(make(chan *Error)):
+	case <-time.After(time.Millisecond):
+		t.Errorf("expected to close NotifyClose chan after Connection.Close")
+	}
+
+	t.Errorf("connection.NotifyClose shouldn't accept unbuffered channels")
+}
+
+func TestChannelNotifyClosesAllChansAfterConnectionClose(t *testing.T) {
+	rwc, srv := newSession(t)
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+
+		srv.recv(0, &connectionClose{})
+		srv.send(0, &connectionCloseOk{})
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("could not close connection: %v (%s)", c, err)
+	}
+
+	defer func() { _ = recover() }()
+
+	select {
+	case <-c.NotifyClose(make(chan *Error, 1)):
+	case <-time.After(time.Millisecond):
+		t.Errorf("expected to close NotifyClose chan after Connection.Close")
+	}
+
+	select {
+	case <-ch.NotifyClose(make(chan *Error)):
+	case <-time.After(time.Millisecond):
+		t.Errorf("expected to close Connection.NotifyClose chan after Connection.Close")
+	}
+
+	t.Errorf("connection.NotifyClose shouldn't accept unbuffered channels")
+}
+
 func TestNotifyClosesAllChansAfterConnectionClose(t *testing.T) {
 	rwc, srv := newSession(t)
 
@@ -658,13 +733,13 @@ func TestNotifyClosesAllChansAfterConnectionClose(t *testing.T) {
 	}
 
 	select {
-	case <-c.NotifyClose(make(chan *Error)):
+	case <-c.NotifyClose(make(chan *Error, 1)):
 	case <-time.After(time.Millisecond):
 		t.Errorf("expected to close NotifyClose chan after Connection.Close")
 	}
 
 	select {
-	case <-ch.NotifyClose(make(chan *Error)):
+	case <-ch.NotifyClose(make(chan *Error, 1)):
 	case <-time.After(time.Millisecond):
 		t.Errorf("expected to close Connection.NotifyClose chan after Connection.Close")
 	}

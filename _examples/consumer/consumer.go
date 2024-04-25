@@ -96,7 +96,7 @@ func NewConsumer(amqpURI, exchange, exchangeType, queueName, key, ctag string) (
 	}
 
 	go func() {
-		Log.Printf("closing: %s", <-c.conn.NotifyClose(make(chan *amqp.Error)))
+		Log.Printf("closing: %s", <-c.conn.NotifyClose(make(chan *amqp.Error, 1)))
 	}()
 
 	Log.Printf("got Connection, getting Channel")
