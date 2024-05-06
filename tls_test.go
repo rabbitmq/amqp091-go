@@ -82,6 +82,24 @@ func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
 	return s
 }
 
+func TestTlsConfigFromUriPushdownServerNameIndication(t *testing.T) {
+	uri := "amqps://user:pass@example.com:5671?server_name_indication=another-hostname.com"
+	parsedUri, err := ParseURI(uri)
+	if err != nil {
+		t.Fatalf("expected to parse URI successfully, got error: %s", err)
+	}
+
+	tlsConf, err := tlsConfigFromURI(parsedUri)
+	if err != nil {
+		t.Fatalf("expected tlsConfigFromURI to succeed, got error: %s", err)
+	}
+
+	const expectedServerName = "another-hostname.com"
+	if tlsConf.ServerName != expectedServerName {
+		t.Fatalf("expected tlsConf server name to equal Uri servername: want %s, got %s", expectedServerName, tlsConf.ServerName)
+	}
+}
+
 // Tests opening a connection of a TLS enabled socket server
 func TestTLSHandshake(t *testing.T) {
 	srv := startTLSServer(t, tlsServerConfig(t))
