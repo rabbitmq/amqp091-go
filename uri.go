@@ -226,5 +226,29 @@ func (uri URI) String() string {
 		authority.Path = "/"
 	}
 
+	if uri.CertFile != "" || uri.KeyFile != "" || uri.CACertFile != "" || uri.ServerName != "" {
+		rawQuery := strings.Builder{}
+		if uri.CertFile != "" {
+			rawQuery.WriteString("certfile=")
+			rawQuery.WriteString(uri.CertFile)
+			rawQuery.WriteRune('&')
+		}
+		if uri.KeyFile != "" {
+			rawQuery.WriteString("keyfile=")
+			rawQuery.WriteString(uri.KeyFile)
+			rawQuery.WriteRune('&')
+		}
+		if uri.CACertFile != "" {
+			rawQuery.WriteString("cacertfile=")
+			rawQuery.WriteString(uri.CACertFile)
+			rawQuery.WriteRune('&')
+		}
+		if uri.ServerName != "" {
+			rawQuery.WriteString("server_name_indication=")
+			rawQuery.WriteString(uri.ServerName)
+		}
+		authority.RawQuery = rawQuery.String()
+	}
+
 	return authority.String()
 }

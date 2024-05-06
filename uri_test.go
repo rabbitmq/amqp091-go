@@ -413,3 +413,31 @@ func TestURIParameters(t *testing.T) {
 		t.Fatal("ChannelMax name not set")
 	}
 }
+
+func TestURI_ParseUriToString(t *testing.T) {
+	tests := []struct {
+		name string
+		uri  string
+		want string
+	}{
+		{name: "virtual host is set", uri: "amqp://example.com/foobar", want: "amqp://example.com/foobar"},
+		{name: "non-default port", uri: "amqp://foo.bar:1234/example", want: "amqp://foo.bar:1234/example"},
+		{
+			name: "TLS with URI parameters",
+			uri:  "amqps://some-host.com/foobar?certfile=/foo/%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82/cert.pem&keyfile=/foo/%E4%BD%A0%E5%A5%BD/key.pem&cacertfile=C:%5Ccerts%5Cca.pem&server_name_indication=example.com",
+			want: "amqps://some-host.com/foobar?certfile=/foo/привет/cert.pem&keyfile=/foo/你好/key.pem&cacertfile=C:\\certs\\ca.pem&server_name_indication=example.com",
+		},
+		{name: "only server name indication", uri: "amqps://foo.bar?server_name_indication=example.com", want: "amqps://foo.bar/?server_name_indication=example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			amqpUri, err := ParseURI(tt.uri)
+			if err != nil {
+				t.Errorf("ParseURI() error = %v", err)
+			}
+			if got := amqpUri.String(); got != tt.want {
+				t.Errorf("String() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
