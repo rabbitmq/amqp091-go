@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
@@ -43,7 +42,7 @@ func main() {
 
 	startConfirmHandler(publishOkCh, confirmsCh, confirmsDoneCh, exitCh)
 
-	publish(context.Background(), publishOkCh, confirmsCh, confirmsDoneCh, exitCh)
+	publish(publishOkCh, confirmsCh, confirmsDoneCh, exitCh)
 }
 
 func setupCloseHandler(exitCh chan struct{}) {
@@ -56,7 +55,7 @@ func setupCloseHandler(exitCh chan struct{}) {
 	}()
 }
 
-func publish(ctx context.Context, publishOkCh <-chan struct{}, confirmsCh chan<- *amqp.DeferredConfirmation, confirmsDoneCh <-chan struct{}, exitCh chan struct{}) {
+func publish(publishOkCh <-chan struct{}, confirmsCh chan<- *amqp.DeferredConfirmation, confirmsDoneCh <-chan struct{}, exitCh chan struct{}) {
 	config := amqp.Config{
 		Vhost:      "/",
 		Properties: amqp.NewConnectionProperties(),
@@ -140,8 +139,7 @@ func publish(ctx context.Context, publishOkCh <-chan struct{}, confirmsCh chan<-
 		}
 
 		Log.Printf("producer: publishing %dB body (%q)", len(*body), *body)
-		dConfirmation, err := channel.PublishWithDeferredConfirmWithContext(
-			ctx,
+		dConfirmation, err := channel.PublishWithDeferredConfirm(
 			*exchange,
 			*routingKey,
 			true,

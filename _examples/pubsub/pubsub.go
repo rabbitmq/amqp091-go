@@ -12,12 +12,10 @@ import (
 	"crypto/sha1"
 	"flag"
 	"fmt"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"io"
 	"log"
 	"os"
-	"time"
-
-	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 var url = flag.String("url", "amqp:///", "AMQP url for both the publisher and subscriber")
@@ -88,9 +86,6 @@ func redial(ctx context.Context, url string) chan chan session {
 // publish publishes messages to a reconnecting session to a fanout exchange.
 // It receives from the application specific source of messages.
 func publish(sessions chan chan session, messages <-chan message) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	pending := make(chan message, 1)
 
 	for session := range sessions {
@@ -128,7 +123,7 @@ func publish(sessions chan chan session, messages <-chan message) {
 
 			case body = <-pending:
 				routingKey := "ignored for fanout exchanges, application dependent for other exchanges"
-				err := pub.PublishWithContext(ctx, exchange, routingKey, false, false, amqp.Publishing{
+				err := pub.Publish(exchange, routingKey, false, false, amqp.Publishing{
 					Body: body,
 				})
 				// Retry failed delivery on the next session
