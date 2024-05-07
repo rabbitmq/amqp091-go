@@ -1,3 +1,8 @@
+// Copyright (c) 2021 VMware, Inc. or its affiliates. All Rights Reserved.
+// Copyright (c) 2012-2021, Sean Treadway, SoundCloud Ltd.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+//
 // This example declares a durable Exchange, an ephemeral (auto-delete) Queue,
 // binds the Queue to the Exchange with a binding key, and consumes every
 // message published to that Exchange with that routing key.
