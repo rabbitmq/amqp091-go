@@ -1,6 +1,6 @@
 ---
 name: Release
-about: Release a new version!
+about: Do not use this template. This template is meant to be used by RabbitMQ maintainers.
 title: Release x.y.z
 labels: ''
 assignees: ''
