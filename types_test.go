@@ -1,6 +1,8 @@
 package amqp091
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -10,11 +12,12 @@ func TestNewError(t *testing.T) {
 		code           uint16
 		text           string
 		expectedServer bool
+		recoverable    bool
 	}{
 		// Just three basics samples
-		{404, "Not Found", true},
-		{500, "Internal Server Error", true},
-		{403, "Forbidden", true},
+		{404, "Not Found", true, true},
+		{500, "Internal Server Error", true, false},
+		{403, "Forbidden", true, true},
 	}
 
 	for _, tc := range testCases {
@@ -28,6 +31,32 @@ func TestNewError(t *testing.T) {
 		if err.Server != tc.expectedServer {
 			t.Errorf("expected Server to be %v", tc.expectedServer)
 		}
+		if err.Recover != tc.recoverable {
+			t.Errorf("expected Recover to be %v", tc.recoverable)
+		}
+
+		var terr interface{ Temporary() bool }
+		isTemporaryError := errors.As(err, &terr) && terr.Temporary()
+
+		if isTemporaryError != tc.recoverable {
+			t.Errorf("expected err to be temporary %v", tc.recoverable)
+		}
+	}
+}
+
+func TestNewErrorMessage(t *testing.T) {
+	err := newError(404, "Not Found")
+
+	expected := `Exception (404) Reason: "Not Found"`
+
+	if got := err.Error(); expected != got {
+		t.Errorf("expected Error %q, got %q", expected, got)
+	}
+
+	expected = `Exception (404) Reason: "Not Found" Recoverable: true Server: true`
+
+	if got := fmt.Sprintf("%#v", err); expected != got {
+		t.Errorf("expected go string %q, got %q", expected, got)
 	}
 }
 

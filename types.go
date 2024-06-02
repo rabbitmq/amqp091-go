@@ -92,6 +92,18 @@ func (e Error) Error() string {
 	return fmt.Sprintf("Exception (%d) Reason: %q", e.Code, e.Reason)
 }
 
+// Temporary returns true if the error can be recovered by retrying later or with different parameters.
+// Returns the value of the Recover field.
+func (e *Error) Temporary() bool {
+	return e.Recover
+}
+
+// GoString returns a longer description of the error than .Error() including all fields.
+func (e *Error) GoString() string {
+	return fmt.Sprintf("Exception (%d) Reason: %q Recoverable: %v Server: %v",
+		e.Code, e.Reason, e.Recover, e.Server)
+}
+
 // Used by header frames to capture routing and header information
 type properties struct {
 	ContentType     string    // MIME content type
