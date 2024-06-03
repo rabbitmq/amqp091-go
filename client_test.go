@@ -50,6 +50,8 @@ func amqplainConfig() Config {
 }
 
 func newServer(t *testing.T, serverIO, clientIO io.ReadWriteCloser) *server {
+	t.Helper()
+
 	return &server{
 		T: t,
 		r: reader{serverIO},
@@ -60,6 +62,8 @@ func newServer(t *testing.T, serverIO, clientIO io.ReadWriteCloser) *server {
 }
 
 func newSession(t *testing.T) (io.ReadWriteCloser, *server) {
+	t.Helper()
+
 	rs, wc := io.Pipe()
 	rc, ws := io.Pipe()
 
