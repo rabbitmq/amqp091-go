@@ -97,13 +97,13 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 		mask |= flagContentEncoding
 	}
 	if f.Properties.Headers != nil && len(f.Properties.Headers) > 0 {
-		mask = mask | flagHeaders
+		mask |= flagHeaders
 	}
 	if f.Properties.DeliveryMode > 0 {
-		mask = mask | flagDeliveryMode
+		mask |= flagDeliveryMode
 	}
 	if f.Properties.Priority > 0 {
-		mask = mask | flagPriority
+		mask |= flagPriority
 	}
 	if f.Properties.CorrelationId != "" {
 		mask |= flagCorrelationId
@@ -118,7 +118,7 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 		mask |= flagMessageId
 	}
 	if !f.Properties.Timestamp.IsZero() {
-		mask = mask | flagTimestamp
+		mask |= flagTimestamp
 	}
 	if f.Properties.Type != "" {
 		mask |= flagType
