@@ -55,7 +55,7 @@ func (subs *consumers) buffer(in chan *Delivery, out chan Delivery) {
 	defer close(out)
 	defer subs.Done()
 
-	var inflight = in
+	inflight := in
 	var queue []*Delivery
 
 	for delivery := range in {

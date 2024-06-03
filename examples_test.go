@@ -202,7 +202,6 @@ func ExampleChannel_Confirm_bridge() {
 			// And the body
 			Body: msg.Body,
 		})
-
 		if err != nil {
 			if e := msg.Nack(false, false); e != nil {
 				log.Printf("nack error: %+v", e)

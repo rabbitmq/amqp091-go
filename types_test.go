@@ -67,7 +67,8 @@ func TestValidateField(t *testing.T) {
 	simpleTypes := []interface{}{
 		nil, true, byte(1), int8(1), 10, int16(10), int32(10), int64(10),
 		float32(1.0), float64(1.0), "string", []byte("byte slice"),
-		Decimal{Scale: 2, Value: 12345}, time.Now(),
+		Decimal{Scale: 2, Value: 12345},
+		time.Now(),
 	}
 	for _, v := range simpleTypes {
 		if err := validateField(v); err != nil {

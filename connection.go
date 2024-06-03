@@ -754,7 +754,6 @@ func (c *Connection) reader(r io.Reader) {
 
 	for {
 		frame, err := frames.ReadFrame()
-
 		if err != nil {
 			c.shutdown(&Error{Code: FrameError, Reason: err.Error()})
 			return

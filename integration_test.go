@@ -884,8 +884,8 @@ func (c Publishing) Generate(r *rand.Rand, _ int) reflect.Value {
 	var t reflect.Value
 
 	p := Publishing{}
-	//p.DeliveryMode = uint8(r.Intn(3))
-	//p.Priority = uint8(r.Intn(8))
+	// p.DeliveryMode = uint8(r.Intn(3))
+	// p.Priority = uint8(r.Intn(8))
 
 	if r.Intn(2) > 0 {
 		p.ContentType = "application/octet-stream"
@@ -1163,7 +1163,6 @@ func TestIntegrationGetOk(t *testing.T) {
 		}
 
 		msg, ok, err := ch.Get(queue, false)
-
 		if err != nil {
 			t.Fatalf("Failed get: %v", err)
 		}
@@ -1190,7 +1189,6 @@ func TestIntegrationGetEmpty(t *testing.T) {
 		}
 
 		_, ok, err := ch.Get(queue, false)
-
 		if err != nil {
 			t.Fatalf("Failed get: %v", err)
 		}
@@ -1260,7 +1258,6 @@ func TestIntegrationTxRollback(t *testing.T) {
 		}
 
 		_, ok, err := ch.Get(queue, false)
-
 		if err != nil {
 			t.Fatalf("Failed get: %v", err)
 		}
@@ -1729,7 +1726,6 @@ func TestCorruptedMessageIssue7(t *testing.T) {
 			err := pub.PublishWithContext(context.TODO(), "", queue, false, false, Publishing{
 				Body: generateCrc32Random(t, 7*i),
 			})
-
 			if err != nil {
 				t.Fatalf("Failed to publish")
 			}
@@ -2192,7 +2188,6 @@ func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T
 	if err == nil {
 		t.Fatalf("Opening a channel from a closed connection should not block but returning an error %v", err)
 	}
-
 }
 
 // Pulls out the CRC and verifies the remaining content against the CRC

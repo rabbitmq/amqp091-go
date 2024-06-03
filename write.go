@@ -224,7 +224,6 @@ func writeFrame(w io.Writer, typ uint8, channel uint16, payload []byte) (err err
 		byte((size & 0x0000ff00) >> 8),
 		byte((size & 0x000000ff) >> 0),
 	})
-
 	if err != nil {
 		return
 	}
@@ -243,7 +242,7 @@ func writeFrame(w io.Writer, typ uint8, channel uint16, payload []byte) (err err
 func writeShortstr(w io.Writer, s string) (err error) {
 	b := []byte(s)
 
-	var length = uint8(len(b))
+	length := uint8(len(b))
 
 	if err = binary.Write(w, binary.BigEndian, length); err != nil {
 		return
@@ -259,7 +258,7 @@ func writeShortstr(w io.Writer, s string) (err error) {
 func writeLongstr(w io.Writer, s string) (err error) {
 	b := []byte(s)
 
-	var length = uint32(len(b))
+	length := uint32(len(b))
 
 	if err = binary.Write(w, binary.BigEndian, length); err != nil {
 		return

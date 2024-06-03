@@ -26,10 +26,12 @@ type server struct {
 	tune  connectionTuneOk
 }
 
-var defaultLogin = "guest"
-var defaultPassword = "guest"
-var defaultPlainAuth = &PlainAuth{defaultLogin, defaultPassword}
-var defaultAMQPlainAuth = &AMQPlainAuth{defaultLogin, defaultPassword}
+var (
+	defaultLogin        = "guest"
+	defaultPassword     = "guest"
+	defaultPlainAuth    = &PlainAuth{defaultLogin, defaultPassword}
+	defaultAMQPlainAuth = &AMQPlainAuth{defaultLogin, defaultPassword}
+)
 
 func defaultConfigWithAuth(auth Authentication) Config {
 	return Config{
@@ -228,7 +230,6 @@ func TestDefaultClientProperties(t *testing.T) {
 
 	go func() {
 		srv.connectionOpen()
-
 	}()
 
 	if c, err := Open(rwc, defaultConfig()); err != nil {
@@ -246,7 +247,6 @@ func TestDefaultClientProperties(t *testing.T) {
 	if want, got := defaultLocale, srv.start.Locale; want != got {
 		t.Errorf("expected locale %s got: %s", want, got)
 	}
-
 }
 
 func TestCustomClientProperties(t *testing.T) {
@@ -261,7 +261,6 @@ func TestCustomClientProperties(t *testing.T) {
 
 	go func() {
 		srv.connectionOpen()
-
 	}()
 
 	if c, err := Open(rwc, config); err != nil {
@@ -275,7 +274,6 @@ func TestCustomClientProperties(t *testing.T) {
 	if want, got := config.Properties["version"], srv.start.ClientProperties["version"]; want != got {
 		t.Errorf("expected version %s got: %s", want, got)
 	}
-
 }
 
 func TestOpen(t *testing.T) {
@@ -283,7 +281,6 @@ func TestOpen(t *testing.T) {
 	t.Cleanup(func() { rwc.Close() })
 	go func() {
 		srv.connectionOpen()
-
 	}()
 
 	if c, err := Open(rwc, defaultConfig()); err != nil {
@@ -333,7 +330,6 @@ func TestChannelOpen(t *testing.T) {
 	go func() {
 		srv.connectionOpen()
 		srv.channelOpen(1)
-
 	}()
 
 	c, err := Open(rwc, defaultConfig())
@@ -345,7 +341,6 @@ func TestChannelOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not open channel: %v (%s)", ch, err)
 	}
-
 }
 
 func TestOpenFailedSASLUnsupportedMechanisms(t *testing.T) {
@@ -361,7 +356,6 @@ func TestOpenFailedSASLUnsupportedMechanisms(t *testing.T) {
 	if err != ErrSASL {
 		t.Fatalf("expected ErrSASL got: %+v on %+v", err, c)
 	}
-
 }
 
 func TestOpenAMQPlainAuth(t *testing.T) {
@@ -393,7 +387,6 @@ func TestOpenAMQPlainAuth(t *testing.T) {
 	if table["PASSWORD"] != defaultPassword {
 		t.Fatalf("unexpected password: want: %s, got: %s", defaultPassword, table["PASSWORD"])
 	}
-
 }
 
 func TestOpenFailedCredentials(t *testing.T) {
@@ -410,7 +403,6 @@ func TestOpenFailedCredentials(t *testing.T) {
 	if err != ErrCredentials {
 		t.Fatalf("expected ErrCredentials got: %+v on %+v", err, c)
 	}
-
 }
 
 func TestOpenFailedVhost(t *testing.T) {
@@ -527,7 +519,6 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 			t.Fatalf("failed ack, expected ack#%d to be %d, got %d", i, tag, ack.DeliveryTag)
 		}
 	}
-
 }
 
 func TestDeferredConfirmations(t *testing.T) {
