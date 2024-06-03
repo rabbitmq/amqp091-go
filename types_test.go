@@ -12,7 +12,7 @@ func TestNewError(t *testing.T) {
 		text           string
 		expectedServer bool
 		recoverable    bool
-		retriable      bool
+		temporary      bool
 	}{
 		// Just three basics samples
 		{404, "Not Found", true, true, false},
@@ -36,17 +36,17 @@ func TestNewError(t *testing.T) {
 			t.Errorf("expected Recover to be %v", tc.recoverable)
 		}
 
-		if isTemporaryError := aerr.Temporary(); isTemporaryError != tc.recoverable {
+		if ok := aerr.Recoverable(); ok != tc.recoverable {
 			t.Errorf("expected err to be temporary %v", tc.recoverable)
 		}
 
-		if isRetriable := aerr.Retryable(); isRetriable != tc.retriable {
+		if ok := aerr.Temporary(); ok != tc.temporary {
 			t.Errorf("expected err to be retriable %v", tc.recoverable)
 		}
 	}
 }
 
-func TestNewErrorMessage(t *testing.T) {
+func TestErrorMessage(t *testing.T) {
 	var err error = newError(404, "Not Found")
 
 	expected := `Exception (404) Reason: "Not Found"`

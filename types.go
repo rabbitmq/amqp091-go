@@ -94,13 +94,13 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("Exception (%d) Reason: %q", e.Code, e.Reason)
 }
 
-// Temporary returns true if the error can be recovered by retrying later or with different parameters.
+// Recoverable returns true if the error can be recovered by retrying later or with different parameters.
 // Returns the value of the Recover field.
-func (e *Error) Temporary() bool {
+func (e *Error) Recoverable() bool {
 	return e.Recover
 }
 
-// Retryable returns true if the error can be recovered by retrying later with the same parameters.
+// Temporary returns true if the error can be recovered by retrying later with the same parameters.
 //
 // The following are the codes which might be resolved by retry without external
 // action, according to the AMQP 0.91 spec
@@ -114,11 +114,7 @@ func (e *Error) Temporary() bool {
 // ConnectionForced (320)
 // "An operator intervened to close the connection for some reason. The
 // client may retry at some later date."
-func (e *Error) Retryable() bool {
-	// All retriable errors are temporary, but not all temporary errors are retriable.
-	if !e.Temporary() {
-		return false
-	}
+func (e *Error) Temporary() bool {
 	// amqp.Error has a Recover field which sounds like it should mean "retryable".
 	// But it actually means "can be recovered by retrying later or with different
 	// parameters," which is not what we want. The error codes for which Recover is
