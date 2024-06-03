@@ -2109,6 +2109,8 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 // Returns a connection to the AMQP if the AMQP_URL environment
 // variable is set and a connection can be established.
 func integrationConnection(t *testing.T, name string) *Connection {
+	t.Helper()
+
 	conf := defaultConfig()
 	if conf.Properties == nil {
 		conf.Properties = make(Table)
@@ -2124,6 +2126,8 @@ func integrationConnection(t *testing.T, name string) *Connection {
 
 // Returns a connection, channel and declares a queue when the AMQP_URL is in the environment
 func integrationQueue(t *testing.T, name string) (*Connection, *Channel) {
+	t.Helper()
+
 	if conn := integrationConnection(t, name); conn != nil {
 		if channel, err := conn.Channel(); err == nil {
 			if _, err = channel.QueueDeclare(name, false, true, false, false, nil); err == nil {
@@ -2135,6 +2139,8 @@ func integrationQueue(t *testing.T, name string) (*Connection, *Channel) {
 }
 
 func integrationQueueDelete(t *testing.T, c *Channel, queue string) {
+	t.Helper()
+
 	if c, err := c.QueueDelete(queue, false, false, false); err != nil {
 		t.Fatalf("queue deletion failed, c: %d, err: %v", c, err)
 	}
@@ -2143,6 +2149,8 @@ func integrationQueueDelete(t *testing.T, c *Channel, queue string) {
 // Delegates to integrationConnection and only returns a connection if the
 // product is RabbitMQ
 func integrationRabbitMQ(t *testing.T, name string) *Connection {
+	t.Helper()
+
 	if conn := integrationConnection(t, name); conn != nil {
 		if server, ok := conn.Properties["product"]; ok && server == "RabbitMQ" {
 			return conn
@@ -2153,6 +2161,8 @@ func integrationRabbitMQ(t *testing.T, name string) *Connection {
 }
 
 func assertConsumeBody(t *testing.T, messages <-chan Delivery, want []byte) (msg *Delivery) {
+	t.Helper()
+
 	select {
 	case got := <-messages:
 		if !bytes.Equal(want, got.Body) {
@@ -2192,6 +2202,8 @@ func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T
 
 // Pulls out the CRC and verifies the remaining content against the CRC
 func assertMessageCrc32(t *testing.T, msg []byte, assert string) {
+	t.Helper()
+
 	size := binary.BigEndian.Uint32(msg[:4])
 
 	crc := crc32.NewIEEE()
@@ -2209,6 +2221,8 @@ func assertMessageCrc32(t *testing.T, msg []byte, assert string) {
 // Creates a random body size with a leading 32-bit CRC in network byte order
 // that verifies the remaining slice
 func generateCrc32Random(t *testing.T, size int) []byte {
+	t.Helper()
+
 	msg := make([]byte, size+8)
 	if _, err := io.ReadFull(devrand.Reader, msg); err != nil {
 		t.Fatalf("could not get random data: %+v", err)
