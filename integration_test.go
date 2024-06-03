@@ -899,23 +899,23 @@ func (c Publishing) Generate(r *rand.Rand, _ int) reflect.Value {
 	}
 
 	if r.Intn(2) > 0 {
-		p.CorrelationId = fmt.Sprintf("%d", r.Int())
+		p.CorrelationId = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.ReplyTo = fmt.Sprintf("%d", r.Int())
+		p.ReplyTo = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.MessageId = fmt.Sprintf("%d", r.Int())
+		p.MessageId = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.Type = fmt.Sprintf("%d", r.Int())
+		p.Type = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.AppId = fmt.Sprintf("%d", r.Int())
+		p.AppId = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
