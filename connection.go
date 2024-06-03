@@ -675,7 +675,6 @@ func (c *Connection) dispatch0(f frame) {
 				return
 			case c.rpc <- m:
 			}
-
 		}
 	case *heartbeatFrame:
 		// kthx - all reads reset our deadline.  so we can drop this

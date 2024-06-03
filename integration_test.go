@@ -351,7 +351,6 @@ func TestIntegrationBasicQueueOperations(t *testing.T) {
 
 		deleteQueueFirstOptions := []bool{true, false}
 		for _, deleteQueueFirst := range deleteQueueFirstOptions {
-
 			if err := channel.ExchangeDeclare(
 				exchangeName, // name
 				"direct",     // type
@@ -403,7 +402,6 @@ func TestIntegrationBasicQueueOperations(t *testing.T) {
 					t.Fatalf("delete exchange (after delete queue): %s", err)
 				}
 				t.Logf("delete exchange (after delete queue) OK")
-
 			} else { // deleteExchangeFirst
 				if err := channel.ExchangeDelete(exchangeName, false, false); err != nil {
 					t.Fatalf("delete exchange (first): %s", err)
@@ -557,7 +555,6 @@ func TestIntegrationChannelClosing(t *testing.T) {
 			}
 			t.Logf("created/closed %d channels OK", n)
 		}
-
 	}
 }
 
