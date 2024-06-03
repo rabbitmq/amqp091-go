@@ -269,7 +269,7 @@ func readTable(r io.Reader) (table Table, err error) {
 		return
 	}
 
-	nested.Write([]byte(str))
+	nested.WriteString(str)
 
 	table = make(Table)
 
