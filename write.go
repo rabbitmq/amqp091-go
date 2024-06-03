@@ -90,11 +90,11 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 
 	var mask uint16
 
-	if len(f.Properties.ContentType) > 0 {
-		mask = mask | flagContentType
+	if f.Properties.ContentType != "" {
+		mask |= flagContentType
 	}
-	if len(f.Properties.ContentEncoding) > 0 {
-		mask = mask | flagContentEncoding
+	if f.Properties.ContentEncoding != "" {
+		mask |= flagContentEncoding
 	}
 	if f.Properties.Headers != nil && len(f.Properties.Headers) > 0 {
 		mask = mask | flagHeaders
@@ -105,29 +105,29 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 	if f.Properties.Priority > 0 {
 		mask = mask | flagPriority
 	}
-	if len(f.Properties.CorrelationId) > 0 {
-		mask = mask | flagCorrelationId
+	if f.Properties.CorrelationId != "" {
+		mask |= flagCorrelationId
 	}
-	if len(f.Properties.ReplyTo) > 0 {
-		mask = mask | flagReplyTo
+	if f.Properties.ReplyTo != "" {
+		mask |= flagReplyTo
 	}
-	if len(f.Properties.Expiration) > 0 {
-		mask = mask | flagExpiration
+	if f.Properties.Expiration != "" {
+		mask |= flagExpiration
 	}
-	if len(f.Properties.MessageId) > 0 {
-		mask = mask | flagMessageId
+	if f.Properties.MessageId != "" {
+		mask |= flagMessageId
 	}
 	if !f.Properties.Timestamp.IsZero() {
 		mask = mask | flagTimestamp
 	}
-	if len(f.Properties.Type) > 0 {
-		mask = mask | flagType
+	if f.Properties.Type != "" {
+		mask |= flagType
 	}
-	if len(f.Properties.UserId) > 0 {
-		mask = mask | flagUserId
+	if f.Properties.UserId != "" {
+		mask |= flagUserId
 	}
-	if len(f.Properties.AppId) > 0 {
-		mask = mask | flagAppId
+	if f.Properties.AppId != "" {
+		mask |= flagAppId
 	}
 
 	if err = binary.Write(&payload, binary.BigEndian, mask); err != nil {
