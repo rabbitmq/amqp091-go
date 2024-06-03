@@ -18,7 +18,7 @@ var errDeliveryNotInitialized = errors.New("delivery not initialized")
 // Applications can provide mock implementations in tests of Delivery handlers.
 type Acknowledger interface {
 	Ack(tag uint64, multiple bool) error
-	Nack(tag uint64, multiple bool, requeue bool) error
+	Nack(tag uint64, multiple, requeue bool) error
 	Reject(tag uint64, requeue bool) error
 }
 
