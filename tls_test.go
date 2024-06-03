@@ -16,6 +16,8 @@ import (
 )
 
 func tlsServerConfig(t *testing.T) *tls.Config {
+	t.Helper()
+
 	cfg := new(tls.Config)
 
 	cfg.ClientCAs = x509.NewCertPool()
@@ -33,6 +35,8 @@ func tlsServerConfig(t *testing.T) *tls.Config {
 }
 
 func tlsClientConfig(t *testing.T) *tls.Config {
+	t.Helper()
+
 	cfg := new(tls.Config)
 	cfg.RootCAs = x509.NewCertPool()
 	cfg.RootCAs.AppendCertsFromPEM([]byte(caCert))
@@ -56,6 +60,8 @@ type tlsServer struct {
 
 // Captures the header for each accepted connection
 func (s *tlsServer) Serve(t *testing.T) {
+	t.Helper()
+
 	for {
 		c, err := s.Accept()
 		if err != nil {
@@ -66,6 +72,8 @@ func (s *tlsServer) Serve(t *testing.T) {
 }
 
 func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
+	t.Helper()
+
 	l, err := tls.Listen("tcp", "127.0.0.1:3456", cfg)
 	if err != nil {
 		t.Fatalf("TLS server Listen error: %+v", err)
