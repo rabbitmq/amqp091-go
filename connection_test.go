@@ -375,6 +375,8 @@ func TestConnection_Close_WhenMemoryAlarmIsActive(t *testing.T) {
 }
 
 func rabbitmqctl(t *testing.T, args ...string) error {
+	t.Helper()
+
 	rabbitmqctlPath, found := os.LookupEnv(rabbitmqctlEnvKey)
 	if !found {
 		t.Skipf("variable for %s for rabbitmqctl not found, skipping", rabbitmqctlEnvKey)

@@ -90,44 +90,44 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 
 	var mask uint16
 
-	if len(f.Properties.ContentType) > 0 {
-		mask = mask | flagContentType
+	if f.Properties.ContentType != "" {
+		mask |= flagContentType
 	}
-	if len(f.Properties.ContentEncoding) > 0 {
-		mask = mask | flagContentEncoding
+	if f.Properties.ContentEncoding != "" {
+		mask |= flagContentEncoding
 	}
 	if f.Properties.Headers != nil && len(f.Properties.Headers) > 0 {
-		mask = mask | flagHeaders
+		mask |= flagHeaders
 	}
 	if f.Properties.DeliveryMode > 0 {
-		mask = mask | flagDeliveryMode
+		mask |= flagDeliveryMode
 	}
 	if f.Properties.Priority > 0 {
-		mask = mask | flagPriority
+		mask |= flagPriority
 	}
-	if len(f.Properties.CorrelationId) > 0 {
-		mask = mask | flagCorrelationId
+	if f.Properties.CorrelationId != "" {
+		mask |= flagCorrelationId
 	}
-	if len(f.Properties.ReplyTo) > 0 {
-		mask = mask | flagReplyTo
+	if f.Properties.ReplyTo != "" {
+		mask |= flagReplyTo
 	}
-	if len(f.Properties.Expiration) > 0 {
-		mask = mask | flagExpiration
+	if f.Properties.Expiration != "" {
+		mask |= flagExpiration
 	}
-	if len(f.Properties.MessageId) > 0 {
-		mask = mask | flagMessageId
+	if f.Properties.MessageId != "" {
+		mask |= flagMessageId
 	}
 	if !f.Properties.Timestamp.IsZero() {
-		mask = mask | flagTimestamp
+		mask |= flagTimestamp
 	}
-	if len(f.Properties.Type) > 0 {
-		mask = mask | flagType
+	if f.Properties.Type != "" {
+		mask |= flagType
 	}
-	if len(f.Properties.UserId) > 0 {
-		mask = mask | flagUserId
+	if f.Properties.UserId != "" {
+		mask |= flagUserId
 	}
-	if len(f.Properties.AppId) > 0 {
-		mask = mask | flagAppId
+	if f.Properties.AppId != "" {
+		mask |= flagAppId
 	}
 
 	if err = binary.Write(&payload, binary.BigEndian, mask); err != nil {
@@ -224,7 +224,6 @@ func writeFrame(w io.Writer, typ uint8, channel uint16, payload []byte) (err err
 		byte((size & 0x0000ff00) >> 8),
 		byte((size & 0x000000ff) >> 0),
 	})
-
 	if err != nil {
 		return
 	}
@@ -243,7 +242,7 @@ func writeFrame(w io.Writer, typ uint8, channel uint16, payload []byte) (err err
 func writeShortstr(w io.Writer, s string) (err error) {
 	b := []byte(s)
 
-	var length = uint8(len(b))
+	length := uint8(len(b))
 
 	if err = binary.Write(w, binary.BigEndian, length); err != nil {
 		return
@@ -259,7 +258,7 @@ func writeShortstr(w io.Writer, s string) (err error) {
 func writeLongstr(w io.Writer, s string) (err error) {
 	b := []byte(s)
 
-	var length = uint32(len(b))
+	length := uint32(len(b))
 
 	if err = binary.Write(w, binary.BigEndian, length); err != nil {
 		return

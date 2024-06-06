@@ -351,7 +351,6 @@ func TestIntegrationBasicQueueOperations(t *testing.T) {
 
 		deleteQueueFirstOptions := []bool{true, false}
 		for _, deleteQueueFirst := range deleteQueueFirstOptions {
-
 			if err := channel.ExchangeDeclare(
 				exchangeName, // name
 				"direct",     // type
@@ -403,7 +402,6 @@ func TestIntegrationBasicQueueOperations(t *testing.T) {
 					t.Fatalf("delete exchange (after delete queue): %s", err)
 				}
 				t.Logf("delete exchange (after delete queue) OK")
-
 			} else { // deleteExchangeFirst
 				if err := channel.ExchangeDelete(exchangeName, false, false); err != nil {
 					t.Fatalf("delete exchange (first): %s", err)
@@ -557,7 +555,6 @@ func TestIntegrationChannelClosing(t *testing.T) {
 			}
 			t.Logf("created/closed %d channels OK", n)
 		}
-
 	}
 }
 
@@ -887,8 +884,8 @@ func (c Publishing) Generate(r *rand.Rand, _ int) reflect.Value {
 	var t reflect.Value
 
 	p := Publishing{}
-	//p.DeliveryMode = uint8(r.Intn(3))
-	//p.Priority = uint8(r.Intn(8))
+	// p.DeliveryMode = uint8(r.Intn(3))
+	// p.Priority = uint8(r.Intn(8))
 
 	if r.Intn(2) > 0 {
 		p.ContentType = "application/octet-stream"
@@ -899,23 +896,23 @@ func (c Publishing) Generate(r *rand.Rand, _ int) reflect.Value {
 	}
 
 	if r.Intn(2) > 0 {
-		p.CorrelationId = fmt.Sprintf("%d", r.Int())
+		p.CorrelationId = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.ReplyTo = fmt.Sprintf("%d", r.Int())
+		p.ReplyTo = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.MessageId = fmt.Sprintf("%d", r.Int())
+		p.MessageId = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.Type = fmt.Sprintf("%d", r.Int())
+		p.Type = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.AppId = fmt.Sprintf("%d", r.Int())
+		p.AppId = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
@@ -1166,7 +1163,6 @@ func TestIntegrationGetOk(t *testing.T) {
 		}
 
 		msg, ok, err := ch.Get(queue, false)
-
 		if err != nil {
 			t.Fatalf("Failed get: %v", err)
 		}
@@ -1193,7 +1189,6 @@ func TestIntegrationGetEmpty(t *testing.T) {
 		}
 
 		_, ok, err := ch.Get(queue, false)
-
 		if err != nil {
 			t.Fatalf("Failed get: %v", err)
 		}
@@ -1263,7 +1258,6 @@ func TestIntegrationTxRollback(t *testing.T) {
 		}
 
 		_, ok, err := ch.Get(queue, false)
-
 		if err != nil {
 			t.Fatalf("Failed get: %v", err)
 		}
@@ -1732,7 +1726,6 @@ func TestCorruptedMessageIssue7(t *testing.T) {
 			err := pub.PublishWithContext(context.TODO(), "", queue, false, false, Publishing{
 				Body: generateCrc32Random(t, 7*i),
 			})
-
 			if err != nil {
 				t.Fatalf("Failed to publish")
 			}
@@ -2116,6 +2109,8 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 // Returns a connection to the AMQP if the AMQP_URL environment
 // variable is set and a connection can be established.
 func integrationConnection(t *testing.T, name string) *Connection {
+	t.Helper()
+
 	conf := defaultConfig()
 	if conf.Properties == nil {
 		conf.Properties = make(Table)
@@ -2131,6 +2126,8 @@ func integrationConnection(t *testing.T, name string) *Connection {
 
 // Returns a connection, channel and declares a queue when the AMQP_URL is in the environment
 func integrationQueue(t *testing.T, name string) (*Connection, *Channel) {
+	t.Helper()
+
 	if conn := integrationConnection(t, name); conn != nil {
 		if channel, err := conn.Channel(); err == nil {
 			if _, err = channel.QueueDeclare(name, false, true, false, false, nil); err == nil {
@@ -2142,6 +2139,8 @@ func integrationQueue(t *testing.T, name string) (*Connection, *Channel) {
 }
 
 func integrationQueueDelete(t *testing.T, c *Channel, queue string) {
+	t.Helper()
+
 	if c, err := c.QueueDelete(queue, false, false, false); err != nil {
 		t.Fatalf("queue deletion failed, c: %d, err: %v", c, err)
 	}
@@ -2150,6 +2149,8 @@ func integrationQueueDelete(t *testing.T, c *Channel, queue string) {
 // Delegates to integrationConnection and only returns a connection if the
 // product is RabbitMQ
 func integrationRabbitMQ(t *testing.T, name string) *Connection {
+	t.Helper()
+
 	if conn := integrationConnection(t, name); conn != nil {
 		if server, ok := conn.Properties["product"]; ok && server == "RabbitMQ" {
 			return conn
@@ -2160,6 +2161,8 @@ func integrationRabbitMQ(t *testing.T, name string) *Connection {
 }
 
 func assertConsumeBody(t *testing.T, messages <-chan Delivery, want []byte) (msg *Delivery) {
+	t.Helper()
+
 	select {
 	case got := <-messages:
 		if !bytes.Equal(want, got.Body) {
@@ -2195,11 +2198,12 @@ func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T
 	if err == nil {
 		t.Fatalf("Opening a channel from a closed connection should not block but returning an error %v", err)
 	}
-
 }
 
 // Pulls out the CRC and verifies the remaining content against the CRC
 func assertMessageCrc32(t *testing.T, msg []byte, assert string) {
+	t.Helper()
+
 	size := binary.BigEndian.Uint32(msg[:4])
 
 	crc := crc32.NewIEEE()
@@ -2217,6 +2221,8 @@ func assertMessageCrc32(t *testing.T, msg []byte, assert string) {
 // Creates a random body size with a leading 32-bit CRC in network byte order
 // that verifies the remaining slice
 func generateCrc32Random(t *testing.T, size int) []byte {
+	t.Helper()
+
 	msg := make([]byte, size+8)
 	if _, err := io.ReadFull(devrand.Reader, msg); err != nil {
 		t.Fatalf("could not get random data: %+v", err)

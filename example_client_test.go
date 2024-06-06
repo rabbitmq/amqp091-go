@@ -174,7 +174,6 @@ func (client *Client) handleReconnect(addr string) {
 		client.logger.Println("Attempting to connect")
 
 		conn, err := client.connect(addr)
-
 		if err != nil {
 			client.logger.Println("Failed to connect. Retrying...")
 
@@ -195,7 +194,6 @@ func (client *Client) handleReconnect(addr string) {
 // connect will create a new AMQP connection
 func (client *Client) connect(addr string) (*amqp.Connection, error) {
 	conn, err := amqp.Dial(addr)
-
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +212,6 @@ func (client *Client) handleReInit(conn *amqp.Connection) bool {
 		client.m.Unlock()
 
 		err := client.init(conn)
-
 		if err != nil {
 			client.logger.Println("Failed to initialize channel. Retrying...")
 
@@ -244,13 +241,11 @@ func (client *Client) handleReInit(conn *amqp.Connection) bool {
 // init will initialize channel & declare queue
 func (client *Client) init(conn *amqp.Connection) error {
 	ch, err := conn.Channel()
-
 	if err != nil {
 		return err
 	}
 
 	err = ch.Confirm(false)
-
 	if err != nil {
 		return err
 	}
@@ -262,7 +257,6 @@ func (client *Client) init(conn *amqp.Connection) error {
 		false, // No-wait
 		nil,   // Arguments
 	)
-
 	if err != nil {
 		return err
 	}

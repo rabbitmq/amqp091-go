@@ -16,8 +16,7 @@ func SetLogger(logger Logging) {
 	Logger = logger
 }
 
-type NullLogger struct {
-}
+type NullLogger struct{}
 
 func (l NullLogger) Printf(format string, v ...interface{}) {
 }

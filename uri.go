@@ -14,8 +14,10 @@ import (
 	"strings"
 )
 
-var errURIScheme = errors.New("AMQP scheme must be either 'amqp://' or 'amqps://'")
-var errURIWhitespace = errors.New("URI must not contain whitespace")
+var (
+	errURIScheme     = errors.New("AMQP scheme must be either 'amqp://' or 'amqps://'")
+	errURIWhitespace = errors.New("URI must not contain whitespace")
+)
 
 var schemePorts = map[string]int{
 	"amqp":  5672,

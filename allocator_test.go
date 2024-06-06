@@ -95,7 +95,6 @@ func TestAllocatorShouldNotReuseEarly(t *testing.T) {
 	if want, got := first, third; want != got {
 		t.Fatalf("expected third allocation to be %d, got: %d", want, got)
 	}
-
 }
 
 func TestAllocatorReleasesKeepUpWithAllocationsForAllSizes(t *testing.T) {

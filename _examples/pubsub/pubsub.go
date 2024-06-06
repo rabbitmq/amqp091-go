@@ -12,10 +12,11 @@ import (
 	"crypto/sha1"
 	"flag"
 	"fmt"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"io"
 	"log"
 	"os"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 var url = flag.String("url", "amqp:///", "AMQP url for both the publisher and subscriber")
