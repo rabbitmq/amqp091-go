@@ -1,6 +1,7 @@
 package amqp091
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -10,24 +11,54 @@ func TestNewError(t *testing.T) {
 		code           uint16
 		text           string
 		expectedServer bool
+		recoverable    bool
+		temporary      bool
 	}{
 		// Just three basics samples
-		{404, "Not Found", true},
-		{500, "Internal Server Error", true},
-		{403, "Forbidden", true},
+		{404, "Not Found", true, true, false},
+		{500, "Internal Server Error", true, false, false},
+		{403, "Forbidden", true, true, false},
+		{311, "Content Too Large", true, true, true},
 	}
 
 	for _, tc := range testCases {
-		err := newError(tc.code, tc.text)
-		if err.Code != int(tc.code) {
-			t.Errorf("expected Code %d, got %d", tc.code, err.Code)
+		aerr := newError(tc.code, tc.text)
+		if aerr.Code != int(tc.code) {
+			t.Errorf("expected Code %d, got %d", tc.code, aerr.Code)
 		}
-		if err.Reason != tc.text {
-			t.Errorf("expected Reason %s, got %s", tc.text, err.Reason)
+		if aerr.Reason != tc.text {
+			t.Errorf("expected Reason %s, got %s", tc.text, aerr.Reason)
 		}
-		if err.Server != tc.expectedServer {
+		if aerr.Server != tc.expectedServer {
 			t.Errorf("expected Server to be %v", tc.expectedServer)
 		}
+		if aerr.Recover != tc.recoverable {
+			t.Errorf("expected Recover to be %v", tc.recoverable)
+		}
+
+		if ok := aerr.Recoverable(); ok != tc.recoverable {
+			t.Errorf("expected err to be temporary %v", tc.recoverable)
+		}
+
+		if ok := aerr.Temporary(); ok != tc.temporary {
+			t.Errorf("expected err to be retriable %v", tc.recoverable)
+		}
+	}
+}
+
+func TestErrorMessage(t *testing.T) {
+	var err error = newError(404, "Not Found")
+
+	expected := `Exception (404) Reason: "Not Found"`
+
+	if got := err.Error(); expected != got {
+		t.Errorf("expected Error %q, got %q", expected, got)
+	}
+
+	expected = `Exception=404, Reason="Not Found", Recover=true, Server=true`
+
+	if got := fmt.Sprintf("%#v", err); expected != got {
+		t.Errorf("expected go string %q, got %q", expected, got)
 	}
 }
 
