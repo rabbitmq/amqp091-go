@@ -502,7 +502,6 @@ func public(parts ...string) string {
 
 func export(delim *regexp.Regexp, parts ...string) (res string) {
 	for _, in := range parts {
-
 		res += delim.ReplaceAllStringFunc(in, func(match string) string {
 			switch len(match) {
 			case 1:
@@ -526,7 +525,6 @@ func main() {
 	}
 
 	err = xml.Unmarshal(spec, &r.Root)
-
 	if err != nil {
 		log.Fatalln("Could not parse XML:", err)
 	}

@@ -70,6 +70,8 @@ var (
 	errInvalidTypeAssertion = &Error{Code: InternalError, Reason: "type assertion unsuccessful", Server: false, Recover: true}
 )
 
+var _ error = (*Error)(nil)
+
 // Error captures the code and reason a channel or connection has been closed
 // by the server.
 type Error struct {
@@ -88,8 +90,52 @@ func newError(code uint16, text string) *Error {
 	}
 }
 
-func (e Error) Error() string {
+func (e *Error) Error() string {
 	return fmt.Sprintf("Exception (%d) Reason: %q", e.Code, e.Reason)
+}
+
+// Recoverable returns true if the error can be recovered by retrying later or with different parameters.
+// Returns the value of the Recover field.
+func (e *Error) Recoverable() bool {
+	return e.Recover
+}
+
+// Temporary returns true if the error can be recovered by retrying later with the same parameters.
+//
+// The following are the codes which might be resolved by retry without external
+// action, according to the AMQP 0.91 spec
+// (https://www.rabbitmq.com/amqp-0-9-1-reference.html#constants). The quotations
+// are from that page.
+//
+// ContentTooLarge (311)
+// "The client attempted to transfer content larger than the server could
+// accept at the present time. The client may retry at a later time."
+//
+// ConnectionForced (320)
+// "An operator intervened to close the connection for some reason. The
+// client may retry at some later date."
+func (e *Error) Temporary() bool {
+	// amqp.Error has a Recover field which sounds like it should mean "retryable".
+	// But it actually means "can be recovered by retrying later or with different
+	// parameters," which is not what we want. The error codes for which Recover is
+	// true, defined in the isSoftExceptionCode function, including things
+	// like NotFound and AccessRefused, which require outside action.
+	switch e.Code {
+	case ContentTooLarge:
+		return true
+
+	case ConnectionForced:
+		return true
+
+	default:
+		return false
+	}
+}
+
+// GoString returns a longer description of the error than .Error() including all fields.
+func (e *Error) GoString() string {
+	return fmt.Sprintf("Exception=%d, Reason=%q, Recover=%v, Server=%v",
+		e.Code, e.Reason, e.Recover, e.Server)
 }
 
 // Used by header frames to capture routing and header information
