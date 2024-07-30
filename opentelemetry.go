@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/getoutreach/gobox/pkg/app"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -90,7 +89,6 @@ func extractSpanFromReturn(
 			semconv.MessagingMessageID(ret.MessageId),
 			semconv.MessagingMessageConversationID(ret.CorrelationId),
 			semconv.MessagingSystemRabbitmq,
-			semconv.MessagingClientIDKey.String(app.Info().Name),
 			semconv.ErrorTypeKey.String(ret.ReplyText),
 			// semconv.NetPeerPort(5672
 			// semconv.NetPeerIP("localhost")

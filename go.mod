@@ -5,7 +5,6 @@ go 1.21
 toolchain go1.22.0
 
 require (
-	github.com/getoutreach/gobox v1.92.1
 	go.opentelemetry.io/otel v1.27.0
 	go.opentelemetry.io/otel/trace v1.27.0
 	go.uber.org/goleak v1.3.0
