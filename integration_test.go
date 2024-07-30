@@ -286,6 +286,49 @@ func TestIntegrationQueueDeclarePassiveOnMissingExchangeShouldError(t *testing.T
 	}
 }
 
+// https://github.com/rabbitmq/amqp091-go/issues/273
+// Note: RabbitMQ behaves according to spec.
+// Passive declarations ignore everything but the queue name
+// #themoreuknow
+func TestIntegrationQueueDeclarePassiveOnQueueTypeMismatchShouldError(t *testing.T) {
+	c := integrationConnection(t, t.Name())
+	if c != nil {
+		defer c.Close()
+
+		ch, err := c.Channel()
+		if err != nil {
+			t.Fatalf("create channel1: %s", err)
+		}
+		defer ch.Close()
+
+		queueName := t.Name()
+
+		if _, err := ch.QueueDeclare(
+			queueName, // name
+			false,     // durable
+			true,      // auto-delete
+			false,     // exclusive
+			false,     // noWait
+			nil,       // arguments
+		); err != nil {
+			t.Fatalf("queue declare: %s", err)
+		}
+
+		args := Table{QueueTypeArg: QueueTypeQuorum}
+
+		if _, err := ch.QueueDeclarePassive(
+			queueName, // name
+			false,     // duration (note: not durable)
+			true,      // auto-delete
+			false,     // exclusive
+			false,     // noWait
+			args,      // arguments
+		); err != nil {
+			t.Fatal("QueueDeclarePassive with mismatched queue type should NOT error")
+		}
+	}
+}
+
 // https://github.com/streadway/amqp/issues/94
 func TestIntegrationPassiveQueue(t *testing.T) {
 	c := integrationConnection(t, "queue")
