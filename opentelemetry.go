@@ -2,6 +2,7 @@ package amqp091
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/getoutreach/gobox/pkg/app"
@@ -102,12 +103,14 @@ func extractSpanFromReturn(
 // settleDelivery creates a span for the acking of a delivery
 func settleDelivery(
 	ctx context.Context,
-	consumerTag string,
+	delivery *Delivery,
+	response DeliveryResponse,
 	multiple, requeue bool,
 ) (context.Context, trace.Span) {
 	return tracer.Start(ctx,
-		fmt.Sprintf("%s settle", consumerTag),
+		fmt.Sprintf("%s settle", delivery.RoutingKey),
 		trace.WithAttributes(
+			attribute.String("messaging.operation.name", response.Name()),
 			attribute.Bool("multiple", multiple),
 			attribute.Bool("requeue", requeue)))
 }
@@ -121,24 +124,25 @@ func settleDelivery(
 //
 // The consumer span may containe 1 or more messages, which is why we don't
 // manufacture the span in its entirety here.
-func extractLinkFromDelivery(ctx context.Context, del Delivery) trace.Link {
+func extractLinkFromDelivery(ctx context.Context, del *Delivery) trace.Link {
 	spctx := ExtractSpanContext(ctx, del.Headers)
-	return trace.LinkFromContext(spctx, semconv.MessagingMessageID(del.MessageId))
+	return trace.LinkFromContext(spctx,
+		semconv.MessagingMessageConversationID(del.CorrelationId),
+		semconv.MessagingMessageID(del.MessageId),
+		semconv.MessagingRabbitmqMessageDeliveryTag(int(del.DeliveryTag)))
 }
 
 // spanForDelivery creates a span for the delivered messages
-// returns a new context with the span headers and the span
+// returns a new context with the span headers and the span.
 func spanForDelivery(
 	ctx context.Context,
 	consumerTag string,
-	delivery []Delivery,
+	delivery *Delivery,
 	options ...trace.SpanStartOption,
 ) (context.Context, trace.Span) {
 	spanName := fmt.Sprintf("%s consume", consumerTag)
 	links := []trace.Link{}
-	for _, del := range delivery {
-		links = append(links, extractLinkFromDelivery(ctx, del))
-	}
+	links = append(links, extractLinkFromDelivery(ctx, delivery))
 	return tracer.Start(
 		ctx,
 		spanName,
@@ -158,7 +162,7 @@ func spanForPublication(
 	publishing Publishing,
 	exchange, routinKey string,
 	immediate bool,
-) (context.Context, Publishing, func(err error, typ string)) {
+) (context.Context, Publishing, func(err error)) {
 	spanName := fmt.Sprintf("%s publish", routinKey)
 	ctx, span := tracer.Start(ctx, spanName,
 		trace.WithSpanKind(trace.SpanKindProducer),
@@ -169,7 +173,7 @@ func spanForPublication(
 			semconv.MessagingMessageID(publishing.MessageId),
 			semconv.MessagingMessageConversationID(publishing.CorrelationId),
 			semconv.MessagingSystemRabbitmq,
-			semconv.MessagingClientIDKey.String(app.Info().Name),
+			semconv.MessagingClientIDKey.String(publishing.AppId),
 			semconv.MessagingMessageBodySize(len(publishing.Body)),
 			semconv.MessageTypeSent,
 			attribute.Bool("messaging.immediate", immediate),
@@ -183,12 +187,15 @@ func spanForPublication(
 	headers := injectSpanFromContext(ctx, publishing.Headers)
 	publishing.Headers = Table(headers)
 
-	return ctx, publishing, func(err error, typ string) {
+	return ctx, publishing, func(err error) {
 		if err != nil {
 			span.RecordError(err)
-			span.SetAttributes(
-				semconv.ErrorTypeKey.String(typ),
-			)
+			amqpErr := &Error{}
+			if errors.As(err, &amqpErr) {
+				span.SetAttributes(
+					semconv.ErrorTypeKey.String(amqpErr.Reason),
+				)
+			}
 			span.SetStatus(codes.Error, err.Error())
 		}
 		span.End()
