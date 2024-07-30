@@ -230,7 +230,7 @@ type Publishing struct {
 	// Expiration represents the message TTL in milliseconds. A value of "0"
 	// indicates that the message will immediately expire if the message arrives
 	// at its destination and the message is not directly handled by a consumer
-	// that currently has the capacatity to do so. If you wish the message to
+	// that currently has the capacity to do so. If you wish the message to
 	// not expire on its own, set this value to any ttl value, empty string or
 	// use the corresponding constants NeverExpire and ImmediatelyExpire. This
 	// does not influence queue configured TTL values.
