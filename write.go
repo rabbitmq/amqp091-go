@@ -96,7 +96,7 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 	if f.Properties.ContentEncoding != "" {
 		mask |= flagContentEncoding
 	}
-	if f.Properties.Headers != nil && len(f.Properties.Headers) > 0 {
+	if len(f.Properties.Headers) > 0 {
 		mask |= flagHeaders
 	}
 	if f.Properties.DeliveryMode > 0 {
