@@ -166,7 +166,7 @@ func ParseURI(uri string) (URI, error) {
 	if params.Has("channel_max") {
 		value, err := strconv.ParseUint(params.Get("channel_max"), 10, 16)
 		if err != nil {
-			return builder, fmt.Errorf("connection_timeout is not an integer: %v", err)
+			return builder, fmt.Errorf("channel_max is not an uint16: %v", err)
 		}
 		builder.ChannelMax = uint16(value)
 	}
