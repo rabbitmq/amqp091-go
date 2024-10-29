@@ -68,7 +68,7 @@ func redial(ctx context.Context, url string) chan chan session {
 				log.Fatalf("cannot create channel: %v", err)
 			}
 
-			if err := ch.ExchangeDeclare(exchange, "fanout", false, true, false, false, nil); err != nil {
+			if err := ch.ExchangeDeclare(exchange, amqp.Fanout, false, true, false, false, nil); err != nil {
 				log.Fatalf("cannot declare fanout exchange: %v", err)
 			}
 

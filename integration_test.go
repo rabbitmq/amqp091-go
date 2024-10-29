@@ -171,12 +171,12 @@ func TestExchangePassiveOnMissingExchangeShouldError(t *testing.T) {
 
 		if err := ch.ExchangeDeclarePassive(
 			"test-integration-missing-passive-exchange",
-			"direct", // type
-			false,    // duration (note: is durable)
-			true,     // auto-delete
-			false,    // internal
-			false,    // nowait
-			nil,      // args
+			Direct, // type
+			false,  // duration (note: is durable)
+			true,   // auto-delete
+			false,  // internal
+			false,  // nowait
+			nil,    // args
 		); err == nil {
 			t.Fatal("ExchangeDeclarePassive of a missing exchange should return error")
 		}
@@ -199,7 +199,7 @@ func TestIntegrationExchangeDeclarePassiveOnDeclaredShouldNotError(t *testing.T)
 
 		if err := ch.ExchangeDeclare(
 			exchange, // name
-			"direct", // type
+			Direct,   // type
 			false,    // durable
 			true,     // auto-delete
 			false,    // internal
@@ -211,7 +211,7 @@ func TestIntegrationExchangeDeclarePassiveOnDeclaredShouldNotError(t *testing.T)
 
 		if err := ch.ExchangeDeclarePassive(
 			exchange, // name
-			"direct", // type
+			Direct,   // type
 			false,    // durable
 			true,     // auto-delete
 			false,    // internal
@@ -238,7 +238,7 @@ func TestIntegrationExchange(t *testing.T) {
 
 		if err := channel.ExchangeDeclare(
 			exchange, // name
-			"direct", // type
+			Direct,   // type
 			false,    // duration
 			true,     // auto-delete
 			false,    // internal
@@ -396,7 +396,7 @@ func TestIntegrationBasicQueueOperations(t *testing.T) {
 		for _, deleteQueueFirst := range deleteQueueFirstOptions {
 			if err := channel.ExchangeDeclare(
 				exchangeName, // name
-				"direct",     // type
+				Direct,       // type
 				true,         // duration (note: is durable)
 				false,        // auto-delete
 				false,        // internal
@@ -1502,11 +1502,11 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 
 		ch, _ := conn.Channel()
 
-		if err := ch.ExchangeDeclare(ex, "fanout", false, true, false, false, nil); err != nil {
+		if err := ch.ExchangeDeclare(ex, Fanout, false, true, false, false, nil); err != nil {
 			t.Fatalf("cannot declare %v: got: %v", ex, err)
 		}
 
-		if err := ch.ExchangeDeclare(dlex, "fanout", false, true, false, false, nil); err != nil {
+		if err := ch.ExchangeDeclare(dlex, Fanout, false, true, false, false, nil); err != nil {
 			t.Fatalf("cannot declare %v: got: %v", dlex, err)
 		}
 
@@ -1722,7 +1722,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 
 		// This ensures that the 2nd channel is unaffected by the channel exception
 		// on channel 1.
-		err = c2.ExchangeDeclare("test-channel-still-exists", "direct", false, true, false, false, nil)
+		err = c2.ExchangeDeclare("test-channel-still-exists", Direct, false, true, false, false, nil)
 		if err != nil {
 			t.Fatalf("failed to declare exchange, got: %v", err)
 		}
@@ -1834,12 +1834,12 @@ func TestExchangeDeclarePrecondition(t *testing.T) {
 
 		err = ch.ExchangeDeclare(
 			exchange,
-			"direct", // exchangeType
-			false,    // durable
-			true,     // auto-delete
-			false,    // internal
-			false,    // noWait
-			nil,      // arguments
+			Direct, // exchangeType
+			false,  // durable
+			true,   // auto-delete
+			false,  // internal
+			false,  // noWait
+			nil,    // arguments
 		)
 		if err != nil {
 			t.Fatalf("Could not initially declare exchange")
@@ -1847,7 +1847,7 @@ func TestExchangeDeclarePrecondition(t *testing.T) {
 
 		err = ch.ExchangeDeclare(
 			exchange,
-			"direct",
+			Direct,
 			true, // different durability
 			true,
 			false,
@@ -2041,7 +2041,7 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 		}
 
 		ex := "test-get-next-pub"
-		if err = ch.ExchangeDeclare(ex, "direct", false, false, false, false, nil); err != nil {
+		if err = ch.ExchangeDeclare(ex, Direct, false, false, false, false, nil); err != nil {
 			t.Fatalf("cannot declare %v: got: %v", ex, err)
 		}
 
@@ -2075,7 +2075,7 @@ func TestIntegrationGetNextPublishSeqNoRace(t *testing.T) {
 		}
 
 		ex := "test-get-next-pub"
-		if err = ch.ExchangeDeclare(ex, "direct", false, false, false, false, nil); err != nil {
+		if err = ch.ExchangeDeclare(ex, Direct, false, false, false, false, nil); err != nil {
 			t.Fatalf("cannot declare %v: got: %v", ex, err)
 		}
 
