@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"time"
@@ -414,12 +415,16 @@ func writeTable(w io.Writer, table Table) (err error) {
 
 	for key, val := range table {
 		if err = writeShortstr(&buf, key); err != nil {
-			return
+			return fmt.Errorf("writing key %q: %w", key, err)
 		}
 		if err = writeField(&buf, val); err != nil {
-			return
+			return fmt.Errorf("writing value for key %q: %w", key, err)
 		}
 	}
 
-	return writeLongstr(w, buf.String())
+	if err := writeLongstr(w, buf.String()); err != nil {
+		return fmt.Errorf("writing final long string: %w", err)
+	}
+
+	return nil
 }
