@@ -410,6 +410,8 @@ func writeField(w io.Writer, value interface{}) (err error) {
 	return
 }
 
+// writeTable serializes a Table to the given writer.
+// It writes each key-value pair and returns the serialized data as a longstr.
 func writeTable(w io.Writer, table Table) (err error) {
 	var buf bytes.Buffer
 
