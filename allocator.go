@@ -6,9 +6,9 @@
 package amqp091
 
 import (
-	"bytes"
 	"fmt"
 	"math/big"
+	"strings"
 )
 
 const (
@@ -43,8 +43,8 @@ func newAllocator(low, high int) *allocator {
 //
 // O(N) where N is high-low
 func (a *allocator) String() string {
-	b := &bytes.Buffer{}
-	fmt.Fprintf(b, "allocator[%d..%d]", a.low, a.high)
+	var b strings.Builder
+	fmt.Fprintf(&b, "allocator[%d..%d]", a.low, a.high)
 
 	for low := a.low; low <= a.high; low++ {
 		high := low
@@ -53,9 +53,9 @@ func (a *allocator) String() string {
 		}
 
 		if high > low+1 {
-			fmt.Fprintf(b, " %d..%d", low, high-1)
+			fmt.Fprintf(&b, " %d..%d", low, high-1)
 		} else if high > low {
-			fmt.Fprintf(b, " %d", high-1)
+			fmt.Fprintf(&b, " %d", high-1)
 		}
 
 		low = high
