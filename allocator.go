@@ -42,7 +42,7 @@ func newAllocator(low, high int) *allocator {
 // "allocator[low..high] reserved..until"
 //
 // O(N) where N is high-low
-func (a allocator) String() string {
+func (a *allocator) String() string {
 	b := &bytes.Buffer{}
 	fmt.Fprintf(b, "allocator[%d..%d]", a.low, a.high)
 
