@@ -13,6 +13,7 @@ import (
 	"context"
 	devrand "crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -2142,6 +2143,65 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 
 	if ack != false {
 		t.Fatalf("ack returned should be false %v", ack)
+	}
+}
+
+func TestDeliveryAckShouldReturnSpecificErrorOnClosedChannel(t *testing.T) {
+	// setup
+	c, ch := integrationQueue(t, t.Name())
+	defer c.Close()
+	err := ch.Publish(DefaultExchange, t.Name(), false, false, Publishing{
+		Body: []byte("this is a test"),
+	})
+	if err != nil {
+		t.Fatalf("publish error: %v", err)
+	}
+
+	var ctx context.Context
+	var cancel context.CancelFunc
+	d, ok := t.Deadline()
+	if !ok {
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second*10)
+	} else {
+		ctx, cancel = context.WithDeadline(context.Background(), d)
+	}
+	defer cancel()
+
+	messages, err := ch.Consume(t.Name(), t.Name(), false, false, false, false, Table{})
+	if err != nil {
+		t.Fatalf("consume error: %v", err)
+	}
+
+	// Act
+	<-time.After(time.Second) //😮‍💨
+	err = ch.Close()
+	if err != nil {
+		t.Fatalf("close error: %v", err)
+	}
+
+	// Assert
+	select {
+	case <-messages:
+		// ok, drain the channel
+		println("received message")
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting to receive a message or an error: %v", ctx.Err())
+	}
+
+	select {
+	case msg, ok := <-messages:
+		if ok {
+			t.Fatal("message was not closed")
+		}
+		err := msg.Ack(false)
+		if err == nil {
+			t.Fatal("ack should have failed")
+		}
+		if !errors.Is(err, ErrDeliveryNotInitialized) {
+			t.Fatalf("expected error '%s', got '%s'", ErrDeliveryNotInitialized.Error(), err.Error())
+		}
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting to receive a message or an error: %v", ctx.Err())
 	}
 }
 
