@@ -301,7 +301,7 @@ func (client *Client) Push(data []byte) error {
 	client.m.Lock()
 	if !client.isReady {
 		client.m.Unlock()
-		return errors.New("failed to push: not connected")
+		return errNotConnected
 	}
 	client.m.Unlock()
 	for {
