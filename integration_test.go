@@ -2260,12 +2260,12 @@ func TestAckShouldNotCloseChannel_GH296(t *testing.T) {
 
 	msgs, err := ch.Consume(
 		queueName, // queue
-		t.Name(),     // consumer
-		false,  // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
+		t.Name(),  // consumer
+		false,     // auto-ack
+		false,     // exclusive
+		false,     // no-local
+		false,     // no-wait
+		nil,       // args
 	)
 	if err != nil {
 		t.Fatalf("Consume error: %v", err)
@@ -2276,7 +2276,7 @@ func TestAckShouldNotCloseChannel_GH296(t *testing.T) {
 
 	go func() {
 		counter := 0
-		for ;; {
+		for {
 			select {
 			case msg := <-msgs:
 				go worker(acks, &msg)
