@@ -2230,7 +2230,7 @@ func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T
 }
 
 // https://github.com/rabbitmq/amqp091-go/issues/296
-func TestMultiAckShouldNotCloseChannel_GH296(t *testing.T) {
+func TestAckShouldNotCloseChannel_GH296(t *testing.T) {
 	// setup
 	const messageCount = 10
 	queueName := t.Name()
