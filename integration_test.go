@@ -2205,6 +2205,99 @@ func TestDeliveryAckShouldReturnSpecificErrorOnClosedChannel(t *testing.T) {
 	}
 }
 
+// https://github.com/rabbitmq/amqp091-go/issues/11
+func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T) {
+	conn := integrationConnection(t, "TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11")
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("channel error: %v", err)
+	}
+
+	conn.NotifyClose(make(chan *Error, 1))
+
+	_, err = ch.PublishWithDeferredConfirmWithContext(context.TODO(), "issue11", "issue11", false, false, Publishing{Body: []byte("abc")})
+	if err != nil {
+		t.Fatalf("PublishWithDeferredConfirm error: %v", err)
+	}
+
+	ch.Close()
+	conn.Close()
+
+	_, err = conn.Channel()
+	if err == nil {
+		t.Fatalf("Opening a channel from a closed connection should not block but returning an error %v", err)
+	}
+}
+
+// https://github.com/rabbitmq/amqp091-go/issues/296
+func TestMultiAckShouldNotCloseChannel_GH296(t *testing.T) {
+	// setup
+	const messageCount = 10
+	queueName := t.Name()
+	c, ch := integrationQueue(t, queueName)
+	defer ch.Close()
+	defer c.Close()
+
+	notifyChanelClosed := make(chan *Error)
+	ch.NotifyClose(notifyChanelClosed)
+
+	for i := 0; i < messageCount; i++ {
+		err := ch.Publish(DefaultExchange, queueName, false, false, Publishing{
+			Body: []byte("this is a test"),
+		})
+		if err != nil {
+			t.Fatalf("publish error: %v", err)
+		}
+	}
+
+	err := ch.Qos(3, 0, false)
+	if err != nil {
+		t.Fatalf("Qos error: %v", err)
+	}
+
+	msgs, err := ch.Consume(
+		queueName, // queue
+		t.Name(),     // consumer
+		false,  // auto-ack
+		false,  // exclusive
+		false,  // no-local
+		false,  // no-wait
+		nil,    // args
+	)
+	if err != nil {
+		t.Fatalf("Consume error: %v", err)
+	}
+
+	signal := make(chan bool)
+
+	go func() {
+		counter := 0
+		for msg := range msgs {
+			go worker(t, &msg)
+			counter = counter + 1
+			if counter >= messageCount {
+				signal <- true
+			}
+		}
+	}()
+
+	select {
+	case channelError := <-notifyChanelClosed:
+		t.Logf("saw channel closure error: %v", channelError)
+		break
+	case <-signal:
+		t.Logf("saw %d messages", messageCount)
+		break
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting to see %d messages", messageCount)
+	}
+}
+
+func worker(t *testing.T, msg *Delivery) {
+	t.Logf("worker processing message: %d", msg.DeliveryTag)
+	msg.Ack(false)
+}
+
 /*
  * Support for integration tests
  */
@@ -2277,30 +2370,6 @@ func assertConsumeBody(t *testing.T, messages <-chan Delivery, want []byte) (msg
 	}
 
 	return msg
-}
-
-// https://github.com/rabbitmq/amqp091-go/issues/11
-func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T) {
-	conn := integrationConnection(t, "TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11")
-	ch, err := conn.Channel()
-	if err != nil {
-		t.Fatalf("channel error: %v", err)
-	}
-
-	conn.NotifyClose(make(chan *Error, 1))
-
-	_, err = ch.PublishWithDeferredConfirmWithContext(context.TODO(), "issue11", "issue11", false, false, Publishing{Body: []byte("abc")})
-	if err != nil {
-		t.Fatalf("PublishWithDeferredConfirm error: %v", err)
-	}
-
-	ch.Close()
-	conn.Close()
-
-	_, err = conn.Channel()
-	if err == nil {
-		t.Fatalf("Opening a channel from a closed connection should not block but returning an error %v", err)
-	}
 }
 
 // Pulls out the CRC and verifies the remaining content against the CRC
