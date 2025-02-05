@@ -2238,8 +2238,11 @@ func TestMultiAckShouldNotCloseChannel_GH296(t *testing.T) {
 	defer ch.Close()
 	defer c.Close()
 
-	notifyChanelClosed := make(chan *Error)
-	ch.NotifyClose(notifyChanelClosed)
+	notifyConnClosed := make(chan *Error)
+	c.NotifyClose(notifyConnClosed)
+
+	notifyChannelClosed := make(chan *Error)
+	ch.NotifyClose(notifyChannelClosed)
 
 	for i := 0; i < messageCount; i++ {
 		err := ch.Publish(DefaultExchange, queueName, false, false, Publishing{
@@ -2282,7 +2285,10 @@ func TestMultiAckShouldNotCloseChannel_GH296(t *testing.T) {
 	}()
 
 	select {
-	case channelError := <-notifyChanelClosed:
+	case connError := <-notifyConnClosed:
+		t.Logf("saw connection closure error: %v", connError)
+		break
+	case channelError := <-notifyChannelClosed:
 		t.Logf("saw channel closure error: %v", channelError)
 		break
 	case <-signal:
