@@ -2271,7 +2271,7 @@ func TestAckShouldNotCloseChannel_GH296(t *testing.T) {
 		t.Fatalf("Consume error: %v", err)
 	}
 
-	signal := make(chan bool)
+	signal := make(chan int)
 	acks := make(chan *Delivery, messageCount)
 
 	go func() {
@@ -2279,8 +2279,7 @@ func TestAckShouldNotCloseChannel_GH296(t *testing.T) {
 		for ;; {
 			select {
 			case msg := <-msgs:
-				t.Logf("starting worker for message: %d", msg.DeliveryTag)
-				go worker(t, acks, &msg)
+				go worker(acks, &msg)
 			case ack := <-acks:
 				ackError := ack.Ack(false)
 				if ackError != nil {
@@ -2288,7 +2287,7 @@ func TestAckShouldNotCloseChannel_GH296(t *testing.T) {
 				}
 				counter = counter + 1
 				if counter >= messageCount {
-					signal <- true
+					signal <- counter
 					return
 				}
 			case <-time.After(500 * time.Millisecond):
@@ -2302,18 +2301,16 @@ func TestAckShouldNotCloseChannel_GH296(t *testing.T) {
 		t.Logf("saw connection closure error: %v", connError)
 	case channelError := <-notifyChannelClosed:
 		t.Logf("saw channel closure error: %v", channelError)
-	case <-signal:
-		t.Logf("saw %d messages", messageCount)
+	case count := <-signal:
+		t.Logf("saw %d messages", count)
 	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting to see %d messages", messageCount)
 	}
 }
 
-func worker(t *testing.T, acks chan<- *Delivery, msg *Delivery) {
-	t.Logf("worker processing message: %d", msg.DeliveryTag)
+func worker(acks chan<- *Delivery, msg *Delivery) {
 	time.Sleep(time.Millisecond * time.Duration(msg.DeliveryTag) * 100)
 	acks <- msg
-	t.Logf("worker done processing message: %d", msg.DeliveryTag)
 }
 
 /*
