@@ -2301,7 +2301,10 @@ func TestMultiAckShouldNotCloseChannel_GH296(t *testing.T) {
 
 func worker(t *testing.T, msg *Delivery) {
 	t.Logf("worker processing message: %d", msg.DeliveryTag)
-	msg.Ack(false)
+	err := msg.Ack(false)
+	if err != nil {
+		t.Logf("Ack error: %v", err)
+	}
 }
 
 /*
