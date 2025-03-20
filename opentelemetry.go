@@ -61,7 +61,7 @@ var (
 	// settleRequeueKey indicates whether the messages were requeued.
 	settleRequeueKey = attribute.Key("messaging.settle.multiple")
 	// publishImmediate key indicates whether the AMQP immediate flag was set on the publishing.
-	publishImmediateKy = attribute.Key("messaging.publish.immediate")
+	publishImmediateKey = attribute.Key("messaging.publish.immediate")
 	// returnOperation indicates an AMQP 091 return
 	returnOperation = semconv.MessagingOperationKey.String("return")
 
