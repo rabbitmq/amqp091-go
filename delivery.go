@@ -6,8 +6,12 @@
 package amqp091
 
 import (
-	"errors"
-	"time"
+    "context"
+    "errors"
+    "fmt"
+    "time"
+
+    "go.opentelemetry.io/otel/trace"
 )
 
 var ErrDeliveryNotInitialized = errors.New("delivery not initialized. Channel is probably closed")
@@ -17,9 +21,9 @@ var ErrDeliveryNotInitialized = errors.New("delivery not initialized. Channel is
 //
 // Applications can provide mock implementations in tests of Delivery handlers.
 type Acknowledger interface {
-	Ack(tag uint64, multiple bool) error
-	Nack(tag uint64, multiple, requeue bool) error
-	Reject(tag uint64, requeue bool) error
+    Ack(tag uint64, multiple bool) error
+    Nack(tag uint64, multiple, requeue bool) error
+    Reject(tag uint64, requeue bool) error
 }
 
 // Delivery captures the fields for a previously delivered message resident in
@@ -56,6 +60,24 @@ type Delivery struct {
 	RoutingKey  string // basic.publish routing key
 
 	Body []byte
+}
+
+// Span returns context and a span that for the delivery
+// the resulting span is linked to the publication that created it, if it has
+// the appropraite headers set. See [context-propagation] for more details
+//
+// [context-propagation]: https://opentelemetry.io/docs/concepts/context-propagation/
+func (d Delivery) Span(
+    ctx context.Context,
+    options ...trace.SpanStartOption,
+) (context.Context, trace.Span) {
+    return spanForDelivery(ctx, &d, options...)
+}
+
+// Link returns a link for the delivery. The link points to the publication, if
+// the appropriate headers are set.
+func (d Delivery) Link(ctx context.Context) trace.Link {
+    return extractLinkFromDelivery(ctx, &d)
 }
 
 func newDelivery(channel *Channel, msg messageWithContent) *Delivery {
@@ -170,4 +192,39 @@ func (d Delivery) Nack(multiple, requeue bool) error {
 		return ErrDeliveryNotInitialized
 	}
 	return d.Acknowledger.Nack(d.DeliveryTag, multiple, requeue)
+}
+
+type DeliveryResponse uint8
+
+const (
+    Ack DeliveryResponse = iota
+    Reject
+    Nack
+)
+
+func (r DeliveryResponse) Name() string {
+    switch r {
+    case Ack:
+        return "ack"
+    case Nack:
+        return "nack"
+    case Reject:
+        return "reject"
+    default:
+        return "unknown"
+    }
+}
+
+func (d Delivery) Settle(ctx context.Context, response DeliveryResponse, multiple, requeue bool) error {
+    defer settleDelivery(ctx, &d, response, multiple, requeue)
+	switch response {
+    case Ack:
+        return d.Ack(multiple)
+    case Nack:
+        return d.Nack(multiple, requeue)
+    case Reject:
+        return d.Reject(requeue)
+    default:
+        return fmt.Errorf("unknown operation %s", response.Name())
+    }
 }
