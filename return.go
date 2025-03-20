@@ -71,5 +71,5 @@ func newReturn(msg basicReturn) *Return {
 //
 // [context-propagation]: https://opentelemetry.io/docs/concepts/context-propagation/
 func (r Return) Span(ctx context.Context, options ...trace.SpanStartOption) (context.Context, trace.Span) {
-    return extractSpanFromReturn(ctx, r, options...)
+	return extractSpanFromReturn(ctx, r, options...)
 }
