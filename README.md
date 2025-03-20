@@ -87,6 +87,7 @@ See the [_examples](_examples) subdirectory for simple producers and consumers e
 If you have a use-case in mind which isn't well-represented by the examples,
 please file an issue.
 
+
 ## Documentation
 
  * [Godoc API reference](http://godoc.org/github.com/rabbitmq/amqp091-go)
