@@ -1492,7 +1492,7 @@ func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg 
 /*
 PublishWithContext sends a Publishing from the client to an exchange on the server.
 
-NOTE: this function is equivalent to [Channel.Publish]. Context is not honoured.
+NOTE: Context termination is not honoured.
 
 When you want a single message to be delivered to a single queue, you can
 publish to the default exchange with the routingKey of the queue name.  This is
@@ -1584,8 +1584,9 @@ DeferredConfirmation, allowing the caller to wait on the publisher confirmation
 for this message. If the channel has not been put into confirm mode,
 the DeferredConfirmation will be nil.
 
-NOTE: PublishWithDeferredConfirmWithContext is equivalent to its non-context variant. The context passed
-to this function is not honoured.
+NOTE: PublishWithDeferredConfirmWithContext is equivalent to its non-context
+variant. The termination of the context passed to this function is not
+honoured.
 */
 func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
 	_, msg, endSpanFn := spanForPublication(ctx, msg, exchange, key, immediate)
