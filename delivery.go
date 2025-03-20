@@ -80,24 +80,6 @@ func (d Delivery) Link(ctx context.Context) trace.Link {
     return extractLinkFromDelivery(ctx, &d)
 }
 
-// Span returns context and a span that for the delivery
-// the resulting span is linked to the publication that created it, if it has
-// the appropraite headers set. See [context-propagation] for more details
-//
-// [context-propagation]: https://opentelemetry.io/docs/concepts/context-propagation/
-func (d Delivery) Span(
-	ctx context.Context,
-	options ...trace.SpanStartOption,
-) (context.Context, trace.Span) {
-	return spanForDelivery(ctx, &d, options...)
-}
-
-// Link returns a link for the delivery. The link points to the publication, if
-// the appropriate headers are set.
-func (d Delivery) Link(ctx context.Context) trace.Link {
-	return extractLinkFromDelivery(ctx, &d)
-}
-
 func newDelivery(channel *Channel, msg messageWithContent) *Delivery {
     props, body := msg.getContent()
 
@@ -245,39 +227,4 @@ func (d Delivery) Settle(ctx context.Context, response DeliveryResponse, multipl
     default:
         return fmt.Errorf("unknown operation %s", response.Name())
     }
-}
-
-type DeliveryResponse uint8
-
-const (
-	Ack DeliveryResponse = iota
-	Reject
-	Nack
-)
-
-func (r DeliveryResponse) Name() string {
-	switch r {
-	case Ack:
-		return "ack"
-	case Nack:
-		return "nack"
-	case Reject:
-		return "reject"
-	default:
-		return "unknown"
-	}
-}
-
-func (d Delivery) Settle(ctx context.Context, response DeliveryResponse, multiple, requeue bool) error {
-	defer settleDelivery(ctx, &d, response, multiple, requeue)
-	switch response {
-	case Ack:
-		return d.Ack(multiple)
-	case Nack:
-		return d.Nack(multiple, requeue)
-	case Reject:
-		return d.Reject(requeue)
-	default:
-		return fmt.Errorf("unknown operation %s", response.Name())
-	}
 }
