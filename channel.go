@@ -254,7 +254,7 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 		// Flushing after each Frame is inefficient, as it negates much of the
 		// benefit of using a buffered writer and results in more syscalls than
 		// necessary. Flushing buffers after every frame can have a significant
-		// performance impact when sending (e.g. basicPublish) small messages,
+		// performance impact when sending (e.g. BasicPublish) small messages,
 		// so sendUnflushed() performs an *Unflushed* write, but is otherwise
 		// equivalent to the send() method. We later use the separate flush
 		// method to explicitly flush the buffer after all Frames are written.
@@ -1546,7 +1546,7 @@ func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, i
 		dc = ch.confirms.publish()
 	}
 
-	if err := ch.send(&basicPublish{
+	if err := ch.send(&BasicPublish{
 		Exchange:   exchange,
 		RoutingKey: key,
 		Mandatory:  mandatory,
