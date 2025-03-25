@@ -1916,7 +1916,7 @@ func (msg *basicCancelOk) read(r io.Reader) (err error) {
 	return
 }
 
-type basicPublish struct {
+type BasicPublish struct {
 	reserved1  uint16
 	Exchange   string
 	RoutingKey string
@@ -1926,23 +1926,23 @@ type basicPublish struct {
 	Body       []byte
 }
 
-func (msg *basicPublish) id() (uint16, uint16) {
+func (msg *BasicPublish) id() (uint16, uint16) {
 	return 60, 40
 }
 
-func (msg *basicPublish) wait() bool {
+func (msg *BasicPublish) wait() bool {
 	return false
 }
 
-func (msg *basicPublish) getContent() (properties, []byte) {
+func (msg *BasicPublish) getContent() (properties, []byte) {
 	return msg.Properties, msg.Body
 }
 
-func (msg *basicPublish) setContent(props properties, body []byte) {
+func (msg *BasicPublish) setContent(props properties, body []byte) {
 	msg.Properties, msg.Body = props, body
 }
 
-func (msg *basicPublish) write(w io.Writer) (err error) {
+func (msg *BasicPublish) write(w io.Writer) (err error) {
 	var bits byte
 
 	if err = binary.Write(w, binary.BigEndian, msg.reserved1); err != nil {
@@ -1971,7 +1971,7 @@ func (msg *basicPublish) write(w io.Writer) (err error) {
 	return
 }
 
-func (msg *basicPublish) read(r io.Reader) (err error) {
+func (msg *BasicPublish) read(r io.Reader) (err error) {
 	var bits byte
 
 	if err = binary.Read(r, binary.BigEndian, &msg.reserved1); err != nil {
@@ -3099,7 +3099,7 @@ func (r *reader) parseMethodFrame(channel uint16, size uint32) (f frame, err err
 
 		case 40: // basic publish
 			// fmt.Println("NextMethod: class:60 method:40")
-			method := &basicPublish{}
+			method := &BasicPublish{}
 			if err = method.read(r.r); err != nil {
 				return
 			}

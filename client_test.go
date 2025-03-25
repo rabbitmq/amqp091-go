@@ -439,10 +439,10 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 		srv.recv(1, &confirmSelect{})
 		srv.send(1, &confirmSelectOk{})
 
-		srv.recv(1, &basicPublish{})
-		srv.recv(1, &basicPublish{})
-		srv.recv(1, &basicPublish{})
-		srv.recv(1, &basicPublish{})
+		srv.recv(1, &BasicPublish{})
+		srv.recv(1, &BasicPublish{})
+		srv.recv(1, &BasicPublish{})
+		srv.recv(1, &BasicPublish{})
 
 		// Single tag, plus multiple, should produce
 		// 2, 1, 3, 4
@@ -450,10 +450,10 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 		srv.send(1, &basicAck{DeliveryTag: 1})
 		srv.send(1, &basicAck{DeliveryTag: 4, Multiple: true})
 
-		srv.recv(1, &basicPublish{})
-		srv.recv(1, &basicPublish{})
-		srv.recv(1, &basicPublish{})
-		srv.recv(1, &basicPublish{})
+		srv.recv(1, &BasicPublish{})
+		srv.recv(1, &BasicPublish{})
+		srv.recv(1, &BasicPublish{})
+		srv.recv(1, &BasicPublish{})
 
 		// And some more, but in reverse order, multiple then one
 		// 5, 6, 7, 8
@@ -536,10 +536,10 @@ func TestDeferredConfirmations(t *testing.T) {
 		srv.recv(1, &confirmSelect{})
 		srv.send(1, &confirmSelectOk{})
 
-		srv.recv(1, &basicPublish{})
-		srv.recv(1, &basicPublish{})
-		srv.recv(1, &basicPublish{})
-		srv.recv(1, &basicPublish{})
+		srv.recv(1, &BasicPublish{})
+		srv.recv(1, &BasicPublish{})
+		srv.recv(1, &BasicPublish{})
+		srv.recv(1, &BasicPublish{})
 	}()
 
 	c, err := Open(rwc, defaultConfig())
@@ -707,7 +707,7 @@ func TestPublishBodySliceIssue74(t *testing.T) {
 		srv.channelOpen(1)
 
 		for i := 0; i < publishings; i++ {
-			srv.recv(1, &basicPublish{})
+			srv.recv(1, &BasicPublish{})
 		}
 
 		done <- true
@@ -751,7 +751,7 @@ func TestPublishZeroFrameSizeIssue161(t *testing.T) {
 		srv.channelOpen(1)
 
 		for i := 0; i < publishings; i++ {
-			srv.recv(1, &basicPublish{})
+			srv.recv(1, &BasicPublish{})
 		}
 
 		done <- true
@@ -792,7 +792,7 @@ func TestPublishAndShutdownDeadlockIssue84(t *testing.T) {
 	go func() {
 		srv.connectionOpen()
 		srv.channelOpen(1)
-		srv.recv(1, &basicPublish{})
+		srv.recv(1, &BasicPublish{})
 		// Mimic a broken io pipe so that Publish catches the error and goes into shutdown
 		srv.S.Close()
 	}()

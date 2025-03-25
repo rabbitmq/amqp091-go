@@ -549,7 +549,7 @@ func (c *Connection) endSendUnflushed() error {
 // after each Frame is inefficient as it negates much of the benefit of using a
 // buffered writer, and results in more syscalls than necessary. Flushing buffers
 // after every frame can have a significant performance impact when sending
-// (basicPublish) small messages, so this method performs an *Unflushed* write
+// (BasicPublish) small messages, so this method performs an *Unflushed* write
 // but is otherwise equivalent to send() method, and we provide a separate
 // flush method to explicitly flush the buffer after all Frames are written.
 func (c *Connection) sendUnflushed(f frame) error {
@@ -578,9 +578,9 @@ func (c *Connection) flush() (err error) {
 	if buf, ok := c.writer.w.(*bufio.Writer); ok {
 		err = buf.Flush()
 
-		// Moving send notifier to flush increases basicPublish for the small message
+		// Moving send notifier to flush increases BasicPublish for the small message
 		// case. As sendUnflushed + flush is used for the case of sending semantically
-		// related Frames (e.g. a Message like basicPublish) there is no real advantage
+		// related Frames (e.g. a Message like BasicPublish) there is no real advantage
 		// to sending per Frame vice per "group of related Frames" and for the case of
 		// small messages time.Now() is (relatively) expensive.
 		if err == nil {
