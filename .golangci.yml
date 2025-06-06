@@ -1,3 +1,4 @@
+version: 2
 run:
   build-tags:
     - integration

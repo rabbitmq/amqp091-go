@@ -273,7 +273,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 
 		client := tls.Client(conn, config.TLSClientConfig)
 		if err := client.Handshake(); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, err
 		}
 
@@ -630,7 +630,7 @@ func (c *Connection) shutdown(err *Error) {
 			ch.shutdown(err)
 		}
 
-		c.conn.Close()
+		_ = c.conn.Close()
 		// reader exit
 		close(c.close)
 
