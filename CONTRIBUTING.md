@@ -24,7 +24,7 @@ docs](https://golangci-lint.run/usage/install/) for more information.
 The static checks can be run via:
 
 ```shell
-make checks
+make check
 ```
 
 ## Running Tests

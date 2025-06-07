@@ -62,7 +62,7 @@ func ExampleConnection_reconnect() {
 			fmt.Println("err publisher setup:", err)
 			return
 		}
-		defer con.Close()
+		defer func() { _ = con.Close() }()
 
 		// Purge the queue from the publisher side to establish initial state
 		if _, err := pub.QueuePurge(queue, false); err != nil {
@@ -99,7 +99,9 @@ func ExampleConnection_reconnect() {
 
 				// Simulate an error like a server restart, loss of route or operator
 				// intervention that results in the connection terminating
-				go conn.Close()
+				go func() {
+					_ = conn.Close()
+				}()
 			}
 		}
 	} else {

@@ -230,7 +230,7 @@ func (t *server) channelOpen(id int) {
 
 func TestDefaultClientProperties(t *testing.T) {
 	rwc, srv := newSession(t)
-	t.Cleanup(func() { rwc.Close() })
+	t.Cleanup(func() { _ = rwc.Close() })
 
 	go func() {
 		srv.connectionOpen()
@@ -255,7 +255,7 @@ func TestDefaultClientProperties(t *testing.T) {
 
 func TestCustomClientProperties(t *testing.T) {
 	rwc, srv := newSession(t)
-	t.Cleanup(func() { rwc.Close() })
+	t.Cleanup(func() { _ = rwc.Close() })
 
 	config := defaultConfig()
 	config.Properties = Table{
@@ -282,7 +282,7 @@ func TestCustomClientProperties(t *testing.T) {
 
 func TestOpen(t *testing.T) {
 	rwc, srv := newSession(t)
-	t.Cleanup(func() { rwc.Close() })
+	t.Cleanup(func() { _ = rwc.Close() })
 	go func() {
 		srv.connectionOpen()
 	}()
@@ -329,7 +329,7 @@ func TestOpenClose_ShouldNotPanic(t *testing.T) {
 
 func TestChannelOpen(t *testing.T) {
 	rwc, srv := newSession(t)
-	t.Cleanup(func() { rwc.Close() })
+	t.Cleanup(func() { _ = rwc.Close() })
 
 	go func() {
 		srv.connectionOpen()
@@ -349,7 +349,7 @@ func TestChannelOpen(t *testing.T) {
 
 func TestOpenFailedSASLUnsupportedMechanisms(t *testing.T) {
 	rwc, srv := newSession(t)
-	t.Cleanup(func() { rwc.Close() })
+	t.Cleanup(func() { _ = rwc.Close() })
 
 	go func() {
 		srv.expectAMQP()
@@ -365,7 +365,7 @@ func TestOpenFailedSASLUnsupportedMechanisms(t *testing.T) {
 func TestOpenAMQPlainAuth(t *testing.T) {
 	auth := make(chan Table)
 	rwc, srv := newSession(t)
-	t.Cleanup(func() { rwc.Close() })
+	t.Cleanup(func() { _ = rwc.Close() })
 
 	go func() {
 		srv.expectAMQP()
@@ -400,7 +400,7 @@ func TestOpenFailedCredentials(t *testing.T) {
 		srv.expectAMQP()
 		srv.connectionStart()
 		// Now kill/timeout the connection indicating bad auth
-		rwc.Close()
+		_ = rwc.Close()
 	}()
 
 	c, err := Open(rwc, defaultConfig())
@@ -419,7 +419,7 @@ func TestOpenFailedVhost(t *testing.T) {
 		srv.recv(0, &connectionOpen{})
 
 		// Now kill/timeout the connection on bad Vhost
-		rwc.Close()
+		_ = rwc.Close()
 	}()
 
 	c, err := Open(rwc, defaultConfig())
@@ -430,7 +430,7 @@ func TestOpenFailedVhost(t *testing.T) {
 
 func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 	rwc, srv := newSession(t)
-	defer rwc.Close()
+	defer func() { _ = rwc.Close() }()
 
 	go func() {
 		srv.connectionOpen()
@@ -527,7 +527,7 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 
 func TestDeferredConfirmations(t *testing.T) {
 	rwc, srv := newSession(t)
-	defer rwc.Close()
+	defer func() { _ = rwc.Close() }()
 
 	go func() {
 		srv.connectionOpen()
@@ -694,7 +694,7 @@ func TestNotifyClosesAllChansAfterConnectionClose(t *testing.T) {
 // Should not panic when sending bodies split at different boundaries
 func TestPublishBodySliceIssue74(t *testing.T) {
 	rwc, srv := newSession(t)
-	defer rwc.Close()
+	defer func() { _ = rwc.Close() }()
 
 	const frameSize = 100
 	const publishings = frameSize * 3
@@ -740,7 +740,7 @@ func TestPublishBodySliceIssue74(t *testing.T) {
 // Should not panic when server and client have frame_size of 0
 func TestPublishZeroFrameSizeIssue161(t *testing.T) {
 	rwc, srv := newSession(t)
-	defer rwc.Close()
+	defer func() { _ = rwc.Close() }()
 
 	const frameSize = 0
 	const publishings = 1
@@ -787,14 +787,14 @@ func TestPublishZeroFrameSizeIssue161(t *testing.T) {
 
 func TestPublishAndShutdownDeadlockIssue84(t *testing.T) {
 	rwc, srv := newSession(t)
-	defer rwc.Close()
+	defer func() { _ = rwc.Close() }()
 
 	go func() {
 		srv.connectionOpen()
 		srv.channelOpen(1)
 		srv.recv(1, &basicPublish{})
 		// Mimic a broken io pipe so that Publish catches the error and goes into shutdown
-		srv.S.Close()
+		_ = srv.S.Close()
 	}()
 
 	c, err := Open(rwc, defaultConfig())
@@ -851,7 +851,7 @@ func TestLeakClosedConsumersIssue264(t *testing.T) {
 	const tag = "consumer-tag"
 
 	rwc, srv := newSession(t)
-	defer rwc.Close()
+	defer func() { _ = rwc.Close() }()
 
 	go func() {
 		srv.connectionOpen()
@@ -871,7 +871,7 @@ func TestLeakClosedConsumersIssue264(t *testing.T) {
 
 		srv.recv(0, &connectionClose{})
 		srv.send(0, &connectionCloseOk{})
-		srv.C.Close()
+		_ = srv.C.Close()
 	}()
 
 	c, err := Open(rwc, defaultConfig())

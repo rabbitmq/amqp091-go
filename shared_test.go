@@ -24,8 +24,8 @@ func (p pipe) Write(b []byte) (int, error) {
 }
 
 func (p pipe) Close() error {
-	p.r.Close()
-	p.w.Close()
+	_ = p.r.Close()
+	_ = p.w.Close()
 	return nil
 }
 

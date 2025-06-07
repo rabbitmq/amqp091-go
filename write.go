@@ -288,6 +288,8 @@ func writeLongstr(w io.Writer, s string) (err error) {
 's': int16
 't': bool
 'x': []byte
+'u': uint16 (identical on the wire to int16)
+'i': uint32 (identical on the wire to int32)
 */
 func writeField(w io.Writer, value interface{}) (err error) {
 	var buf [9]byte
@@ -318,6 +320,11 @@ func writeField(w io.Writer, value interface{}) (err error) {
 		binary.BigEndian.PutUint16(buf[1:3], uint16(v))
 		enc = buf[:3]
 
+	case uint16:
+		buf[0] = 'u'
+		binary.BigEndian.PutUint16(buf[1:3], uint16(v))
+		enc = buf[:3]
+
 	case int:
 		buf[0] = 'I'
 		binary.BigEndian.PutUint32(buf[1:5], uint32(v))
@@ -325,6 +332,11 @@ func writeField(w io.Writer, value interface{}) (err error) {
 
 	case int32:
 		buf[0] = 'I'
+		binary.BigEndian.PutUint32(buf[1:5], uint32(v))
+		enc = buf[:5]
+
+	case uint32:
+		buf[0] = 'i'
 		binary.BigEndian.PutUint32(buf[1:5], uint32(v))
 		enc = buf[:5]
 

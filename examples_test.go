@@ -123,7 +123,9 @@ func ExampleChannel_Confirm_bridge() {
 	if err != nil {
 		log.Fatalf("connection.open source: %s", err)
 	}
-	defer source.Close()
+	defer func() {
+		_ = source.Close()
+	}()
 
 	chs, err := source.Channel()
 	if err != nil {
@@ -152,7 +154,9 @@ func ExampleChannel_Confirm_bridge() {
 	if err != nil {
 		log.Fatalf("connection.open destination: %s", err)
 	}
-	defer destination.Close()
+	defer func() {
+		_ = destination.Close()
+	}()
 
 	chd, err := destination.Channel()
 	if err != nil {
@@ -228,7 +232,7 @@ func ExampleChannel_Consume() {
 	if err != nil {
 		log.Fatalf("connection.open: %s", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	c, err := conn.Channel()
 	if err != nil {
@@ -354,7 +358,7 @@ func ExampleChannel_PublishWithContext() {
 	// This waits for a server acknowledgment which means the sockets will have
 	// flushed all outbound publishings prior to returning.  It's important to
 	// block on Close to not lose any publishings.
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	c, err := conn.Channel()
 	if err != nil {
@@ -406,7 +410,7 @@ func ExampleConnection_NotifyBlocked() {
 	if err != nil {
 		log.Fatalf("connection.open: %s", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	blockings := conn.NotifyBlocked(make(chan amqp.Blocking))
 	go func() {
@@ -432,7 +436,7 @@ func ExampleTable_SetClientConnectionName() {
 	if err != nil {
 		log.Fatalf("connection.open: %s", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 }
 
 func ExampleConnection_UpdateSecret() {
@@ -454,7 +458,7 @@ func ExampleConnection_UpdateSecret() {
 	uri := fmt.Sprintf("amqp://%s:%s@localhost:5672", "client_id", token)
 	c, _ := amqp.Dial(uri)
 
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	// It also calls Connection.UpdateSecret()
 	tokenRefresherTask := func(conn *amqp.Connection, token string) {
@@ -467,7 +471,7 @@ func ExampleConnection_UpdateSecret() {
 	go tokenRefresherTask(c, "my-JWT-token")
 
 	ch, _ := c.Channel()
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	_, _ = ch.QueueDeclare(
 		"test-amqp",

@@ -111,7 +111,9 @@ func TestTlsConfigFromUriPushdownServerNameIndication(t *testing.T) {
 // Tests opening a connection of a TLS enabled socket server
 func TestTLSHandshake(t *testing.T) {
 	srv := startTLSServer(t, tlsServerConfig(t))
-	defer srv.Close()
+	defer func() {
+		_ = srv.Close()
+	}()
 
 	success := make(chan bool)
 	errs := make(chan error, 3)
@@ -123,7 +125,7 @@ func TestTLSHandshake(t *testing.T) {
 		case session := <-srv.Sessions:
 			session.connectionOpen()
 			session.connectionClose()
-			session.S.Close()
+			_ = session.S.Close()
 		}
 	}()
 
@@ -133,7 +135,9 @@ func TestTLSHandshake(t *testing.T) {
 			errs <- fmt.Errorf("expected to open a TLS connection, got err: %v", err)
 			return
 		}
-		defer c.Close()
+		defer func() {
+			_ = c.Close()
+		}()
 
 		if st := c.ConnectionState(); !st.HandshakeComplete {
 			errs <- fmt.Errorf("expected to complete a TLS handshake, TLS connection state: %+v", st)

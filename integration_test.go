@@ -56,26 +56,30 @@ func TestIntegrationOpenClose(t *testing.T) {
 
 func TestIntegrationOpenCloseChannel(t *testing.T) {
 	if c := integrationConnection(t, "channel"); c != nil {
-		defer c.Close()
+		defer func() {
+			_ = c.Close()
+		}()
 
 		ch, err := c.Channel()
 		if err != nil {
 			t.Fatalf("create channel 1: %s", err)
 		}
-		ch.Close()
+		_ = ch.Close()
 	}
 }
 
 func TestIntegrationHighChannelChurnInTightLoop(t *testing.T) {
 	if c := integrationConnection(t, "channel churn"); c != nil {
-		defer c.Close()
+		defer func() {
+			_ = c.Close()
+		}()
 
 		for i := 0; i < 1000; i++ {
 			ch, err := c.Channel()
 			if err != nil {
 				t.Fatalf("create channel 1: %s", err)
 			}
-			ch.Close()
+			_ = ch.Close()
 		}
 	}
 }
@@ -121,7 +125,9 @@ func TestIntegrationLocalAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
-	defer c.Close()
+	defer func() {
+		_ = c.Close()
+	}()
 
 	a := c.LocalAddr()
 	_, portString, err := net.SplitHostPort(a.String())
@@ -143,7 +149,7 @@ func TestIntegrationRemoteAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	a := c.RemoteAddr()
 	_, portString, err := net.SplitHostPort(a.String())
@@ -162,13 +168,13 @@ func TestIntegrationRemoteAddr(t *testing.T) {
 func TestExchangePassiveOnMissingExchangeShouldError(t *testing.T) {
 	c := integrationConnection(t, "exch")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, err := c.Channel()
 		if err != nil {
 			t.Fatalf("create channel 1: %s", err)
 		}
-		defer ch.Close()
+		defer func() { _ = ch.Close() }()
 
 		if err := ch.ExchangeDeclarePassive(
 			"test-integration-missing-passive-exchange",
@@ -188,7 +194,7 @@ func TestExchangePassiveOnMissingExchangeShouldError(t *testing.T) {
 func TestIntegrationExchangeDeclarePassiveOnDeclaredShouldNotError(t *testing.T) {
 	c := integrationConnection(t, "exch")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		exchange := "test-integration-declared-passive-exchange"
 
@@ -196,7 +202,7 @@ func TestIntegrationExchangeDeclarePassiveOnDeclaredShouldNotError(t *testing.T)
 		if err != nil {
 			t.Fatalf("create channel: %s", err)
 		}
-		defer ch.Close()
+		defer func() { _ = ch.Close() }()
 
 		if err := ch.ExchangeDeclare(
 			exchange, // name
@@ -227,7 +233,7 @@ func TestIntegrationExchangeDeclarePassiveOnDeclaredShouldNotError(t *testing.T)
 func TestIntegrationExchange(t *testing.T) {
 	c := integrationConnection(t, "exch")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		channel, err := c.Channel()
 		if err != nil {
@@ -266,13 +272,13 @@ func TestIntegrationExchange(t *testing.T) {
 func TestIntegrationQueueDeclarePassiveOnMissingExchangeShouldError(t *testing.T) {
 	c := integrationConnection(t, "queue")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, err := c.Channel()
 		if err != nil {
 			t.Fatalf("create channel1: %s", err)
 		}
-		defer ch.Close()
+		defer func() { _ = ch.Close() }()
 
 		if _, err := ch.QueueDeclarePassive(
 			"test-integration-missing-passive-queue", // name
@@ -294,13 +300,13 @@ func TestIntegrationQueueDeclarePassiveOnMissingExchangeShouldError(t *testing.T
 func TestIntegrationQueueDeclarePassiveOnQueueTypeMismatchShouldError(t *testing.T) {
 	c := integrationConnection(t, t.Name())
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, err := c.Channel()
 		if err != nil {
 			t.Fatalf("create channel1: %s", err)
 		}
-		defer ch.Close()
+		defer func() { _ = ch.Close() }()
 
 		queueName := t.Name()
 
@@ -334,7 +340,7 @@ func TestIntegrationQueueDeclarePassiveOnQueueTypeMismatchShouldError(t *testing
 func TestIntegrationPassiveQueue(t *testing.T) {
 	c := integrationConnection(t, "queue")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		name := "test-integration-declared-passive-queue"
 
@@ -342,7 +348,7 @@ func TestIntegrationPassiveQueue(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create channel1: %s", err)
 		}
-		defer ch.Close()
+		defer func() { _ = ch.Close() }()
 
 		if _, err := ch.QueueDeclare(
 			name,  // name
@@ -382,7 +388,7 @@ func TestIntegrationPassiveQueue(t *testing.T) {
 func TestIntegrationBasicQueueOperations(t *testing.T) {
 	c := integrationConnection(t, "queue")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		channel, err := c.Channel()
 		if err != nil {
@@ -490,7 +496,7 @@ func TestIntegrationConnectionNegotiatesMaxChannels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if want, got := defaultChannelMax, c.Config.ChannelMax; want != got {
 		t.Fatalf("expected connection to negotiate uint16 (%d) channels, got: %d", want, got)
@@ -504,7 +510,7 @@ func TestIntegrationConnectionNegotiatesClientMaxChannels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if want, got := config.ChannelMax, c.Config.ChannelMax; want != got {
 		t.Fatalf("expected client specified channel limit after handshake %d, got: %d", want, got)
@@ -518,7 +524,7 @@ func TestIntegrationChannelIDsExhausted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected to dial with config %+v integration server: %s", config, err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	for i := uint16(1); i <= c.Config.ChannelMax; i++ {
 		if _, err := c.Channel(); err != nil {
@@ -534,7 +540,7 @@ func TestIntegrationChannelIDsExhausted(t *testing.T) {
 func TestIntegrationChannelClosing(t *testing.T) {
 	c := integrationConnection(t, "closings")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		// open and close
 		channel, err := c.Channel()
@@ -605,7 +611,7 @@ func TestIntegrationChannelClosing(t *testing.T) {
 func TestIntegrationMeaningfulChannelErrors(t *testing.T) {
 	c := integrationConnection(t, "pub")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, err := c.Channel()
 		if err != nil {
@@ -644,7 +650,7 @@ func TestIntegrationMeaningfulChannelErrors(t *testing.T) {
 func TestIntegrationNonBlockingClose(t *testing.T) {
 	c := integrationConnection(t, "#6")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, err := c.Channel()
 		if err != nil {
@@ -699,8 +705,8 @@ func TestIntegrationPublishConsume(t *testing.T) {
 	c2 := integrationConnection(t, "sub")
 
 	if c1 != nil && c2 != nil {
-		defer c1.Close()
-		defer c2.Close()
+		defer func() { _ = c1.Close() }()
+		defer func() { _ = c2.Close() }()
 
 		pub, _ := c1.Channel()
 		sub, _ := c2.Channel()
@@ -740,8 +746,8 @@ func TestIntegrationConsumeFlow(t *testing.T) {
 	c2 := integrationConnection(t, "sub-flow")
 
 	if c1 != nil && c2 != nil {
-		defer c1.Close()
-		defer c2.Close()
+		defer func() { _ = c1.Close() }()
+		defer func() { _ = c2.Close() }()
 
 		pub, _ := c1.Channel()
 		sub, _ := c2.Channel()
@@ -807,7 +813,7 @@ func TestIntegrationRecoverNotImplemented(t *testing.T) {
 
 	if c, ch := integrationQueue(t, queue); c != nil {
 		if product, ok := c.Properties["product"]; ok && product.(string) == "RabbitMQ" {
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			err := ch.Recover(false)
 
@@ -831,7 +837,7 @@ func TestIntegrationConsumeCancel(t *testing.T) {
 	c := integrationConnection(t, "pub")
 
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, _ := c.Channel()
 
@@ -875,7 +881,7 @@ func TestIntegrationConsumeCancelWithContext(t *testing.T) {
 	c := integrationConnection(t, "pub")
 
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, _ := c.Channel()
 
@@ -972,7 +978,7 @@ func (c Publishing) Generate(r *rand.Rand, _ int) reflect.Value {
 
 func TestQuickPublishOnly(t *testing.T) {
 	if c := integrationConnection(t, "quick"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		pub, err := c.Channel()
 		if err != nil {
 			t.Fatalf("getting channel failed: %s", err)
@@ -998,7 +1004,7 @@ func TestQuickPublishOnly(t *testing.T) {
 func TestPublishEmptyBody(t *testing.T) {
 	c := integrationConnection(t, "empty")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, err := c.Channel()
 		if err != nil {
@@ -1037,7 +1043,7 @@ func TestPublishEmptyBody(t *testing.T) {
 func TestPublishEmptyBodyWithHeadersIssue67(t *testing.T) {
 	c := integrationConnection(t, "issue67")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, err := c.Channel()
 		if err != nil {
@@ -1086,8 +1092,8 @@ func TestQuickPublishConsumeOnly(t *testing.T) {
 	c2 := integrationConnection(t, "quick-sub")
 
 	if c1 != nil && c2 != nil {
-		defer c1.Close()
-		defer c2.Close()
+		defer func() { _ = c1.Close() }()
+		defer func() { _ = c2.Close() }()
 
 		pub, err := c1.Channel()
 		if err != nil {
@@ -1144,8 +1150,8 @@ func TestQuickPublishConsumeBigBody(t *testing.T) {
 	c2 := integrationConnection(t, "big-sub")
 
 	if c1 != nil && c2 != nil {
-		defer c1.Close()
-		defer c2.Close()
+		defer func() { _ = c1.Close() }()
+		defer func() { _ = c2.Close() }()
 
 		pub, err := c1.Channel()
 		if err != nil {
@@ -1193,7 +1199,7 @@ func TestQuickPublishConsumeBigBody(t *testing.T) {
 
 func TestIntegrationGetOk(t *testing.T) {
 	if c := integrationConnection(t, "getok"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		queue := "test.get-ok"
 		ch, _ := c.Channel()
@@ -1223,7 +1229,7 @@ func TestIntegrationGetOk(t *testing.T) {
 
 func TestIntegrationGetEmpty(t *testing.T) {
 	if c := integrationConnection(t, "getok"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		queue := "test.get-ok"
 		ch, _ := c.Channel()
@@ -1245,7 +1251,7 @@ func TestIntegrationGetEmpty(t *testing.T) {
 
 func TestIntegrationTxCommit(t *testing.T) {
 	if c := integrationConnection(t, "txcommit"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		queue := "test.tx.commit"
 		ch, _ := c.Channel()
@@ -1280,7 +1286,7 @@ func TestIntegrationTxCommit(t *testing.T) {
 
 func TestIntegrationTxRollback(t *testing.T) {
 	if c := integrationConnection(t, "txrollback"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		queue := "test.tx.rollback"
 		ch, _ := c.Channel()
@@ -1314,7 +1320,7 @@ func TestIntegrationTxRollback(t *testing.T) {
 
 func TestIntegrationReturn(t *testing.T) {
 	if c, ch := integrationQueue(t, "return"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ret := make(chan Return, 1)
 
@@ -1346,7 +1352,7 @@ func TestIntegrationCancel(t *testing.T) {
 	consumerTag := "test.cancel"
 
 	if c, ch := integrationQueue(t, queue); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		cancels := ch.NotifyCancel(make(chan string, 1))
 		consumeErr := make(chan error, 1)
@@ -1378,7 +1384,7 @@ func TestIntegrationCancel(t *testing.T) {
 
 func TestIntegrationConfirm(t *testing.T) {
 	if c, ch := integrationQueue(t, "confirm"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		confirms := ch.NotifyPublish(make(chan Confirmation, 1))
 
@@ -1404,7 +1410,7 @@ func TestIntegrationConfirm(t *testing.T) {
 // https://github.com/streadway/amqp/issues/61
 func TestRoundTripAllFieldValueTypes61(t *testing.T) {
 	if conn := integrationConnection(t, "issue61"); conn != nil {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		timestamp := time.Unix(100000000, 0)
 
 		headers := Table{
@@ -1478,7 +1484,7 @@ func TestRoundTripAllFieldValueTypes61(t *testing.T) {
 // Relates to https://github.com/streadway/amqp/issues/60
 func TestDeclareArgsXMessageTTL(t *testing.T) {
 	if conn := integrationConnection(t, "declareTTL"); conn != nil {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		ch, _ := conn.Channel()
 		args := Table{"x-message-ttl": int32(9000000)}
@@ -1496,7 +1502,7 @@ func TestDeclareArgsXMessageTTL(t *testing.T) {
 // Relates to https://github.com/streadway/amqp/issues/56
 func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 	if conn := integrationConnection(t, "declareArgs"); conn != nil {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		ex, q := "declareArgs", "declareArgs-deliveries"
 		dlex, dlq := ex+"-dead-letter", q+"-dead-letter"
@@ -1575,7 +1581,7 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 // https://github.com/streadway/amqp/issues/48
 func TestDeadlockConsumerIssue48(t *testing.T) {
 	if conn := integrationConnection(t, "issue48"); conn != nil {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		deadline := make(chan bool)
 		go func() {
@@ -1645,7 +1651,7 @@ func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		conn.Close()
+		_ = conn.Close()
 	})
 
 	for i := 0; i < 100; i++ {
@@ -1679,7 +1685,7 @@ func TestRepeatedChannelExceptionWithPublishAndMaxProcsIssue46(t *testing.T) {
 func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 	conn := integrationConnection(t, "issue43")
 	if conn != nil {
-		t.Cleanup(func() { conn.Close() })
+		t.Cleanup(func() { _ = conn.Close() })
 
 		go func() {
 			for err := range conn.NotifyClose(make(chan *Error)) {
@@ -1719,7 +1725,7 @@ func TestChannelExceptionWithCloseIssue43(t *testing.T) {
 
 		// Receive or send the channel close method, the channel shuts down
 		// but this expects a channel.close-ok to be received.
-		c1.Close()
+		_ = c1.Close()
 
 		// This ensures that the 2nd channel is unaffected by the channel exception
 		// on channel 1.
@@ -1738,8 +1744,8 @@ func TestCorruptedMessageIssue7(t *testing.T) {
 	c2 := integrationConnection(t, "")
 
 	if c1 != nil && c2 != nil {
-		defer c1.Close()
-		defer c2.Close()
+		defer func() { _ = c1.Close() }()
+		defer func() { _ = c2.Close() }()
 
 		pub, err := c1.Channel()
 		if err != nil {
@@ -1789,7 +1795,7 @@ func TestCorruptedMessageIssue7(t *testing.T) {
 // https://github.com/streadway/amqp/issues/136
 func TestChannelCounterShouldNotPanicIssue136(t *testing.T) {
 	if c := integrationConnection(t, "issue136"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		var wg sync.WaitGroup
 
 		// exceeds 65535 channels
@@ -1823,8 +1829,8 @@ func TestExchangeDeclarePrecondition(t *testing.T) {
 	c1 := integrationConnection(t, "exchange-double-declare")
 	c2 := integrationConnection(t, "exchange-double-declare-cleanup")
 	if c1 != nil && c2 != nil {
-		defer c1.Close()
-		defer c2.Close()
+		defer func() { _ = c1.Close() }()
+		defer func() { _ = c2.Close() }()
 
 		ch, err := c1.Channel()
 		if err != nil {
@@ -1877,7 +1883,7 @@ func TestExchangeDeclarePrecondition(t *testing.T) {
 
 func TestRabbitMQQueueTTLGet(t *testing.T) {
 	if c := integrationRabbitMQ(t, "ttl"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		queue := "test.rabbitmq-message-ttl"
 		channel, err := c.Channel()
@@ -1916,7 +1922,7 @@ func TestRabbitMQQueueTTLGet(t *testing.T) {
 
 func TestRabbitMQQueueNackMultipleRequeue(t *testing.T) {
 	if c := integrationRabbitMQ(t, "nack"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		if c.isCapable("basic.nack") {
 			queue := "test.rabbitmq-basic-nack"
@@ -1966,7 +1972,7 @@ func TestRabbitMQQueueNackMultipleRequeue(t *testing.T) {
 func TestConsumerCancelNotification(t *testing.T) {
 	c := integrationConnection(t, "consumer cancel notification")
 	if c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		ch, err := c.Channel()
 		if err != nil {
 			t.Fatalf("got error on channel.open: %v", err)
@@ -2015,13 +2021,13 @@ func TestConcurrentChannelAndConnectionClose(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-starter
-			c.Close()
+			_ = c.Close()
 		}()
 
 		go func() {
 			defer wg.Done()
 			<-starter
-			ch.Close()
+			_ = ch.Close()
 		}()
 		close(starter)
 		wg.Wait()
@@ -2030,7 +2036,7 @@ func TestConcurrentChannelAndConnectionClose(t *testing.T) {
 
 func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 	if c := integrationConnection(t, "GetNextPublishSeqNo"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, err := c.Channel()
 		if err != nil {
@@ -2064,7 +2070,7 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 
 func TestIntegrationGetNextPublishSeqNoRace(t *testing.T) {
 	if c := integrationConnection(t, "GetNextPublishSeqNoRace"); c != nil {
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		ch, err := c.Channel()
 		if err != nil {
@@ -2136,8 +2142,8 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 		t.Fatalf("PublishWithDeferredConfirm error: %v", err)
 	}
 
-	ch.Close()
-	conn.Close()
+	_ = ch.Close()
+	_ = conn.Close()
 
 	ack := confirm.Wait()
 
@@ -2149,7 +2155,7 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 func TestDeliveryAckShouldReturnSpecificErrorOnClosedChannel(t *testing.T) {
 	// setup
 	c, ch := integrationQueue(t, t.Name())
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	err := ch.Publish(DefaultExchange, t.Name(), false, false, Publishing{
 		Body: []byte("this is a test"),
 	})
@@ -2220,8 +2226,8 @@ func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T
 		t.Fatalf("PublishWithDeferredConfirm error: %v", err)
 	}
 
-	ch.Close()
-	conn.Close()
+	_ = ch.Close()
+	_ = conn.Close()
 
 	_, err = conn.Channel()
 	if err == nil {
@@ -2235,8 +2241,8 @@ func TestAckShouldNotCloseChannel_GH296(t *testing.T) {
 	const messageCount = 10
 	queueName := t.Name()
 	c, ch := integrationQueue(t, queueName)
-	defer ch.Close()
-	defer c.Close()
+	defer func() { _ = ch.Close() }()
+	defer func() { _ = c.Close() }()
 
 	notifyConnClosed := make(chan *Error)
 	c.NotifyClose(notifyConnClosed)

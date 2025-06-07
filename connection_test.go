@@ -25,7 +25,7 @@ const rabbitmqctlEnvKey = "RABBITMQ_RABBITMQCTL_PATH"
 
 func TestRequiredServerLocale(t *testing.T) {
 	conn := integrationConnection(t, "AMQP 0-9-1 required server locale")
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	requiredServerLocale := defaultLocale
 
 	for _, locale := range conn.Locales {
@@ -39,7 +39,7 @@ func TestRequiredServerLocale(t *testing.T) {
 
 func TestDefaultConnectionLocale(t *testing.T) {
 	conn := integrationConnection(t, "client default locale")
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	if conn.Config.Locale != defaultLocale {
 		t.Fatalf("Expected default connection locale to be %s, is was: %s", defaultLocale, conn.Config.Locale)
@@ -49,7 +49,7 @@ func TestDefaultConnectionLocale(t *testing.T) {
 func TestChannelOpenOnAClosedConnectionFails(t *testing.T) {
 	conn := integrationConnection(t, "channel on close")
 
-	conn.Close()
+	_ = conn.Close()
 
 	if _, err := conn.Channel(); err != ErrClosed {
 		t.Fatalf("channel.open on a closed connection %#v is expected to fail", conn)
@@ -60,7 +60,7 @@ func TestChannelOpenOnAClosedConnectionFails(t *testing.T) {
 // channel allocated is released if opening the channel fails.
 func TestChannelOpenOnAClosedConnectionFails_ReleasesAllocatedChannel(t *testing.T) {
 	conn := integrationConnection(t, "releases channel allocation")
-	conn.Close()
+	_ = conn.Close()
 
 	before := len(conn.channels)
 
@@ -83,12 +83,14 @@ func TestRaceBetweenChannelAndConnectionClose(t *testing.T) {
 
 	conn := integrationConnection(t, "allocation/shutdown race")
 
-	go conn.Close()
+	go func() {
+		_ = conn.Close()
+	}()
 	for i := 0; i < 10; i++ {
 		go func() {
 			ch, err := conn.Channel()
 			if err == nil {
-				ch.Close()
+				_ = ch.Close()
 			}
 		}()
 	}
@@ -105,10 +107,12 @@ func TestRaceBetweenChannelShutdownAndSend(t *testing.T) {
 	defer time.AfterFunc(10*time.Second, func() { t.Fatalf("Close deadlock") }).Stop()
 
 	conn := integrationConnection(t, "channel close/send race")
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	ch, _ := conn.Channel()
-	go ch.Close()
+	go func() {
+		_ = ch.Close()
+	}()
 
 	errs := make(chan error, concurrency)
 	wg := sync.WaitGroup{}
@@ -138,7 +142,7 @@ func TestQueueDeclareOnAClosedConnectionFails(t *testing.T) {
 	conn := integrationConnection(t, "queue declare on close")
 	ch, _ := conn.Channel()
 
-	conn.Close()
+	_ = conn.Close()
 
 	if _, err := ch.QueueDeclare("an example", false, false, false, false, nil); err != ErrClosed {
 		t.Fatalf("queue.declare on a closed connection %#v is expected to return ErrClosed, returned: %#v", conn, err)
@@ -149,7 +153,7 @@ func TestConcurrentClose(t *testing.T) {
 	const concurrency = 32
 
 	conn := integrationConnection(t, "concurrent close")
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	errs := make(chan error, concurrency)
 	wg := sync.WaitGroup{}
@@ -213,7 +217,7 @@ func TestPlaintextDialTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected dial error, got %v", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 }
 
 // TestIsClosed will test the public method IsClosed on a connection.
@@ -224,7 +228,7 @@ func TestIsClosed(t *testing.T) {
 		t.Fatalf("connection expected to not be marked as closed")
 	}
 
-	conn.Close()
+	_ = conn.Close()
 
 	if !conn.IsClosed() {
 		t.Fatal("connection expected to be marked as closed")
@@ -234,14 +238,14 @@ func TestIsClosed(t *testing.T) {
 // TestChannelIsClosed will test the public method IsClosed on a channel.
 func TestChannelIsClosed(t *testing.T) {
 	conn := integrationConnection(t, "public channel.IsClosed()")
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	ch, _ := conn.Channel()
 
 	if ch.IsClosed() {
 		t.Fatalf("channel expected to not be marked as closed")
 	}
 
-	ch.Close()
+	_ = ch.Close()
 
 	if !ch.IsClosed() {
 		t.Fatal("channel expected to be marked as closed")

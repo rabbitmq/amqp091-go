@@ -155,6 +155,8 @@ func readTimestamp(r io.Reader) (v time.Time, err error) {
 's': int16
 't': bool
 'x': []byte
+'u': uint16 (identical on the wire to int16)
+'i': uint32 (identical on the wire to int32)
 */
 func readField(r io.Reader) (v interface{}, err error) {
 	var typ byte
@@ -214,6 +216,20 @@ func readField(r io.Reader) (v interface{}, err error) {
 
 	case 'd':
 		var value float64
+		if err = binary.Read(r, binary.BigEndian, &value); err != nil {
+			return
+		}
+		return value, nil
+
+	case 'u':
+		var value uint16
+		if err = binary.Read(r, binary.BigEndian, &value); err != nil {
+			return
+		}
+		return value, nil
+
+	case 'i':
+		var value uint32
 		if err = binary.Read(r, binary.BigEndian, &value); err != nil {
 			return
 		}
@@ -431,7 +447,7 @@ func (r *reader) parseBodyFrame(channel uint16, size uint32) (frame frame, err e
 	return bf, nil
 }
 
-var errHeartbeatPayload = errors.New("Heartbeats should not have a payload")
+var errHeartbeatPayload = errors.New("heartbeats should not have a payload")
 
 func (r *reader) parseHeartbeatFrame(channel uint16, size uint32) (frame frame, err error) {
 	hf := &heartbeatFrame{
