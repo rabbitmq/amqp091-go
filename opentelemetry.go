@@ -80,21 +80,6 @@ func injectSpanFromContext(ctx context.Context, headers Table) Table {
 	return Table(carrier)
 }
 
-func AddAttributesforConsumption(span trace.Span, data Delivery, queueName string) {
-	span.SetAttributes(
-		OldMessagingRabbitmqRoutingKey.String(queueName),
-		semconv.MessagingRabbitmqDestinationRoutingKey(queueName),
-		semconv.MessagingDestinationPublishName(data.Exchange),
-		semconv.MessagingOperationDeliver,
-		semconv.MessagingMessageID(data.MessageId),
-		semconv.MessagingMessageConversationID(data.CorrelationId),
-		semconv.MessagingSystemRabbitmq,
-		semconv.MessagingClientIDKey.String(data.AppId),
-		semconv.MessagingMessageBodySize(len(data.Body)),
-		semconv.MessageTypeReceived,
-	)
-}
-
 // ExtractSpanContext extracts the span context from the AMQP headers.
 func ExtractSpanContext(ctx context.Context, headers Table) context.Context {
 	carrier := amqpHeaderCarrier(headers)
@@ -169,6 +154,27 @@ func extractLinkFromDelivery(ctx context.Context, del *Delivery) trace.Link {
 		semconv.MessagingMessageConversationID(del.CorrelationId),
 		semconv.MessagingMessageID(del.MessageId),
 		semconv.MessagingRabbitmqMessageDeliveryTag(int(del.DeliveryTag)))
+}
+
+
+// Adds OpenTelemetry attributes to the provided span for a consumed message.
+// It annotates the span with details such as the queue name, exchange, message ID, correlation ID, 
+// application ID, message body size, and marks the operation as a message delivery.
+// This function is intended to be used when consuming messages from a RabbitMQ queue to provide
+// rich telemetry data for observability.
+func AddAttributesforConsumption(span trace.Span, data Delivery, queueName string) {
+	span.SetAttributes(
+		OldMessagingRabbitmqRoutingKey.String(queueName),
+		semconv.MessagingRabbitmqDestinationRoutingKey(queueName),
+		semconv.MessagingDestinationPublishName(data.Exchange),
+		semconv.MessagingOperationDeliver,
+		semconv.MessagingMessageID(data.MessageId),
+		semconv.MessagingMessageConversationID(data.CorrelationId),
+		semconv.MessagingSystemRabbitmq,
+		semconv.MessagingClientIDKey.String(data.AppId),
+		semconv.MessagingMessageBodySize(len(data.Body)),
+		semconv.MessageTypeReceived,
+	)
 }
 
 // spanForDelivery creates a span for the delivered messages
