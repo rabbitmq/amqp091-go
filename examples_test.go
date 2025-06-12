@@ -428,7 +428,7 @@ func ExampleTable_SetClientConnectionName() {
 	// name will be visible in RabbitMQ Management UI.
 	config := amqp.Config{Properties: amqp.NewConnectionProperties()}
 	config.Properties.SetClientConnectionName("my-client-app")
-	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
+	conn, err := amqp.DialConfig("amqp://guest:guest@localhost:5672/", config)
 	if err != nil {
 		log.Fatalf("connection.open: %s", err)
 	}

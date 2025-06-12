@@ -73,3 +73,12 @@ func newReturn(msg basicReturn) *Return {
 func (r Return) Span(ctx context.Context, options ...trace.SpanStartOption) (context.Context, trace.Span) {
     return extractSpanFromReturn(ctx, r, options...)
 }
+
+// Span returns context and a span that for the delivery
+// the resulting span is linked to the publication that created it, if it has
+// the appropraite headers set. See [context-propagation] for more details
+//
+// [context-propagation]: https://opentelemetry.io/docs/concepts/context-propagation/
+func (r Return) Span(ctx context.Context, options ...trace.SpanStartOption) (context.Context, trace.Span) {
+	return extractSpanFromReturn(ctx, r, options...)
+}

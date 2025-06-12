@@ -5,7 +5,11 @@
 
 package amqp091
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func shouldNotPanic(t *testing.T) {
 	if err := recover(); err != nil {
@@ -14,25 +18,49 @@ func shouldNotPanic(t *testing.T) {
 }
 
 // A closed delivery chan could produce zero value.  Ack/Nack/Reject on these
-// deliveries can produce a nil pointer panic.  Instead return an error when
+// deliveries can produce a nil pointer panic. Instead, return an error when
 // the method can never be successful.
 func TestAckZeroValueAcknowledgerDoesNotPanic(t *testing.T) {
 	defer shouldNotPanic(t)
-	if err := (Delivery{}).Ack(false); err == nil {
-		t.Errorf("expected Delivery{}.Ack to error")
+	err := (Delivery{}).Ack(false)
+	if err == nil {
+		t.Fatalf("expected Delivery{}.Ack to error")
+	}
+	if !errors.Is(err, ErrDeliveryNotInitialized) {
+		t.Fatalf("expected '%v' got '%v'", ErrDeliveryNotInitialized, err)
+	}
+	expectedErrMessage := "delivery not initialized. Channel is probably closed"
+	if !strings.EqualFold(err.Error(), expectedErrMessage) {
+		t.Errorf("expected '%s' got '%s'", expectedErrMessage, err)
 	}
 }
 
 func TestNackZeroValueAcknowledgerDoesNotPanic(t *testing.T) {
 	defer shouldNotPanic(t)
-	if err := (Delivery{}).Nack(false, false); err == nil {
-		t.Errorf("expected Delivery{}.Ack to error")
+	err := (Delivery{}).Nack(false, false)
+	if err == nil {
+		t.Fatalf("expected Delivery{}.Nack to error")
+	}
+	if !errors.Is(err, ErrDeliveryNotInitialized) {
+		t.Fatalf("expected '%v' got '%v'", ErrDeliveryNotInitialized, err)
+	}
+	expectedErrMessage := "delivery not initialized. Channel is probably closed"
+	if !strings.EqualFold(err.Error(), expectedErrMessage) {
+		t.Errorf("expected '%s' got '%s'", expectedErrMessage, err)
 	}
 }
 
 func TestRejectZeroValueAcknowledgerDoesNotPanic(t *testing.T) {
 	defer shouldNotPanic(t)
-	if err := (Delivery{}).Reject(false); err == nil {
-		t.Errorf("expected Delivery{}.Ack to error")
+	err := (Delivery{}).Reject(false)
+	if err == nil {
+		t.Fatalf("expected Delivery{}.Reject to error")
+	}
+	if !errors.Is(err, ErrDeliveryNotInitialized) {
+		t.Fatalf("expected '%v' got '%v'", ErrDeliveryNotInitialized, err)
+	}
+	expectedErrMessage := "delivery not initialized. Channel is probably closed"
+	if !strings.EqualFold(err.Error(), expectedErrMessage) {
+		t.Errorf("expected '%s' got '%s'", expectedErrMessage, err)
 	}
 }

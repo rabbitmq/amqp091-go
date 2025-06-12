@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"time"
@@ -96,7 +97,7 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 	if f.Properties.ContentEncoding != "" {
 		mask |= flagContentEncoding
 	}
-	if f.Properties.Headers != nil && len(f.Properties.Headers) > 0 {
+	if len(f.Properties.Headers) > 0 {
 		mask |= flagHeaders
 	}
 	if f.Properties.DeliveryMode > 0 {
@@ -409,17 +410,23 @@ func writeField(w io.Writer, value interface{}) (err error) {
 	return
 }
 
+// writeTable serializes a Table to the given writer.
+// It writes each key-value pair and returns the serialized data as a longstr.
 func writeTable(w io.Writer, table Table) (err error) {
 	var buf bytes.Buffer
 
 	for key, val := range table {
 		if err = writeShortstr(&buf, key); err != nil {
-			return
+			return fmt.Errorf("writing key %q: %w", key, err)
 		}
 		if err = writeField(&buf, val); err != nil {
-			return
+			return fmt.Errorf("writing value for key %q: %w", key, err)
 		}
 	}
 
-	return writeLongstr(w, buf.String())
+	if err := writeLongstr(w, buf.String()); err != nil {
+		return fmt.Errorf("writing final long string: %w", err)
+	}
+
+	return nil
 }

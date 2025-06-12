@@ -897,6 +897,10 @@ func (c *Connection) closeChannel(ch *Channel, e *Error) {
 Channel opens a unique, concurrent server channel to process the bulk of AMQP
 messages.  Any error from methods on this receiver will render the receiver
 invalid and a new Channel should be opened.
+
+Channels are not thread-safe. To avoid unexpected behavior, do not share
+a single Channel instance between multiple goroutines. Concurrent calls
+to Channel methods may result in race conditions or unpredictable outcomes.
 */
 func (c *Connection) Channel() (*Channel, error) {
 	return c.openChannel()

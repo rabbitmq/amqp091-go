@@ -1589,12 +1589,13 @@ variant. The termination of the context passed to this function is not
 honoured.
 */
 func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
-	_, msg, errFn := spanForPublication(ctx, msg, exchange, key, immediate)
+	_, msg, endSpanFn := spanForPublication(ctx, msg, exchange, key, immediate)
 	dc, err := ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
 	if err != nil {
-		errFn(err)
+		endSpanFn(err)
 		return nil, err
 	}
+	endSpanFn(nil)
 	return dc, nil
 }
 
