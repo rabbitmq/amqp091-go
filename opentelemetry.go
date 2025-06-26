@@ -80,7 +80,7 @@ func injectSpanFromContext(ctx context.Context, headers Table) Table {
 	return Table(carrier)
 }
 
-// ExtractSpanContext extracts the span context from the AMQP headers.
+// ExtractSpanContext returns a new Context with span attributes set based on AMQP headers.
 func ExtractSpanContext(ctx context.Context, headers Table) context.Context {
 	carrier := amqpHeaderCarrier(headers)
 	if carrier == nil {
