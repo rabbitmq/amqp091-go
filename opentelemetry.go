@@ -59,9 +59,9 @@ var (
 	// settleMultipleKey indicates whether multiple outstanding messages were settled at once.
 	settleMultipleKey = attribute.Key("messaging.settle.multiple")
 	// settleRequeueKey indicates whether the messages were requeued.
-	settleRequeueKey = attribute.Key("messaging.settle.multiple")
+	settleRequeueKey = attribute.Key("messaging.settle.requeue")
 	// publishImmediate key indicates whether the AMQP immediate flag was set on the publishing.
-	publishImmediateKy = attribute.Key("messaging.publish.immediate")
+	publishImmediateKey = attribute.Key("messaging.publish.immediate")
 	// returnOperation indicates an AMQP 091 return
 	returnOperation = semconv.MessagingOperationKey.String("return")
 
@@ -121,18 +121,49 @@ func extractSpanFromReturn(
 	)
 }
 
-// settleDelivery creates a span for the acking of a delivery
-func settleDelivery(
+// settleAckDelivery creates a span for the acking of a delivery
+func settleAckDelivery(
 	ctx context.Context,
 	delivery *Delivery,
-	response DeliveryResponse,
+	multiple bool,
+) (context.Context, trace.Span) {
+	return tracer.Start(ctx,
+		fmt.Sprintf("settle %s %s", delivery.Exchange, delivery.RoutingKey),
+		trace.WithAttributes(
+			semconv.MessagingOperationSettle,
+			settleResponseKey.String("ack"),
+			settleMultipleKey.Bool(multiple),
+		),
+	)
+}
+
+// settleRejectDelivery creates a span for the rejection of a delivery
+func settleRejectDelivery(
+	ctx context.Context,
+	delivery *Delivery,
+	requeue bool,
+) (context.Context, trace.Span) {
+	return tracer.Start(ctx,
+		fmt.Sprintf("settle %s %s", delivery.Exchange, delivery.RoutingKey),
+		trace.WithAttributes(
+			semconv.MessagingOperationSettle,
+			settleResponseKey.String("reject"),
+			settleRequeueKey.Bool(requeue),
+		),
+	)
+}
+
+// settleNackDelivery creates a span for the nacking of a delivery
+func settleNackDelivery(
+	ctx context.Context,
+	delivery *Delivery,
 	multiple, requeue bool,
 ) (context.Context, trace.Span) {
 	return tracer.Start(ctx,
 		fmt.Sprintf("settle %s %s", delivery.Exchange, delivery.RoutingKey),
 		trace.WithAttributes(
 			semconv.MessagingOperationSettle,
-			settleResponseKey.String(response.Name()),
+			settleResponseKey.String("nack"),
 			settleMultipleKey.Bool(multiple),
 			settleRequeueKey.Bool(requeue),
 		),
@@ -157,12 +188,12 @@ func extractLinkFromDelivery(ctx context.Context, del *Delivery) trace.Link {
 }
 
 
-// Adds OpenTelemetry attributes to the provided span for a consumed message.
+// AddDeliveryAttributes adds OpenTelemetry attributes to the provided span for a consumed message.
 // It annotates the span with details such as the queue name, exchange, message ID, correlation ID, 
 // application ID, message body size, and marks the operation as a message delivery.
 // This function is intended to be used when consuming messages from a RabbitMQ queue to provide
 // rich telemetry data for observability.
-func AddAttributesforConsumption(span trace.Span, data Delivery, queueName string) {
+func AddDeliveryAttributes(span trace.Span, data Delivery, queueName string) {
 	span.SetAttributes(
 		OldMessagingRabbitmqRoutingKey.String(queueName),
 		semconv.MessagingRabbitmqDestinationRoutingKey(queueName),
@@ -216,6 +247,7 @@ func spanForPublication(
 			semconv.MessagingSystemRabbitmq,
 			semconv.MessagingClientIDKey.String(publishing.AppId),
 			semconv.MessagingMessageBodySize(len(publishing.Body)),
+			publishImmediateKey.Bool(immediate),
 			semconv.MessageTypeSent,
 		),
 	)

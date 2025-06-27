@@ -6,12 +6,12 @@
 package amqp091
 
 import (
-    "context"
-    "errors"
-    "fmt"
-    "time"
+	"context"
+	"errors"
+	"time"
 
-    "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var ErrDeliveryNotInitialized = errors.New("delivery not initialized. Channel is probably closed")
@@ -21,45 +21,45 @@ var ErrDeliveryNotInitialized = errors.New("delivery not initialized. Channel is
 //
 // Applications can provide mock implementations in tests of Delivery handlers.
 type Acknowledger interface {
-    Ack(tag uint64, multiple bool) error
-    Nack(tag uint64, multiple, requeue bool) error
-    Reject(tag uint64, requeue bool) error
+	Ack(tag uint64, multiple bool) error
+	Nack(tag uint64, multiple, requeue bool) error
+	Reject(tag uint64, requeue bool) error
 }
 
 // Delivery captures the fields for a previously delivered message resident in
 // a queue to be delivered by the server to a consumer from Channel.Consume or
 // Channel.Get.
 type Delivery struct {
-    Acknowledger Acknowledger // the channel from which this delivery arrived
+	Acknowledger Acknowledger // the channel from which this delivery arrived
 
-    Headers Table // Application or header exchange table
+	Headers Table // Application or header exchange table
 
-    // Properties
-    ContentType     string    // MIME content type
-    ContentEncoding string    // MIME content encoding
-    DeliveryMode    uint8     // queue implementation use - non-persistent (1) or persistent (2)
-    Priority        uint8     // queue implementation use - 0 to 9
-    CorrelationId   string    // application use - correlation identifier
-    ReplyTo         string    // application use - address to reply to (ex: RPC)
-    Expiration      string    // implementation use - message expiration spec
-    MessageId       string    // application use - message identifier
-    Timestamp       time.Time // application use - message timestamp
-    Type            string    // application use - message type name
-    UserId          string    // application use - creating user - should be authenticated user
-    AppId           string    // application use - creating application id
+	// Properties
+	ContentType     string    // MIME content type
+	ContentEncoding string    // MIME content encoding
+	DeliveryMode    uint8     // queue implementation use - non-persistent (1) or persistent (2)
+	Priority        uint8     // queue implementation use - 0 to 9
+	CorrelationId   string    // application use - correlation identifier
+	ReplyTo         string    // application use - address to reply to (ex: RPC)
+	Expiration      string    // implementation use - message expiration spec
+	MessageId       string    // application use - message identifier
+	Timestamp       time.Time // application use - message timestamp
+	Type            string    // application use - message type name
+	UserId          string    // application use - creating user - should be authenticated user
+	AppId           string    // application use - creating application id
 
-    // Valid only with Channel.Consume
-    ConsumerTag string
+	// Valid only with Channel.Consume
+	ConsumerTag string
 
-    // Valid only with Channel.Get
-    MessageCount uint32
+	// Valid only with Channel.Get
+	MessageCount uint32
 
-    DeliveryTag uint64
-    Redelivered bool
-    Exchange    string // basic.publish exchange
-    RoutingKey  string // basic.publish routing key
+	DeliveryTag uint64
+	Redelivered bool
+	Exchange    string // basic.publish exchange
+	RoutingKey  string // basic.publish routing key
 
-    Body []byte
+	Body []byte
 }
 
 // Span returns context and a span that for the delivery
@@ -68,59 +68,59 @@ type Delivery struct {
 //
 // [context-propagation]: https://opentelemetry.io/docs/concepts/context-propagation/
 func (d Delivery) Span(
-    ctx context.Context,
-    options ...trace.SpanStartOption,
+	ctx context.Context,
+	options ...trace.SpanStartOption,
 ) (context.Context, trace.Span) {
-    return spanForDelivery(ctx, &d, options...)
+	return spanForDelivery(ctx, &d, options...)
 }
 
 // Link returns a link for the delivery. The link points to the publication, if
 // the appropriate headers are set.
 func (d Delivery) Link(ctx context.Context) trace.Link {
-    return extractLinkFromDelivery(ctx, &d)
+	return extractLinkFromDelivery(ctx, &d)
 }
 
 func newDelivery(channel *Channel, msg messageWithContent) *Delivery {
-    props, body := msg.getContent()
+	props, body := msg.getContent()
 
-    delivery := Delivery{
-        Acknowledger: channel,
+	delivery := Delivery{
+		Acknowledger: channel,
 
-        Headers:         props.Headers,
-        ContentType:     props.ContentType,
-        ContentEncoding: props.ContentEncoding,
-        DeliveryMode:    props.DeliveryMode,
-        Priority:        props.Priority,
-        CorrelationId:   props.CorrelationId,
-        ReplyTo:         props.ReplyTo,
-        Expiration:      props.Expiration,
-        MessageId:       props.MessageId,
-        Timestamp:       props.Timestamp,
-        Type:            props.Type,
-        UserId:          props.UserId,
-        AppId:           props.AppId,
+		Headers:         props.Headers,
+		ContentType:     props.ContentType,
+		ContentEncoding: props.ContentEncoding,
+		DeliveryMode:    props.DeliveryMode,
+		Priority:        props.Priority,
+		CorrelationId:   props.CorrelationId,
+		ReplyTo:         props.ReplyTo,
+		Expiration:      props.Expiration,
+		MessageId:       props.MessageId,
+		Timestamp:       props.Timestamp,
+		Type:            props.Type,
+		UserId:          props.UserId,
+		AppId:           props.AppId,
 
-        Body: body,
-    }
+		Body: body,
+	}
 
-    // Properties for the delivery types
-    switch m := msg.(type) {
-    case *basicDeliver:
-        delivery.ConsumerTag = m.ConsumerTag
-        delivery.DeliveryTag = m.DeliveryTag
-        delivery.Redelivered = m.Redelivered
-        delivery.Exchange = m.Exchange
-        delivery.RoutingKey = m.RoutingKey
+	// Properties for the delivery types
+	switch m := msg.(type) {
+	case *basicDeliver:
+		delivery.ConsumerTag = m.ConsumerTag
+		delivery.DeliveryTag = m.DeliveryTag
+		delivery.Redelivered = m.Redelivered
+		delivery.Exchange = m.Exchange
+		delivery.RoutingKey = m.RoutingKey
 
-    case *basicGetOk:
-        delivery.MessageCount = m.MessageCount
-        delivery.DeliveryTag = m.DeliveryTag
-        delivery.Redelivered = m.Redelivered
-        delivery.Exchange = m.Exchange
-        delivery.RoutingKey = m.RoutingKey
-    }
+	case *basicGetOk:
+		delivery.MessageCount = m.MessageCount
+		delivery.DeliveryTag = m.DeliveryTag
+		delivery.Redelivered = m.Redelivered
+		delivery.Exchange = m.Exchange
+		delivery.RoutingKey = m.RoutingKey
+	}
 
-    return &delivery
+	return &delivery
 }
 
 /*
@@ -188,43 +188,121 @@ Either Delivery.Ack, Delivery.Reject or Delivery.Nack must be called for every
 delivery that is not automatically acknowledged.
 */
 func (d Delivery) Nack(multiple, requeue bool) error {
-    if d.Acknowledger == nil {
-        return ErrDeliveryNotInitialized
-    }
-    return d.Acknowledger.Nack(d.DeliveryTag, multiple, requeue)
+	if d.Acknowledger == nil {
+		return ErrDeliveryNotInitialized
+	}
+	return d.Acknowledger.Nack(d.DeliveryTag, multiple, requeue)
+}
+
+/*
+AckWithContext delegates an acknowledgement through the Acknowledger interface that the
+client or server has finished work on a delivery, with OpenTelemetry span support.
+
+This method creates a settle span for the acknowledgment operation and properly
+handles error recording in the span.
+
+When multiple is true, this delivery and all prior unacknowledged deliveries
+on the same channel will be acknowledged.
+
+Either AckWithContext, RejectWithContext or NackWithContext must be called for every delivery that is
+not automatically acknowledged when using context-aware operations.
+*/
+func (d *Delivery) AckWithContext(ctx context.Context, multiple bool) error {
+	// Start the settle span before performing the acknowledgment operation
+	_, span := settleAckDelivery(ctx, d, multiple)
+	defer span.End()
+
+	err := d.Ack(multiple)
+
+	// Record any error in the span
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	return err
+}
+
+/*
+RejectWithContext delegates a negatively acknowledgement through the Acknowledger interface
+with OpenTelemetry span support.
+
+This method creates a settle span for the rejection operation and properly
+handles error recording in the span.
+
+When requeue is true, queue this message to be delivered to a consumer on a
+different channel. When requeue is false or the server is unable to queue this
+message, it will be dropped.
+
+Either AckWithContext, RejectWithContext or NackWithContext must be called for every delivery that is
+not automatically acknowledged when using context-aware operations.
+*/
+func (d *Delivery) RejectWithContext(ctx context.Context, requeue bool) error {
+	// Start the settle span before performing the rejection operation
+	_, span := settleRejectDelivery(ctx, d, requeue)
+	defer span.End()
+
+	err := d.Reject(requeue)
+
+	// Record any error in the span
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	return err
+}
+
+/*
+NackWithContext negatively acknowledges the delivery of message(s) identified by the
+delivery tag from either the client or server, with OpenTelemetry span support.
+
+This method creates a settle span for the nack operation and properly
+handles error recording in the span.
+
+When multiple is true, nack messages up to and including delivered messages up
+until the delivery tag delivered on the same channel.
+
+When requeue is true, request the server to deliver this message to a different
+consumer. If it is not possible or requeue is false, the message will be
+dropped or delivered to a server configured dead-letter queue.
+
+Either AckWithContext, RejectWithContext or NackWithContext must be called for every delivery that is
+not automatically acknowledged when using context-aware operations.
+*/
+func (d *Delivery) NackWithContext(ctx context.Context, multiple, requeue bool) error {
+	// Start the settle span before performing the nack operation
+	_, span := settleNackDelivery(ctx, d, multiple, requeue)
+	defer span.End()
+
+	err := d.Nack(multiple, requeue)
+
+	// Record any error in the span
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	return err
 }
 
 type DeliveryResponse uint8
 
 const (
-    Ack DeliveryResponse = iota
-    Reject
-    Nack
+	Ack DeliveryResponse = iota
+	Reject
+	Nack
 )
 
 func (r DeliveryResponse) Name() string {
-    switch r {
-    case Ack:
-        return "ack"
-    case Nack:
-        return "nack"
-    case Reject:
-        return "reject"
-    default:
-        return "unknown"
-    }
-}
-
-func (d Delivery) Settle(ctx context.Context, response DeliveryResponse, multiple, requeue bool) error {
-    defer settleDelivery(ctx, &d, response, multiple, requeue)
-    switch response {
-    case Ack:
-        return d.Ack(multiple)
-    case Nack:
-        return d.Nack(multiple, requeue)
-    case Reject:
-        return d.Reject(requeue)
-    default:
-        return fmt.Errorf("unknown operation %s", response.Name())
-    }
+	switch r {
+	case Ack:
+		return "ack"
+	case Nack:
+		return "nack"
+	case Reject:
+		return "reject"
+	default:
+		return "unknown"
+	}
 }
