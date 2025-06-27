@@ -117,7 +117,6 @@ func extractSpanFromReturn(
 			),
 			trace.WithNewRoot(),
 		)...,
-
 	)
 }
 
@@ -187,9 +186,8 @@ func extractLinkFromDelivery(ctx context.Context, del *Delivery) trace.Link {
 		semconv.MessagingRabbitmqMessageDeliveryTag(int(del.DeliveryTag)))
 }
 
-
 // AddDeliveryAttributes adds OpenTelemetry attributes to the provided span for a consumed message.
-// It annotates the span with details such as the queue name, exchange, message ID, correlation ID, 
+// It annotates the span with details such as the queue name, exchange, message ID, correlation ID,
 // application ID, message body size, and marks the operation as a message delivery.
 // This function is intended to be used when consuming messages from a RabbitMQ queue to provide
 // rich telemetry data for observability.
