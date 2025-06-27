@@ -285,24 +285,3 @@ func (d *Delivery) NackWithContext(ctx context.Context, multiple, requeue bool) 
 
 	return err
 }
-
-type DeliveryResponse uint8
-
-const (
-	Ack DeliveryResponse = iota
-	Reject
-	Nack
-)
-
-func (r DeliveryResponse) Name() string {
-	switch r {
-	case Ack:
-		return "ack"
-	case Nack:
-		return "nack"
-	case Reject:
-		return "reject"
-	default:
-		return "unknown"
-	}
-}
