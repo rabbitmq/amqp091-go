@@ -431,7 +431,7 @@ func (r *reader) parseBodyFrame(channel uint16, size uint32) (frame frame, err e
 	return bf, nil
 }
 
-var errHeartbeatPayload = errors.New("Heartbeats should not have a payload")
+var errHeartbeatPayload = errors.New("heartbeats should not have a payload")
 
 func (r *reader) parseHeartbeatFrame(channel uint16, size uint32) (frame frame, err error) {
 	hf := &heartbeatFrame{
