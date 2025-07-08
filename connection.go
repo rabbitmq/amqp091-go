@@ -28,11 +28,11 @@ const (
 	defaultHeartbeat         = 10 * time.Second
 	defaultConnectionTimeout = 30 * time.Second
 	defaultProduct           = "AMQP 0.9.1 Client"
-	buildVersion             = "1.8.1"
+	buildVersion             = "1.10.0"
 	platform                 = "golang"
 	// Safer default that makes channel leaks a lot easier to spot
 	// before they create operational headaches. See https://github.com/rabbitmq/rabbitmq-server/issues/1593.
-	defaultChannelMax = (2 << 10) - 1
+	defaultChannelMax = uint16((2 << 10) - 1)
 	defaultLocale     = "en_US"
 )
 
@@ -49,7 +49,7 @@ type Config struct {
 	// bindings on the server.  Dial sets this to the path parsed from the URL.
 	Vhost string
 
-	ChannelMax int           // 0 max channels means 2^16 - 1
+	ChannelMax uint16        // 0 max channels means 2^16 - 1
 	FrameSize  int           // 0 max bytes means unlimited
 	Heartbeat  time.Duration // less than 1s uses the server's interval
 
@@ -112,6 +112,8 @@ type Connection struct {
 	blocks   []chan Blocking
 
 	errors chan *Error
+	// if connection is closed should close this chan
+	close chan struct{}
 
 	Config Config // The negotiated Config after connection.open
 
@@ -155,8 +157,7 @@ func DefaultDial(connectionTimeout time.Duration) func(network, addr string) (ne
 // scheme.  It is equivalent to calling DialTLS(amqp, nil).
 func Dial(url string) (*Connection, error) {
 	return DialConfig(url, Config{
-		Heartbeat: defaultHeartbeat,
-		Locale:    defaultLocale,
+		Locale: defaultLocale,
 	})
 }
 
@@ -167,7 +168,6 @@ func Dial(url string) (*Connection, error) {
 // DialTLS uses the provided tls.Config when encountering an amqps:// scheme.
 func DialTLS(url string, amqps *tls.Config) (*Connection, error) {
 	return DialConfig(url, Config{
-		Heartbeat:       defaultHeartbeat,
 		TLSClientConfig: amqps,
 		Locale:          defaultLocale,
 	})
@@ -184,7 +184,6 @@ func DialTLS(url string, amqps *tls.Config) (*Connection, error) {
 // amqps:// scheme.
 func DialTLS_ExternalAuth(url string, amqps *tls.Config) (*Connection, error) {
 	return DialConfig(url, Config{
-		Heartbeat:       defaultHeartbeat,
 		TLSClientConfig: amqps,
 		SASL:            []Authentication{&ExternalAuth{}},
 	})
@@ -193,7 +192,9 @@ func DialTLS_ExternalAuth(url string, amqps *tls.Config) (*Connection, error) {
 // DialConfig accepts a string in the AMQP URI format and a configuration for
 // the transport and connection setup, returning a new Connection.  Defaults to
 // a server heartbeat interval of 10 seconds and sets the initial read deadline
-// to 30 seconds.
+// to 30 seconds. The heartbeat interval specified in the AMQP URI takes precedence
+// over the value specified in the config. To disable heartbeats, you must use
+// the AMQP URI and set heartbeat=0 there.
 func DialConfig(url string, config Config) (*Connection, error) {
 	var err error
 	var conn net.Conn
@@ -204,18 +205,50 @@ func DialConfig(url string, config Config) (*Connection, error) {
 	}
 
 	if config.SASL == nil {
-		config.SASL = []Authentication{uri.PlainAuth()}
+		if uri.AuthMechanism != nil {
+			for _, identifier := range uri.AuthMechanism {
+				switch strings.ToUpper(identifier) {
+				case "PLAIN":
+					config.SASL = append(config.SASL, uri.PlainAuth())
+				case "AMQPLAIN":
+					config.SASL = append(config.SASL, uri.AMQPlainAuth())
+				case "EXTERNAL":
+					config.SASL = append(config.SASL, &ExternalAuth{})
+				default:
+					return nil, fmt.Errorf("unsupported auth_mechanism: %v", identifier)
+				}
+			}
+		} else {
+			config.SASL = []Authentication{uri.PlainAuth()}
+		}
 	}
 
 	if config.Vhost == "" {
 		config.Vhost = uri.Vhost
 	}
 
+	if uri.Heartbeat.hasValue {
+		config.Heartbeat = uri.Heartbeat.value
+	} else {
+		if config.Heartbeat == 0 {
+			config.Heartbeat = defaultHeartbeat
+		}
+	}
+
+	if config.ChannelMax == 0 {
+		config.ChannelMax = uri.ChannelMax
+	}
+
+	connectionTimeout := defaultConnectionTimeout
+	if uri.ConnectionTimeout != 0 {
+		connectionTimeout = time.Duration(uri.ConnectionTimeout) * time.Millisecond
+	}
+
 	addr := net.JoinHostPort(uri.Host, strconv.FormatInt(int64(uri.Port), 10))
 
 	dialer := config.Dial
 	if dialer == nil {
-		dialer = DefaultDial(defaultConnectionTimeout)
+		dialer = DefaultDial(connectionTimeout)
 	}
 
 	conn, err = dialer("tcp", addr)
@@ -263,6 +296,7 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 		rpc:       make(chan message),
 		sends:     make(chan time.Time),
 		errors:    make(chan *Error, 1),
+		close:     make(chan struct{}),
 		deadlines: make(chan readDeadliner, 1),
 	}
 	go c.reader(conn)
@@ -597,6 +631,8 @@ func (c *Connection) shutdown(err *Error) {
 		}
 
 		c.conn.Close()
+		// reader exit
+		close(c.close)
 
 		c.channels = nil
 		c.allocator = nil
@@ -634,15 +670,22 @@ func (c *Connection) dispatch0(f frame) {
 				c <- Blocking{Active: false}
 			}
 		default:
-			c.rpc <- m
+			select {
+			case <-c.close:
+				return
+			case c.rpc <- m:
+			}
 		}
 	case *heartbeatFrame:
 		// kthx - all reads reset our deadline.  so we can drop this
 	default:
 		// lolwat - channel0 only responds to methods and heartbeats
-		if err := c.closeWith(ErrUnexpectedFrame); err != nil {
-			Logger.Printf("error sending connectionCloseOk with ErrUnexpectedFrame, error: %+v", err)
-		}
+		// closeWith use call don't block reader
+		go func() {
+			if err := c.closeWith(ErrUnexpectedFrame); err != nil {
+				Logger.Printf("error sending connectionCloseOk with ErrUnexpectedFrame, error: %+v", err)
+			}
+		}()
 	}
 }
 
@@ -689,9 +732,12 @@ func (c *Connection) dispatchClosed(f frame) {
 			// we are already closed, so do nothing
 		default:
 			// unexpected method on closed channel
-			if err := c.closeWith(ErrClosed); err != nil {
-				Logger.Printf("error sending connectionCloseOk with ErrClosed, error: %+v", err)
-			}
+			// closeWith use call don't block reader
+			go func() {
+				if err := c.closeWith(ErrClosed); err != nil {
+					Logger.Printf("error sending connectionCloseOk with ErrClosed, error: %+v", err)
+				}
+			}()
 		}
 	}
 }
@@ -708,7 +754,6 @@ func (c *Connection) reader(r io.Reader) {
 
 	for {
 		frame, err := frames.ReadFrame()
-
 		if err != nil {
 			c.shutdown(&Error{Code: FrameError, Reason: err.Error()})
 			return
@@ -813,13 +858,16 @@ func (c *Connection) allocateChannel() (*Channel, error) {
 
 // releaseChannel removes a channel from the registry as the final part of the
 // channel lifecycle
-func (c *Connection) releaseChannel(id uint16) {
+func (c *Connection) releaseChannel(ch *Channel) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
 	if !c.IsClosed() {
-		delete(c.channels, id)
-		c.allocator.release(int(id))
+		got, ok := c.channels[ch.id]
+		if ok && got == ch {
+			delete(c.channels, ch.id)
+			c.allocator.release(int(ch.id))
+		}
 	}
 }
 
@@ -831,7 +879,7 @@ func (c *Connection) openChannel() (*Channel, error) {
 	}
 
 	if err := ch.open(); err != nil {
-		c.releaseChannel(ch.id)
+		c.releaseChannel(ch)
 		return nil, err
 	}
 	return ch, nil
@@ -842,13 +890,17 @@ func (c *Connection) openChannel() (*Channel, error) {
 // this connection.
 func (c *Connection) closeChannel(ch *Channel, e *Error) {
 	ch.shutdown(e)
-	c.releaseChannel(ch.id)
+	c.releaseChannel(ch)
 }
 
 /*
 Channel opens a unique, concurrent server channel to process the bulk of AMQP
 messages.  Any error from methods on this receiver will render the receiver
 invalid and a new Channel should be opened.
+
+Channels are not thread-safe. To avoid unexpected behavior, do not share
+a single Channel instance between multiple goroutines. Concurrent calls
+to Channel methods may result in race conditions or unpredictable outcomes.
 */
 func (c *Connection) Channel() (*Channel, error) {
 	return c.openChannel()
@@ -863,13 +915,14 @@ func (c *Connection) call(req message, res ...message) error {
 		}
 	}
 
-	msg, ok := <-c.rpc
-	if !ok {
-		err, errorsChanIsOpen := <-c.errors
-		if !errorsChanIsOpen {
-			return ErrClosed
+	var msg message
+	select {
+	case e, ok := <-c.errors:
+		if ok {
+			return e
 		}
-		return err
+		return ErrClosed
+	case msg = <-c.rpc:
 	}
 
 	// Try to match one of the result types
@@ -971,13 +1024,13 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 
 	// When the server and client both use default 0, then the max channel is
 	// only limited by uint16.
-	c.Config.ChannelMax = pick(config.ChannelMax, int(tune.ChannelMax))
+	c.Config.ChannelMax = pickUInt16(config.ChannelMax, tune.ChannelMax)
 	if c.Config.ChannelMax == 0 {
 		c.Config.ChannelMax = defaultChannelMax
 	}
-	c.Config.ChannelMax = min(c.Config.ChannelMax, maxChannelMax)
+	c.Config.ChannelMax = minUInt16(c.Config.ChannelMax, maxChannelMax)
 
-	c.allocator = newAllocator(1, c.Config.ChannelMax)
+	c.allocator = newAllocator(1, int(c.Config.ChannelMax))
 
 	c.m.Unlock()
 
@@ -1084,11 +1137,33 @@ func max(a, b int) int {
 	return b
 }
 
+func maxUInt16(a, b uint16) uint16 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
+}
+
+func minUInt16(a, b uint16) uint16 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func pickUInt16(client, server uint16) uint16 {
+	if client == 0 || server == 0 {
+		return maxUInt16(client, server)
+	} else {
+		return minUInt16(client, server)
+	}
 }
 
 func pick(client, server int) int {

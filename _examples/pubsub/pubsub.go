@@ -15,7 +15,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -88,14 +87,12 @@ func redial(ctx context.Context, url string) chan chan session {
 // publish publishes messages to a reconnecting session to a fanout exchange.
 // It receives from the application specific source of messages.
 func publish(sessions chan chan session, messages <-chan message) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	pending := make(chan message, 1)
 
 	for session := range sessions {
 		var (
 			running bool
 			reading = messages
-			pending = make(chan message, 1)
 			confirm = make(chan amqp.Confirmation, 1)
 		)
 
@@ -117,6 +114,7 @@ func publish(sessions chan chan session, messages <-chan message) {
 			select {
 			case confirmed, ok := <-confirm:
 				if !ok {
+					pub.Close()
 					break Publish
 				}
 				if !confirmed.Ack {
@@ -126,7 +124,7 @@ func publish(sessions chan chan session, messages <-chan message) {
 
 			case body = <-pending:
 				routingKey := "ignored for fanout exchanges, application dependent for other exchanges"
-				err := pub.PublishWithContext(ctx, exchange, routingKey, false, false, amqp.Publishing{
+				err := pub.Publish(exchange, routingKey, false, false, amqp.Publishing{
 					Body: body,
 				})
 				// Retry failed delivery on the next session
@@ -190,6 +188,7 @@ func subscribe(sessions chan chan session, messages chan<- message) {
 			messages <- msg.Body
 			sub.Ack(msg.DeliveryTag, false)
 		}
+		sub.Close()
 	}
 }
 

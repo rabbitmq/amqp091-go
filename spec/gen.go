@@ -15,14 +15,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"text/template"
 )
 
 var (
-	ErrUnknownType   = errors.New("Unknown field type in gen")
-	ErrUnknownDomain = errors.New("Unknown domain type in gen")
+	ErrUnknownType   = errors.New("unknown field type in gen")
+	ErrUnknownDomain = errors.New("unknown domain type in gen")
 )
 
 var amqpTypeToNative = map[string]string{
@@ -147,17 +148,17 @@ var (
 	// Use of this source code is governed by a BSD-style
 	// license that can be found in the LICENSE file.
 
-  /* GENERATED FILE - DO NOT EDIT */
-  /* Rebuild from the spec/gen.go tool */
+	/* GENERATED FILE - DO NOT EDIT */
+	/* Rebuild from the spec/gen.go tool */
 
-  {{with .Root}}
-  package amqp091
+	{{with .Root}}
+	package amqp091
 
-  import (
-    "fmt"
-    "encoding/binary"
-    "io"
-  )
+	import (
+		"fmt"
+		"encoding/binary"
+		"io"
+	)
 
 	// Error codes that can be sent from the server during a connection or
 	// channel exception or used by the client to indicate a class of error like
@@ -241,7 +242,7 @@ var (
       switch mf.MethodId {
       {{range .Methods}}
       case {{.Index}}: // {{$class.Name}} {{.Name}}
-        //fmt.Println("NextMethod: class:{{$class.Index}} method:{{.Index}}")
+        // fmt.Println("NextMethod: class:{{$class.Index}} method:{{.Index}}")
         method := &{{$.StructName $class.Name .Name}}{}
         if err = method.read(r.r); err != nil {
           return
@@ -434,7 +435,7 @@ func (renderer *renderer) Domain(field Field) (domain Domain, err error) {
 		}
 	}
 	return domain, nil
-	//return domain, ErrUnknownDomain
+	// return domain, ErrUnknownDomain
 }
 
 func (renderer *renderer) FieldName(field Field) (t string) {
@@ -501,7 +502,6 @@ func public(parts ...string) string {
 
 func export(delim *regexp.Regexp, parts ...string) (res string) {
 	for _, in := range parts {
-
 		res += delim.ReplaceAllStringFunc(in, func(match string) string {
 			switch len(match) {
 			case 1:
@@ -525,7 +525,6 @@ func main() {
 	}
 
 	err = xml.Unmarshal(spec, &r.Root)
-
 	if err != nil {
 		log.Fatalln("Could not parse XML:", err)
 	}

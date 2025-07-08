@@ -76,6 +76,27 @@ func TestAllocatorShouldReuseReleased(t *testing.T) {
 	}
 }
 
+func TestAllocatorShouldNotReuseEarly(t *testing.T) {
+	a := newAllocator(1, 2)
+
+	first, _ := a.next()
+	if want, got := 1, first; want != got {
+		t.Fatalf("expected allocation to be %d, got: %d", want, got)
+	}
+
+	a.release(first)
+
+	second, _ := a.next()
+	if want, got := 2, second; want != got {
+		t.Fatalf("expected second allocation to be %d, got: %d", want, got)
+	}
+
+	third, _ := a.next()
+	if want, got := first, third; want != got {
+		t.Fatalf("expected third allocation to be %d, got: %d", want, got)
+	}
+}
+
 func TestAllocatorReleasesKeepUpWithAllocationsForAllSizes(t *testing.T) {
 	if testing.Short() {
 		t.Skip()

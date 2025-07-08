@@ -13,10 +13,10 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        go-version: ['1.19', '1.20']
+        go-version: ['oldstable', 'stable']
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
           check-latest: true
@@ -36,15 +36,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.19', '1.20']
+        go-version: ['oldstable', 'stable']
     services:
       rabbitmq:
         image: rabbitmq
         ports:
           - 5672:5672
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
           check-latest: true

@@ -16,6 +16,8 @@ import (
 )
 
 func tlsServerConfig(t *testing.T) *tls.Config {
+	t.Helper()
+
 	cfg := new(tls.Config)
 
 	cfg.ClientCAs = x509.NewCertPool()
@@ -33,6 +35,8 @@ func tlsServerConfig(t *testing.T) *tls.Config {
 }
 
 func tlsClientConfig(t *testing.T) *tls.Config {
+	t.Helper()
+
 	cfg := new(tls.Config)
 	cfg.RootCAs = x509.NewCertPool()
 	cfg.RootCAs.AppendCertsFromPEM([]byte(caCert))
@@ -56,6 +60,8 @@ type tlsServer struct {
 
 // Captures the header for each accepted connection
 func (s *tlsServer) Serve(t *testing.T) {
+	t.Helper()
+
 	for {
 		c, err := s.Accept()
 		if err != nil {
@@ -66,6 +72,8 @@ func (s *tlsServer) Serve(t *testing.T) {
 }
 
 func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
+	t.Helper()
+
 	l, err := tls.Listen("tcp", "127.0.0.1:3456", cfg)
 	if err != nil {
 		t.Fatalf("TLS server Listen error: %+v", err)
@@ -80,6 +88,24 @@ func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
 	go s.Serve(t)
 
 	return s
+}
+
+func TestTlsConfigFromUriPushdownServerNameIndication(t *testing.T) {
+	uri := "amqps://user:pass@example.com:5671?server_name_indication=another-hostname.com"
+	parsedUri, err := ParseURI(uri)
+	if err != nil {
+		t.Fatalf("expected to parse URI successfully, got error: %s", err)
+	}
+
+	tlsConf, err := tlsConfigFromURI(parsedUri)
+	if err != nil {
+		t.Fatalf("expected tlsConfigFromURI to succeed, got error: %s", err)
+	}
+
+	const expectedServerName = "another-hostname.com"
+	if tlsConf.ServerName != expectedServerName {
+		t.Fatalf("expected tlsConf server name to equal Uri servername: want %s, got %s", expectedServerName, tlsConf.ServerName)
+	}
 }
 
 // Tests opening a connection of a TLS enabled socket server

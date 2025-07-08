@@ -275,7 +275,7 @@ func readTable(r io.Reader) (table Table, err error) {
 		return
 	}
 
-	nested.Write([]byte(str))
+	nested.WriteString(str)
 
 	table = make(Table)
 
@@ -297,11 +297,8 @@ func readTable(r io.Reader) (table Table, err error) {
 	return
 }
 
-func readArray(r io.Reader) ([]interface{}, error) {
-	var (
-		size uint32
-		err  error
-	)
+func readArray(r io.Reader) (arr []interface{}, err error) {
+	var size uint32
 
 	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
 		return nil, err
@@ -309,7 +306,6 @@ func readArray(r io.Reader) ([]interface{}, error) {
 
 	var (
 		lim   = &io.LimitedReader{R: r, N: int64(size)}
-		arr   []interface{}
 		field interface{}
 	)
 
@@ -441,7 +437,7 @@ func (r *reader) parseBodyFrame(channel uint16, size uint32) (frame frame, err e
 	return bf, nil
 }
 
-var errHeartbeatPayload = errors.New("Heartbeats should not have a payload")
+var errHeartbeatPayload = errors.New("heartbeats should not have a payload")
 
 func (r *reader) parseHeartbeatFrame(channel uint16, size uint32) (frame frame, err error) {
 	hf := &heartbeatFrame{

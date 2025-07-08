@@ -6,9 +6,9 @@
 package amqp091
 
 import (
-	"bytes"
 	"fmt"
 	"math/big"
+	"strings"
 )
 
 const (
@@ -18,10 +18,10 @@ const (
 
 // allocator maintains a bitset of allocated numbers.
 type allocator struct {
-	pool *big.Int
-	last int
-	low  int
-	high int
+	pool   *big.Int
+	follow int
+	low    int
+	high   int
 }
 
 // NewAllocator reserves and frees integers out of a range between low and
@@ -31,10 +31,10 @@ type allocator struct {
 // sizeof(big.Word)
 func newAllocator(low, high int) *allocator {
 	return &allocator{
-		pool: big.NewInt(0),
-		last: low,
-		low:  low,
-		high: high,
+		pool:   big.NewInt(0),
+		follow: low,
+		low:    low,
+		high:   high,
 	}
 }
 
@@ -42,9 +42,9 @@ func newAllocator(low, high int) *allocator {
 // "allocator[low..high] reserved..until"
 //
 // O(N) where N is high-low
-func (a allocator) String() string {
-	b := &bytes.Buffer{}
-	fmt.Fprintf(b, "allocator[%d..%d]", a.low, a.high)
+func (a *allocator) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "allocator[%d..%d]", a.low, a.high)
 
 	for low := a.low; low <= a.high; low++ {
 		high := low
@@ -53,9 +53,9 @@ func (a allocator) String() string {
 		}
 
 		if high > low+1 {
-			fmt.Fprintf(b, " %d..%d", low, high-1)
+			fmt.Fprintf(&b, " %d..%d", low, high-1)
 		} else if high > low {
-			fmt.Fprintf(b, " %d", high-1)
+			fmt.Fprintf(&b, " %d", high-1)
 		}
 
 		low = high
@@ -69,21 +69,29 @@ func (a allocator) String() string {
 // O(N) worst case runtime where N is allocated, but usually O(1) due to a
 // rolling index into the oldest allocation.
 func (a *allocator) next() (int, bool) {
-	wrapped := a.last
+	wrapped := a.follow
+	defer func() {
+		// make a.follow point to next value
+		if a.follow == a.high {
+			a.follow = a.low
+		} else {
+			a.follow += 1
+		}
+	}()
 
 	// Find trailing bit
-	for ; a.last <= a.high; a.last++ {
-		if a.reserve(a.last) {
-			return a.last, true
+	for ; a.follow <= a.high; a.follow++ {
+		if a.reserve(a.follow) {
+			return a.follow, true
 		}
 	}
 
 	// Find preceding free'd pool
-	a.last = a.low
+	a.follow = a.low
 
-	for ; a.last < wrapped; a.last++ {
-		if a.reserve(a.last) {
-			return a.last, true
+	for ; a.follow < wrapped; a.follow++ {
+		if a.reserve(a.follow) {
+			return a.follow, true
 		}
 	}
 

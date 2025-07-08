@@ -13,6 +13,7 @@ import (
 	"context"
 	devrand "crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -286,6 +287,49 @@ func TestIntegrationQueueDeclarePassiveOnMissingExchangeShouldError(t *testing.T
 	}
 }
 
+// https://github.com/rabbitmq/amqp091-go/issues/273
+// Note: RabbitMQ behaves according to spec.
+// Passive declarations ignore everything but the queue name
+// #themoreuknow
+func TestIntegrationQueueDeclarePassiveOnQueueTypeMismatchShouldError(t *testing.T) {
+	c := integrationConnection(t, t.Name())
+	if c != nil {
+		defer c.Close()
+
+		ch, err := c.Channel()
+		if err != nil {
+			t.Fatalf("create channel1: %s", err)
+		}
+		defer ch.Close()
+
+		queueName := t.Name()
+
+		if _, err := ch.QueueDeclare(
+			queueName, // name
+			false,     // durable
+			true,      // auto-delete
+			false,     // exclusive
+			false,     // noWait
+			nil,       // arguments
+		); err != nil {
+			t.Fatalf("queue declare: %s", err)
+		}
+
+		args := Table{QueueTypeArg: QueueTypeQuorum}
+
+		if _, err := ch.QueueDeclarePassive(
+			queueName, // name
+			false,     // duration (note: not durable)
+			true,      // auto-delete
+			false,     // exclusive
+			false,     // noWait
+			args,      // arguments
+		); err != nil {
+			t.Fatal("QueueDeclarePassive with mismatched queue type should NOT error")
+		}
+	}
+}
+
 // https://github.com/streadway/amqp/issues/94
 func TestIntegrationPassiveQueue(t *testing.T) {
 	c := integrationConnection(t, "queue")
@@ -351,7 +395,6 @@ func TestIntegrationBasicQueueOperations(t *testing.T) {
 
 		deleteQueueFirstOptions := []bool{true, false}
 		for _, deleteQueueFirst := range deleteQueueFirstOptions {
-
 			if err := channel.ExchangeDeclare(
 				exchangeName, // name
 				"direct",     // type
@@ -403,7 +446,6 @@ func TestIntegrationBasicQueueOperations(t *testing.T) {
 					t.Fatalf("delete exchange (after delete queue): %s", err)
 				}
 				t.Logf("delete exchange (after delete queue) OK")
-
 			} else { // deleteExchangeFirst
 				if err := channel.ExchangeDelete(exchangeName, false, false); err != nil {
 					t.Fatalf("delete exchange (first): %s", err)
@@ -478,7 +520,7 @@ func TestIntegrationChannelIDsExhausted(t *testing.T) {
 	}
 	defer c.Close()
 
-	for i := 1; i <= c.Config.ChannelMax; i++ {
+	for i := uint16(1); i <= c.Config.ChannelMax; i++ {
 		if _, err := c.Channel(); err != nil {
 			t.Fatalf("expected allocating all channel ids to succed, failed on %d with %v", i, err)
 		}
@@ -557,7 +599,6 @@ func TestIntegrationChannelClosing(t *testing.T) {
 			}
 			t.Logf("created/closed %d channels OK", n)
 		}
-
 	}
 }
 
@@ -887,8 +928,8 @@ func (c Publishing) Generate(r *rand.Rand, _ int) reflect.Value {
 	var t reflect.Value
 
 	p := Publishing{}
-	//p.DeliveryMode = uint8(r.Intn(3))
-	//p.Priority = uint8(r.Intn(8))
+	// p.DeliveryMode = uint8(r.Intn(3))
+	// p.Priority = uint8(r.Intn(8))
 
 	if r.Intn(2) > 0 {
 		p.ContentType = "application/octet-stream"
@@ -899,23 +940,23 @@ func (c Publishing) Generate(r *rand.Rand, _ int) reflect.Value {
 	}
 
 	if r.Intn(2) > 0 {
-		p.CorrelationId = fmt.Sprintf("%d", r.Int())
+		p.CorrelationId = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.ReplyTo = fmt.Sprintf("%d", r.Int())
+		p.ReplyTo = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.MessageId = fmt.Sprintf("%d", r.Int())
+		p.MessageId = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.Type = fmt.Sprintf("%d", r.Int())
+		p.Type = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
-		p.AppId = fmt.Sprintf("%d", r.Int())
+		p.AppId = strconv.Itoa(r.Int())
 	}
 
 	if r.Intn(2) > 0 {
@@ -1166,7 +1207,6 @@ func TestIntegrationGetOk(t *testing.T) {
 		}
 
 		msg, ok, err := ch.Get(queue, false)
-
 		if err != nil {
 			t.Fatalf("Failed get: %v", err)
 		}
@@ -1193,7 +1233,6 @@ func TestIntegrationGetEmpty(t *testing.T) {
 		}
 
 		_, ok, err := ch.Get(queue, false)
-
 		if err != nil {
 			t.Fatalf("Failed get: %v", err)
 		}
@@ -1263,7 +1302,6 @@ func TestIntegrationTxRollback(t *testing.T) {
 		}
 
 		_, ok, err := ch.Get(queue, false)
-
 		if err != nil {
 			t.Fatalf("Failed get: %v", err)
 		}
@@ -1732,7 +1770,6 @@ func TestCorruptedMessageIssue7(t *testing.T) {
 			err := pub.PublishWithContext(context.TODO(), "", queue, false, false, Publishing{
 				Body: generateCrc32Random(t, 7*i),
 			})
-
 			if err != nil {
 				t.Fatalf("Failed to publish")
 			}
@@ -2025,6 +2062,59 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 	}
 }
 
+func TestIntegrationGetNextPublishSeqNoRace(t *testing.T) {
+	if c := integrationConnection(t, "GetNextPublishSeqNoRace"); c != nil {
+		defer c.Close()
+
+		ch, err := c.Channel()
+		if err != nil {
+			t.Fatalf("channel: %v", err)
+		}
+
+		if err = ch.Confirm(false); err != nil {
+			t.Fatalf("could not confirm")
+		}
+
+		ex := "test-get-next-pub"
+		if err = ch.ExchangeDeclare(ex, "direct", false, false, false, false, nil); err != nil {
+			t.Fatalf("cannot declare %v: got: %v", ex, err)
+		}
+
+		n := ch.GetNextPublishSeqNo()
+		if n != 1 {
+			t.Fatalf("wrong next publish seqence number before any publish, expected: %d, got: %d", 1, n)
+		}
+
+		wg := sync.WaitGroup{}
+		fail := false
+
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			_ = ch.GetNextPublishSeqNo()
+		}()
+
+		go func() {
+			defer wg.Done()
+			if err := ch.PublishWithContext(context.TODO(), "test-get-next-pub-seq", "", false, false, Publishing{}); err != nil {
+				t.Logf("publish error: %v", err)
+				fail = true
+			}
+		}()
+
+		wg.Wait()
+		if fail {
+			t.FailNow()
+		}
+
+		n = ch.GetNextPublishSeqNo()
+		if n != 2 {
+			t.Fatalf("wrong next publish seqence number after 15 publishing, expected: %d, got: %d", 2, n)
+		}
+	}
+}
+
 // https://github.com/rabbitmq/amqp091-go/pull/44
 func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 	conn := integrationConnection(t, "TestShouldNotWaitAfterConnectionClosedIssue44")
@@ -2056,68 +2146,63 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 	}
 }
 
-/*
- * Support for integration tests
- */
-
-// Returns a connection to the AMQP if the AMQP_URL environment
-// variable is set and a connection can be established.
-func integrationConnection(t *testing.T, name string) *Connection {
-	conf := defaultConfig()
-	if conf.Properties == nil {
-		conf.Properties = make(Table)
-	}
-	conf.Properties.SetClientConnectionName(name)
-	conn, err := DialConfig(amqpURL, conf)
+func TestDeliveryAckShouldReturnSpecificErrorOnClosedChannel(t *testing.T) {
+	// setup
+	c, ch := integrationQueue(t, t.Name())
+	defer c.Close()
+	err := ch.Publish(DefaultExchange, t.Name(), false, false, Publishing{
+		Body: []byte("this is a test"),
+	})
 	if err != nil {
-		t.Fatalf("cannot dial integration server. Is the rabbitmq-server service running? %s", err)
-		return nil
-	}
-	return conn
-}
-
-// Returns a connection, channel and declares a queue when the AMQP_URL is in the environment
-func integrationQueue(t *testing.T, name string) (*Connection, *Channel) {
-	if conn := integrationConnection(t, name); conn != nil {
-		if channel, err := conn.Channel(); err == nil {
-			if _, err = channel.QueueDeclare(name, false, true, false, false, nil); err == nil {
-				return conn, channel
-			}
-		}
-	}
-	return nil, nil
-}
-
-func integrationQueueDelete(t *testing.T, c *Channel, queue string) {
-	if c, err := c.QueueDelete(queue, false, false, false); err != nil {
-		t.Fatalf("queue deletion failed, c: %d, err: %v", c, err)
-	}
-}
-
-// Delegates to integrationConnection and only returns a connection if the
-// product is RabbitMQ
-func integrationRabbitMQ(t *testing.T, name string) *Connection {
-	if conn := integrationConnection(t, name); conn != nil {
-		if server, ok := conn.Properties["product"]; ok && server == "RabbitMQ" {
-			return conn
-		}
+		t.Fatalf("publish error: %v", err)
 	}
 
-	return nil
-}
+	var ctx context.Context
+	var cancel context.CancelFunc
+	d, ok := t.Deadline()
+	if !ok {
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second*10)
+	} else {
+		ctx, cancel = context.WithDeadline(context.Background(), d)
+	}
+	defer cancel()
 
-func assertConsumeBody(t *testing.T, messages <-chan Delivery, want []byte) (msg *Delivery) {
+	messages, err := ch.Consume(t.Name(), t.Name(), false, false, false, false, Table{})
+	if err != nil {
+		t.Fatalf("consume error: %v", err)
+	}
+
+	// Act
+	<-time.After(time.Second) //😮‍💨
+	err = ch.Close()
+	if err != nil {
+		t.Fatalf("close error: %v", err)
+	}
+
+	// Assert
 	select {
-	case got := <-messages:
-		if !bytes.Equal(want, got.Body) {
-			t.Fatalf("Message body does not match want: %v, got: %v, for: %+v", want, got.Body, got)
-		}
-		msg = &got
-	case <-time.After(200 * time.Millisecond):
-		t.Fatalf("Timeout waiting for %v", want)
+	case <-messages:
+		// ok, drain the channel
+		println("received message")
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting to receive a message or an error: %v", ctx.Err())
 	}
 
-	return msg
+	select {
+	case msg, ok := <-messages:
+		if ok {
+			t.Fatal("message was not closed")
+		}
+		err := msg.Ack(false)
+		if err == nil {
+			t.Fatal("ack should have failed")
+		}
+		if !errors.Is(err, ErrDeliveryNotInitialized) {
+			t.Fatalf("expected error '%s', got '%s'", ErrDeliveryNotInitialized.Error(), err.Error())
+		}
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting to receive a message or an error: %v", ctx.Err())
+	}
 }
 
 // https://github.com/rabbitmq/amqp091-go/issues/11
@@ -2142,11 +2227,170 @@ func TestShouldNotWaitAfterConnectionClosedNewChannelCreatedIssue11(t *testing.T
 	if err == nil {
 		t.Fatalf("Opening a channel from a closed connection should not block but returning an error %v", err)
 	}
+}
 
+// https://github.com/rabbitmq/amqp091-go/issues/296
+func TestAckShouldNotCloseChannel_GH296(t *testing.T) {
+	// setup
+	const messageCount = 10
+	queueName := t.Name()
+	c, ch := integrationQueue(t, queueName)
+	defer ch.Close()
+	defer c.Close()
+
+	notifyConnClosed := make(chan *Error)
+	c.NotifyClose(notifyConnClosed)
+
+	notifyChannelClosed := make(chan *Error)
+	ch.NotifyClose(notifyChannelClosed)
+
+	for i := 0; i < messageCount; i++ {
+		err := ch.Publish(DefaultExchange, queueName, false, false, Publishing{
+			Body: []byte("this is a test"),
+		})
+		if err != nil {
+			t.Fatalf("publish error: %v", err)
+		}
+	}
+
+	err := ch.Qos(3, 0, false)
+	if err != nil {
+		t.Fatalf("Qos error: %v", err)
+	}
+
+	msgs, err := ch.Consume(
+		queueName, // queue
+		t.Name(),  // consumer
+		false,     // auto-ack
+		false,     // exclusive
+		false,     // no-local
+		false,     // no-wait
+		nil,       // args
+	)
+	if err != nil {
+		t.Fatalf("Consume error: %v", err)
+	}
+
+	signal := make(chan int)
+	acks := make(chan *Delivery, messageCount)
+
+	go func() {
+		counter := 0
+		for {
+			select {
+			case msg := <-msgs:
+				go worker(acks, &msg)
+			case ack := <-acks:
+				ackError := ack.Ack(false)
+				if ackError != nil {
+					t.Logf("Ack error: %v", ackError)
+				}
+				counter = counter + 1
+				if counter >= messageCount {
+					signal <- counter
+					return
+				}
+			case <-time.After(500 * time.Millisecond):
+				t.Log("timed out waiting to do something")
+			}
+		}
+	}()
+
+	select {
+	case connError := <-notifyConnClosed:
+		t.Logf("saw connection closure error: %v", connError)
+	case channelError := <-notifyChannelClosed:
+		t.Logf("saw channel closure error: %v", channelError)
+	case count := <-signal:
+		t.Logf("saw %d messages", count)
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting to see %d messages", messageCount)
+	}
+}
+
+func worker(acks chan<- *Delivery, msg *Delivery) {
+	time.Sleep(time.Millisecond * time.Duration(msg.DeliveryTag) * 100)
+	acks <- msg
+}
+
+/*
+ * Support for integration tests
+ */
+
+// Returns a connection to the AMQP if the AMQP_URL environment
+// variable is set and a connection can be established.
+func integrationConnection(t *testing.T, name string) *Connection {
+	t.Helper()
+
+	conf := defaultConfig()
+	if conf.Properties == nil {
+		conf.Properties = make(Table)
+	}
+	conf.Properties.SetClientConnectionName(name)
+	conn, err := DialConfig(amqpURL, conf)
+	if err != nil {
+		t.Fatalf("cannot dial integration server. Is the rabbitmq-server service running? %s", err)
+		return nil
+	}
+	return conn
+}
+
+// Returns a connection, channel and declares a queue when the AMQP_URL is in the environment
+func integrationQueue(t *testing.T, name string) (*Connection, *Channel) {
+	t.Helper()
+
+	if conn := integrationConnection(t, name); conn != nil {
+		if channel, err := conn.Channel(); err == nil {
+			if _, err = channel.QueueDeclare(name, false, true, false, false, nil); err == nil {
+				return conn, channel
+			}
+		}
+	}
+	return nil, nil
+}
+
+func integrationQueueDelete(t *testing.T, c *Channel, queue string) {
+	t.Helper()
+
+	if c, err := c.QueueDelete(queue, false, false, false); err != nil {
+		t.Fatalf("queue deletion failed, c: %d, err: %v", c, err)
+	}
+}
+
+// Delegates to integrationConnection and only returns a connection if the
+// product is RabbitMQ
+func integrationRabbitMQ(t *testing.T, name string) *Connection {
+	t.Helper()
+
+	if conn := integrationConnection(t, name); conn != nil {
+		if server, ok := conn.Properties["product"]; ok && server == "RabbitMQ" {
+			return conn
+		}
+	}
+
+	return nil
+}
+
+func assertConsumeBody(t *testing.T, messages <-chan Delivery, want []byte) (msg *Delivery) {
+	t.Helper()
+
+	select {
+	case got := <-messages:
+		if !bytes.Equal(want, got.Body) {
+			t.Fatalf("Message body does not match want: %v, got: %v, for: %+v", want, got.Body, got)
+		}
+		msg = &got
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("Timeout waiting for %v", want)
+	}
+
+	return msg
 }
 
 // Pulls out the CRC and verifies the remaining content against the CRC
 func assertMessageCrc32(t *testing.T, msg []byte, assert string) {
+	t.Helper()
+
 	size := binary.BigEndian.Uint32(msg[:4])
 
 	crc := crc32.NewIEEE()
@@ -2164,6 +2408,8 @@ func assertMessageCrc32(t *testing.T, msg []byte, assert string) {
 // Creates a random body size with a leading 32-bit CRC in network byte order
 // that verifies the remaining slice
 func generateCrc32Random(t *testing.T, size int) []byte {
+	t.Helper()
+
 	msg := make([]byte, size+8)
 	if _, err := io.ReadFull(devrand.Reader, msg); err != nil {
 		t.Fatalf("could not get random data: %+v", err)

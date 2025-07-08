@@ -7,7 +7,6 @@ package amqp091
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -41,6 +40,7 @@ type Channel struct {
 
 	// closed is set to 1 when the channel has been closed - see Channel.send()
 	closed int32
+	close  chan struct{}
 
 	// true when we will never notify again
 	noNotify bool
@@ -86,6 +86,7 @@ func newChannel(c *Connection, id uint16) *Channel {
 		confirms:   newConfirms(),
 		recv:       (*Channel).recvMethod,
 		errors:     make(chan *Error, 1),
+		close:      make(chan struct{}),
 	}
 }
 
@@ -146,6 +147,7 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 
 		close(ch.errors)
+		close(ch.close)
 		ch.noNotify = true
 	})
 }
@@ -368,7 +370,11 @@ func (ch *Channel) dispatch(msg message) {
 		// deliveries are in flight and a no-wait cancel has happened
 
 	default:
-		ch.rpc <- msg
+		select {
+		case <-ch.close:
+			return
+		case ch.rpc <- msg:
+		}
 	}
 }
 
@@ -468,6 +474,10 @@ code set to '200'.
 It is safe to call this method multiple times.
 */
 func (ch *Channel) Close() error {
+	if ch.IsClosed() {
+		return nil
+	}
+
 	defer ch.connection.closeChannel(ch, nil)
 	return ch.call(
 		&channelClose{ReplyCode: replySuccess},
@@ -960,9 +970,6 @@ func (ch *Channel) QueueBind(name, key, exchange string, noWait bool, args Table
 /*
 QueueUnbind removes a binding between an exchange and queue matching the key and
 arguments.
-
-It is possible to send and empty string for the exchange name which means to
-unbind the queue from the default exchange.
 */
 func (ch *Channel) QueueUnbind(name, key, exchange string, args Table) error {
 	if err := args.Validate(); err != nil {
@@ -1283,7 +1290,7 @@ Note: RabbitMQ declares the default exchange types like 'amq.fanout' as
 durable, so queues that bind to these pre-declared exchanges must also be
 durable.
 
-Exchanges declared as `internal` do not accept accept publishings. Internal
+Exchanges declared as `internal` do not accept publishings. Internal
 exchanges are useful when you wish to implement inter-exchange topologies
 that should not be exposed to users of the broker.
 
@@ -1476,16 +1483,16 @@ confirmations start at 1.  Exit when all publishings are confirmed.
 
 When Publish does not return an error and the channel is in confirm mode, the
 internal counter for DeliveryTags with the first confirmation starts at 1.
-
-Deprecated: Use PublishWithContext instead.
 */
 func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg Publishing) error {
-	_, err := ch.PublishWithDeferredConfirmWithContext(context.Background(), exchange, key, mandatory, immediate, msg)
+	_, err := ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
 	return err
 }
 
 /*
 PublishWithContext sends a Publishing from the client to an exchange on the server.
+
+NOTE: this function is equivalent to [Channel.Publish]. Context is not honoured.
 
 When you want a single message to be delivered to a single queue, you can
 publish to the default exchange with the routingKey of the queue name.  This is
@@ -1516,34 +1523,17 @@ confirmations start at 1.  Exit when all publishings are confirmed.
 When Publish does not return an error and the channel is in confirm mode, the
 internal counter for DeliveryTags with the first confirmation starts at 1.
 */
-func (ch *Channel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
-	_, err := ch.PublishWithDeferredConfirmWithContext(ctx, exchange, key, mandatory, immediate, msg)
-	return err
+func (ch *Channel) PublishWithContext(_ context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
+	return ch.Publish(exchange, key, mandatory, immediate, msg)
 }
 
 /*
-PublishWithDeferredConfirm behaves identically to Publish but additionally returns a
-DeferredConfirmation, allowing the caller to wait on the publisher confirmation
-for this message. If the channel has not been put into confirm mode,
-the DeferredConfirmation will be nil.
-
-Deprecated: Use PublishWithDeferredConfirmWithContext instead.
+PublishWithDeferredConfirm behaves identically to Publish, but additionally
+returns a DeferredConfirmation, allowing the caller to wait on the publisher
+confirmation for this message. If the channel has not been put into confirm
+mode, the DeferredConfirmation will be nil.
 */
 func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
-	return ch.PublishWithDeferredConfirmWithContext(context.Background(), exchange, key, mandatory, immediate, msg)
-}
-
-/*
-PublishWithDeferredConfirmWithContext behaves identically to Publish but additionally returns a
-DeferredConfirmation, allowing the caller to wait on the publisher confirmation
-for this message. If the channel has not been put into confirm mode,
-the DeferredConfirmation will be nil.
-*/
-func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
-	if ctx == nil {
-		return nil, errors.New("amqp091-go: nil Context")
-	}
-
 	if err := msg.Headers.Validate(); err != nil {
 		return nil, err
 	}
@@ -1585,6 +1575,19 @@ func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, ex
 	}
 
 	return dc, nil
+}
+
+/*
+PublishWithDeferredConfirmWithContext behaves identically to Publish but additionally returns a
+DeferredConfirmation, allowing the caller to wait on the publisher confirmation
+for this message. If the channel has not been put into confirm mode,
+the DeferredConfirmation will be nil.
+
+NOTE: PublishWithDeferredConfirmWithContext is equivalent to its non-context variant. The context passed
+to this function is not honoured.
+*/
+func (ch *Channel) PublishWithDeferredConfirmWithContext(_ context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
+	return ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
 }
 
 /*
@@ -1787,7 +1790,7 @@ it must be redelivered or dropped.
 
 See also Delivery.Nack
 */
-func (ch *Channel) Nack(tag uint64, multiple bool, requeue bool) error {
+func (ch *Channel) Nack(tag uint64, multiple, requeue bool) error {
 	ch.m.Lock()
 	defer ch.m.Unlock()
 
@@ -1818,8 +1821,8 @@ func (ch *Channel) Reject(tag uint64, requeue bool) error {
 // GetNextPublishSeqNo returns the sequence number of the next message to be
 // published, when in confirm mode.
 func (ch *Channel) GetNextPublishSeqNo() uint64 {
-	ch.confirms.m.Lock()
-	defer ch.confirms.m.Unlock()
+	ch.confirms.publishedMut.Lock()
+	defer ch.confirms.publishedMut.Unlock()
 
 	return ch.confirms.published + 1
 }

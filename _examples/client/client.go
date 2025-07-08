@@ -2,8 +2,7 @@
 // Copyright (c) 2012-2021, Sean Treadway, SoundCloud Ltd.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
-
-package amqp091_test
+package main
 
 import (
 	"context"
@@ -26,7 +25,7 @@ import (
 // Try running this in one terminal, and rabbitmq-server in another.
 //
 // Stop & restart RabbitMQ to see how the queue reacts.
-func Example_publish() {
+func publish(done chan struct{}) {
 	queueName := "job_queue"
 	addr := "amqp://guest:guest@localhost:5672/"
 	queue := New(queueName, addr)
@@ -40,20 +39,22 @@ loop:
 		// Attempt to push a message every 2 seconds
 		case <-time.After(time.Second * 2):
 			if err := queue.Push(message); err != nil {
-				log.Printf("Push failed: %s\n", err)
+				queue.errlog.Printf("push failed: %s\n", err)
 			} else {
-				log.Println("Push succeeded!")
+				queue.infolog.Println("push succeeded")
 			}
 		case <-ctx.Done():
 			if err := queue.Close(); err != nil {
-				log.Printf("Close failed: %s\n", err)
+				queue.errlog.Printf("close failed: %s\n", err)
 			}
 			break loop
 		}
 	}
+
+	close(done)
 }
 
-func Example_consume() {
+func consume(done chan struct{}) {
 	queueName := "job_queue"
 	addr := "amqp://guest:guest@localhost:5672/"
 	queue := New(queueName, addr)
@@ -61,12 +62,12 @@ func Example_consume() {
 	// Give the connection sometime to set up
 	<-time.After(time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*25)
 	defer cancel()
 
 	deliveries, err := queue.Consume()
 	if err != nil {
-		log.Printf("Could not start consuming: %s\n", err)
+		queue.errlog.Printf("could not start consuming: %s\n", err)
 		return
 	}
 
@@ -78,25 +79,26 @@ func Example_consume() {
 	chClosedCh := make(chan *amqp.Error, 1)
 	queue.channel.NotifyClose(chClosedCh)
 
+loop:
 	for {
 		select {
 		case <-ctx.Done():
 			err := queue.Close()
 			if err != nil {
-				log.Printf("Close failed: %s\n", err)
+				queue.errlog.Printf("close failed: %s\n", err)
 			}
-			return
+			break loop
 
 		case amqErr := <-chClosedCh:
 			// This case handles the event of closed channel e.g. abnormal shutdown
-			log.Printf("AMQP Channel closed due to: %s\n", amqErr)
+			queue.errlog.Printf("AMQP Channel closed due to: %s\n", amqErr)
 
 			deliveries, err = queue.Consume()
 			if err != nil {
 				// If the AMQP channel is not ready, it will continue the loop. Next
 				// iteration will enter this case because chClosedCh is closed by the
 				// library
-				log.Println("Error trying to consume, will try again")
+				queue.errlog.Println("error trying to consume, will try again")
 				continue
 			}
 
@@ -107,13 +109,15 @@ func Example_consume() {
 
 		case delivery := <-deliveries:
 			// Ack a message every 2 seconds
-			log.Printf("Received message: %s\n", delivery.Body)
+			queue.infolog.Printf("received message: %s\n", delivery.Body)
 			if err := delivery.Ack(false); err != nil {
-				log.Printf("Error acknowledging message: %s\n", err)
+				queue.errlog.Printf("error acknowledging message: %s\n", err)
 			}
 			<-time.After(time.Second * 2)
 		}
 	}
+
+	close(done)
 }
 
 // Client is the base struct for handling connection recovery, consumption and
@@ -123,7 +127,8 @@ func Example_consume() {
 type Client struct {
 	m               *sync.Mutex
 	queueName       string
-	logger          *log.Logger
+	infolog         *log.Logger
+	errlog          *log.Logger
 	connection      *amqp.Connection
 	channel         *amqp.Channel
 	done            chan bool
@@ -155,7 +160,8 @@ var (
 func New(queueName, addr string) *Client {
 	client := Client{
 		m:         &sync.Mutex{},
-		logger:    log.New(os.Stdout, "", log.LstdFlags),
+		infolog:   log.New(os.Stdout, "[INFO] ", log.LstdFlags|log.Lmsgprefix),
+		errlog:    log.New(os.Stderr, "[ERROR] ", log.LstdFlags|log.Lmsgprefix),
 		queueName: queueName,
 		done:      make(chan bool),
 	}
@@ -171,11 +177,11 @@ func (client *Client) handleReconnect(addr string) {
 		client.isReady = false
 		client.m.Unlock()
 
-		client.logger.Println("Attempting to connect")
+		client.infolog.Println("attempting to connect")
 
 		conn, err := client.connect(addr)
 		if err != nil {
-			client.logger.Println("Failed to connect. Retrying...")
+			client.errlog.Println("failed to connect. Retrying...")
 
 			select {
 			case <-client.done:
@@ -199,7 +205,7 @@ func (client *Client) connect(addr string) (*amqp.Connection, error) {
 	}
 
 	client.changeConnection(conn)
-	client.logger.Println("Connected!")
+	client.infolog.Println("connected")
 	return conn, nil
 }
 
@@ -213,13 +219,13 @@ func (client *Client) handleReInit(conn *amqp.Connection) bool {
 
 		err := client.init(conn)
 		if err != nil {
-			client.logger.Println("Failed to initialize channel. Retrying...")
+			client.errlog.Println("failed to initialize channel, retrying...")
 
 			select {
 			case <-client.done:
 				return true
 			case <-client.notifyConnClose:
-				client.logger.Println("Connection closed. Reconnecting...")
+				client.infolog.Println("connection closed, reconnecting...")
 				return false
 			case <-time.After(reInitDelay):
 			}
@@ -230,10 +236,10 @@ func (client *Client) handleReInit(conn *amqp.Connection) bool {
 		case <-client.done:
 			return true
 		case <-client.notifyConnClose:
-			client.logger.Println("Connection closed. Reconnecting...")
+			client.infolog.Println("connection closed, reconnecting...")
 			return false
 		case <-client.notifyChanClose:
-			client.logger.Println("Channel closed. Re-running init...")
+			client.infolog.Println("channel closed, re-running init...")
 		}
 	}
 }
@@ -265,7 +271,7 @@ func (client *Client) init(conn *amqp.Connection) error {
 	client.m.Lock()
 	client.isReady = true
 	client.m.Unlock()
-	client.logger.Println("Setup!")
+	client.infolog.Println("client init done")
 
 	return nil
 }
@@ -295,13 +301,13 @@ func (client *Client) Push(data []byte) error {
 	client.m.Lock()
 	if !client.isReady {
 		client.m.Unlock()
-		return errors.New("failed to push: not connected")
+		return errNotConnected
 	}
 	client.m.Unlock()
 	for {
 		err := client.UnsafePush(data)
 		if err != nil {
-			client.logger.Println("Push failed. Retrying...")
+			client.errlog.Println("push failed. Retrying...")
 			select {
 			case <-client.done:
 				return errShutdown
@@ -311,7 +317,7 @@ func (client *Client) Push(data []byte) error {
 		}
 		confirm := <-client.notifyConfirm
 		if confirm.Ack {
-			client.logger.Printf("Push confirmed [%d]!", confirm.DeliveryTag)
+			client.infolog.Printf("push confirmed [%d]", confirm.DeliveryTag)
 			return nil
 		}
 	}
@@ -398,4 +404,24 @@ func (client *Client) Close() error {
 
 	client.isReady = false
 	return nil
+}
+
+func main() {
+	publishDone := make(chan struct{})
+	consumeDone := make(chan struct{})
+
+	go publish(publishDone)
+	go consume(consumeDone)
+
+	select {
+	case <-publishDone:
+		log.Println("publishing is done")
+	}
+
+	select {
+	case <-consumeDone:
+		log.Println("consuming is done")
+	}
+
+	log.Println("exiting")
 }
