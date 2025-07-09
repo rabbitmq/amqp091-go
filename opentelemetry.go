@@ -224,7 +224,7 @@ func spanForDelivery(ctx context.Context, delivery *Delivery, options ...trace.S
 }
 
 // Publish creates a span for a publishing message returns a new context with
-// the span headers, the mssage that was being published with span headers
+// the span headers, the message that was being published with span headers
 // injected, and a function to be called with the result of the publish
 func spanForPublication(
 	ctx context.Context,
