@@ -27,6 +27,9 @@ var (
 	// ErrClosed is returned when the channel or connection is not open
 	ErrClosed = &Error{Code: ChannelError, Reason: "channel/connection is not open"}
 
+	// ErrDeliveryNotInitialized Is returned when the delivery's Acknowledger is not initialized, likely the channel is closed.
+	ErrDeliveryNotInitialized = &Error{Code: ChannelError, Reason: "delivery not initialized. Channel is probably closed"}
+
 	// ErrChannelMax is returned when Connection.Channel has been called enough
 	// times that all channel IDs have been exhausted in the client or the
 	// server.

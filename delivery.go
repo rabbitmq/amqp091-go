@@ -6,11 +6,8 @@
 package amqp091
 
 import (
-	"errors"
 	"time"
 )
-
-var ErrDeliveryNotInitialized = errors.New("delivery not initialized. Channel is probably closed")
 
 // Acknowledger notifies the server of successful or failed consumption of
 // deliveries via identifier found in the Delivery.DeliveryTag field.

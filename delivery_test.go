@@ -7,7 +7,6 @@ package amqp091
 
 import (
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -29,10 +28,6 @@ func TestAckZeroValueAcknowledgerDoesNotPanic(t *testing.T) {
 	if !errors.Is(err, ErrDeliveryNotInitialized) {
 		t.Fatalf("expected '%v' got '%v'", ErrDeliveryNotInitialized, err)
 	}
-	expectedErrMessage := "delivery not initialized. Channel is probably closed"
-	if !strings.EqualFold(err.Error(), expectedErrMessage) {
-		t.Errorf("expected '%s' got '%s'", expectedErrMessage, err)
-	}
 }
 
 func TestNackZeroValueAcknowledgerDoesNotPanic(t *testing.T) {
@@ -44,10 +39,6 @@ func TestNackZeroValueAcknowledgerDoesNotPanic(t *testing.T) {
 	if !errors.Is(err, ErrDeliveryNotInitialized) {
 		t.Fatalf("expected '%v' got '%v'", ErrDeliveryNotInitialized, err)
 	}
-	expectedErrMessage := "delivery not initialized. Channel is probably closed"
-	if !strings.EqualFold(err.Error(), expectedErrMessage) {
-		t.Errorf("expected '%s' got '%s'", expectedErrMessage, err)
-	}
 }
 
 func TestRejectZeroValueAcknowledgerDoesNotPanic(t *testing.T) {
@@ -58,9 +49,5 @@ func TestRejectZeroValueAcknowledgerDoesNotPanic(t *testing.T) {
 	}
 	if !errors.Is(err, ErrDeliveryNotInitialized) {
 		t.Fatalf("expected '%v' got '%v'", ErrDeliveryNotInitialized, err)
-	}
-	expectedErrMessage := "delivery not initialized. Channel is probably closed"
-	if !strings.EqualFold(err.Error(), expectedErrMessage) {
-		t.Errorf("expected '%s' got '%s'", expectedErrMessage, err)
 	}
 }
