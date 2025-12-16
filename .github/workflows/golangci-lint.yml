@@ -1,3 +1,4 @@
+---
 name: golangci-lint
 on:
   push:
@@ -9,6 +10,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
+
 jobs:
   golangci:
     name: lint
@@ -19,7 +22,7 @@ jobs:
           go-version: 'stable'
           check-latest: true
       - uses: actions/checkout@v4
-      - uses: golangci/golangci-lint-action@v4
+      - uses: golangci/golangci-lint-action@v8
         with:
           version: latest
           only-new-issues: false
