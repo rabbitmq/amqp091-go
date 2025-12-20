@@ -23,6 +23,21 @@ const (
 	ExchangeHeaders = "headers"
 )
 
+// MIME types constants
+const (
+	MimeTextPlain                  = "text/plain"
+	MimeApplicationJSON            = "application/json"
+	MimeApplicationOctetStream     = "application/octet-stream"
+	MimeApplicationXML             = "application/xml"
+	MimeTextXML                    = "text/xml"
+	MimeApplicationProtobuf        = "application/protobuf"
+	MimeApplicationXProtobuf       = "application/x-protobuf"
+	MimeApplicationMsgPack         = "application/msgpack"
+	MimeApplicationAvro            = "application/avro"
+	MimeApplicationCloudEventsJSON = "application/cloudevents+json"
+	MimeApplicationFormURLEncoded  = "application/x-www-form-urlencoded"
+)
+
 var (
 	// ErrClosed is returned when the channel or connection is not open
 	ErrClosed = &Error{Code: ChannelError, Reason: "channel/connection is not open"}
