@@ -143,7 +143,7 @@ func (ch *Channel) shutdown(e *Error) {
 		ch.cancels = nil
 
 		if ch.confirms != nil {
-			ch.confirms.Close()
+			_ = ch.confirms.Close()
 		}
 
 		close(ch.errors)

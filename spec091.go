@@ -2830,7 +2830,7 @@ func (r *reader) parseMethodFrame(channel uint16, size uint32) (f frame, err err
 			mf.Method = method
 
 		default:
-			return nil, fmt.Errorf("Bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
+			return nil, fmt.Errorf("bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
 		}
 
 	case 20: // channel
@@ -2885,7 +2885,7 @@ func (r *reader) parseMethodFrame(channel uint16, size uint32) (f frame, err err
 			mf.Method = method
 
 		default:
-			return nil, fmt.Errorf("Bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
+			return nil, fmt.Errorf("bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
 		}
 
 	case 40: // exchange
@@ -2956,7 +2956,7 @@ func (r *reader) parseMethodFrame(channel uint16, size uint32) (f frame, err err
 			mf.Method = method
 
 		default:
-			return nil, fmt.Errorf("Bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
+			return nil, fmt.Errorf("bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
 		}
 
 	case 50: // queue
@@ -3043,7 +3043,7 @@ func (r *reader) parseMethodFrame(channel uint16, size uint32) (f frame, err err
 			mf.Method = method
 
 		default:
-			return nil, fmt.Errorf("Bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
+			return nil, fmt.Errorf("bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
 		}
 
 	case 60: // basic
@@ -3194,7 +3194,7 @@ func (r *reader) parseMethodFrame(channel uint16, size uint32) (f frame, err err
 			mf.Method = method
 
 		default:
-			return nil, fmt.Errorf("Bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
+			return nil, fmt.Errorf("bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
 		}
 
 	case 90: // tx
@@ -3249,7 +3249,7 @@ func (r *reader) parseMethodFrame(channel uint16, size uint32) (f frame, err err
 			mf.Method = method
 
 		default:
-			return nil, fmt.Errorf("Bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
+			return nil, fmt.Errorf("bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
 		}
 
 	case 85: // confirm
@@ -3272,11 +3272,11 @@ func (r *reader) parseMethodFrame(channel uint16, size uint32) (f frame, err err
 			mf.Method = method
 
 		default:
-			return nil, fmt.Errorf("Bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
+			return nil, fmt.Errorf("bad method frame, unknown method %d for class %d", mf.MethodId, mf.ClassId)
 		}
 
 	default:
-		return nil, fmt.Errorf("Bad method frame, unknown class %d", mf.ClassId)
+		return nil, fmt.Errorf("bad method frame, unknown class %d", mf.ClassId)
 	}
 
 	return mf, nil
