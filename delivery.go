@@ -6,8 +6,12 @@
 package amqp091
 
 import (
+	"context"
 	"errors"
 	"time"
+
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var ErrDeliveryNotInitialized = errors.New("delivery not initialized. Channel is probably closed")
@@ -56,6 +60,24 @@ type Delivery struct {
 	RoutingKey  string // basic.publish routing key
 
 	Body []byte
+}
+
+// Span returns context and a span that for the delivery
+// the resulting span is linked to the publication that created it, if it has
+// the appropraite headers set. See [context-propagation] for more details
+//
+// [context-propagation]: https://opentelemetry.io/docs/concepts/context-propagation/
+func (d Delivery) Span(
+	ctx context.Context,
+	options ...trace.SpanStartOption,
+) (context.Context, trace.Span) {
+	return spanForDelivery(ctx, &d, options...)
+}
+
+// Link returns a link for the delivery. The link points to the publication, if
+// the appropriate headers are set.
+func (d Delivery) Link(ctx context.Context) trace.Link {
+	return extractLinkFromDelivery(ctx, &d)
 }
 
 func newDelivery(channel *Channel, msg messageWithContent) *Delivery {
@@ -170,4 +192,96 @@ func (d Delivery) Nack(multiple, requeue bool) error {
 		return ErrDeliveryNotInitialized
 	}
 	return d.Acknowledger.Nack(d.DeliveryTag, multiple, requeue)
+}
+
+/*
+AckWithContext delegates an acknowledgement through the Acknowledger interface that the
+client or server has finished work on a delivery, with OpenTelemetry span support.
+
+This method creates a settle span for the acknowledgment operation and properly
+handles error recording in the span.
+
+When multiple is true, this delivery and all prior unacknowledged deliveries
+on the same channel will be acknowledged.
+
+Either AckWithContext, RejectWithContext or NackWithContext must be called for every delivery that is
+not automatically acknowledged when using context-aware operations.
+*/
+func (d *Delivery) AckWithContext(ctx context.Context, multiple bool) error {
+	// Start the settle span before performing the acknowledgment operation
+	_, span := settleAckDelivery(ctx, d, multiple)
+	defer span.End()
+
+	err := d.Ack(multiple)
+
+	// Record any error in the span
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	return err
+}
+
+/*
+RejectWithContext delegates a negatively acknowledgement through the Acknowledger interface
+with OpenTelemetry span support.
+
+This method creates a settle span for the rejection operation and properly
+handles error recording in the span.
+
+When requeue is true, queue this message to be delivered to a consumer on a
+different channel. When requeue is false or the server is unable to queue this
+message, it will be dropped.
+
+Either AckWithContext, RejectWithContext or NackWithContext must be called for every delivery that is
+not automatically acknowledged when using context-aware operations.
+*/
+func (d *Delivery) RejectWithContext(ctx context.Context, requeue bool) error {
+	// Start the settle span before performing the rejection operation
+	_, span := settleRejectDelivery(ctx, d, requeue)
+	defer span.End()
+
+	err := d.Reject(requeue)
+
+	// Record any error in the span
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	return err
+}
+
+/*
+NackWithContext negatively acknowledges the delivery of message(s) identified by the
+delivery tag from either the client or server, with OpenTelemetry span support.
+
+This method creates a settle span for the nack operation and properly
+handles error recording in the span.
+
+When multiple is true, nack messages up to and including delivered messages up
+until the delivery tag delivered on the same channel.
+
+When requeue is true, request the server to deliver this message to a different
+consumer. If it is not possible or requeue is false, the message will be
+dropped or delivered to a server configured dead-letter queue.
+
+Either AckWithContext, RejectWithContext or NackWithContext must be called for every delivery that is
+not automatically acknowledged when using context-aware operations.
+*/
+func (d *Delivery) NackWithContext(ctx context.Context, multiple, requeue bool) error {
+	// Start the settle span before performing the nack operation
+	_, span := settleNackDelivery(ctx, d, multiple, requeue)
+	defer span.End()
+
+	err := d.Nack(multiple, requeue)
+
+	// Record any error in the span
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	return err
 }
