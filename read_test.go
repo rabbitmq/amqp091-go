@@ -10,6 +10,20 @@ import (
 	"testing"
 )
 
+func TestReadHeaderFrame(t *testing.T) {
+	testData := []string{
+		"\x02\x00\x01\x00\x00\x00\x12\x00\x3c\x00\x00\x00\x00\x00\x00\x00\x00\x0a\x54\x00\x00\x00\x00\x00\x00\xce",
+	}
+
+	for idx, testStr := range testData {
+		r := reader{strings.NewReader(testStr)}
+		_, err := r.ReadFrame()
+		if err != nil {
+			t.Errorf("%d. failed to read header frame: err = %v", idx, err)
+		}
+	}
+}
+
 func TestGoFuzzCrashers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("excessive allocation")
