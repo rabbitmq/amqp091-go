@@ -15,12 +15,15 @@ import (
 // name. Applications can route to a queue using the queue name as routing key.
 const DefaultExchange = ""
 
+// Type of Exchanges
+type ExchangeType string
+
 // Constants for standard AMQP 0-9-1 exchange types.
 const (
-	ExchangeDirect  = "direct"
-	ExchangeFanout  = "fanout"
-	ExchangeTopic   = "topic"
-	ExchangeHeaders = "headers"
+	Direct  ExchangeType = "direct"
+	Fanout  ExchangeType = "fanout"
+	Topic   ExchangeType = "topic"
+	Headers ExchangeType = "headers"
 )
 
 // MIME types constants
