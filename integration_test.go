@@ -522,7 +522,7 @@ func TestIntegrationChannelIDsExhausted(t *testing.T) {
 
 	for i := uint16(1); i <= c.Config.ChannelMax; i++ {
 		if _, err := c.Channel(); err != nil {
-			t.Fatalf("expected allocating all channel ids to succed, failed on %d with %v", i, err)
+			t.Fatalf("expected allocating all channel ids to succeed, failed on %d with %v", i, err)
 		}
 	}
 
@@ -2048,7 +2048,7 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 
 		n := ch.GetNextPublishSeqNo()
 		if n != 1 {
-			t.Fatalf("wrong next publish seqence number before any publish, expected: %d, got: %d", 1, n)
+			t.Fatalf("wrong next publish sequence number before any publish, expected: %d, got: %d", 1, n)
 		}
 
 		if err := ch.PublishWithContext(context.TODO(), "test-get-next-pub-seq", "", false, false, Publishing{}); err != nil {
@@ -2057,7 +2057,7 @@ func TestIntegrationGetNextPublishSeqNo(t *testing.T) {
 
 		n = ch.GetNextPublishSeqNo()
 		if n != 2 {
-			t.Fatalf("wrong next publish seqence number after 1 publishing, expected: %d, got: %d", 2, n)
+			t.Fatalf("wrong next publish sequence number after 1 publishing, expected: %d, got: %d", 2, n)
 		}
 	}
 }
@@ -2082,7 +2082,7 @@ func TestIntegrationGetNextPublishSeqNoRace(t *testing.T) {
 
 		n := ch.GetNextPublishSeqNo()
 		if n != 1 {
-			t.Fatalf("wrong next publish seqence number before any publish, expected: %d, got: %d", 1, n)
+			t.Fatalf("wrong next publish sequence number before any publish, expected: %d, got: %d", 1, n)
 		}
 
 		wg := sync.WaitGroup{}
@@ -2110,7 +2110,7 @@ func TestIntegrationGetNextPublishSeqNoRace(t *testing.T) {
 
 		n = ch.GetNextPublishSeqNo()
 		if n != 2 {
-			t.Fatalf("wrong next publish seqence number after 15 publishing, expected: %d, got: %d", 2, n)
+			t.Fatalf("wrong next publish sequence number after 15 publishing, expected: %d, got: %d", 2, n)
 		}
 	}
 }
