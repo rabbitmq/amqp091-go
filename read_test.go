@@ -10,6 +10,25 @@ import (
 	"testing"
 )
 
+// TestParseHeaderFrameConsumesPaddingBytes verifies that parseHeaderFrame
+// reads exactly `size` bytes from the stream, even when the property flags
+// indicate fewer bytes than the frame payload contains. Trailing bytes that
+// are not consumed by property parsing must be drained so that the next
+// ReadFrame call starts at the correct offset.
+//
+// The frame below is a real-world header frame (channel 1, body size 10,
+// flags 0x5400 = ContentEncoding|DeliveryMode|CorrelationId) whose payload
+// is 18 bytes but whose property fields only consume 15 bytes, leaving 3
+// padding bytes before the frame-end octet.
+func TestParseHeaderFrameConsumesPaddingBytes(t *testing.T) {
+	frame := "\x02\x00\x01\x00\x00\x00\x12\x00\x3c\x00\x00\x00\x00\x00\x00\x00\x00\x0a\x54\x00\x00\x00\x00\x00\x00\xce"
+	r := reader{strings.NewReader(frame)}
+	_, err := r.ReadFrame()
+	if err != nil {
+		t.Fatalf("expected no error reading header frame, got: %v", err)
+	}
+}
+
 func TestGoFuzzCrashers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("excessive allocation")
