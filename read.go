@@ -326,91 +326,101 @@ func (r *reader) parseHeaderFrame(channel uint16, size uint32) (frame frame, err
 		ChannelId: channel,
 	}
 
-	if err = binary.Read(r.r, binary.BigEndian, &hf.ClassId); err != nil {
+	lim := &io.LimitedReader{R: r.r, N: int64(size)}
+
+	if err = binary.Read(lim, binary.BigEndian, &hf.ClassId); err != nil {
 		return
 	}
 
-	if err = binary.Read(r.r, binary.BigEndian, &hf.weight); err != nil {
+	if err = binary.Read(lim, binary.BigEndian, &hf.weight); err != nil {
 		return
 	}
 
-	if err = binary.Read(r.r, binary.BigEndian, &hf.Size); err != nil {
+	if err = binary.Read(lim, binary.BigEndian, &hf.Size); err != nil {
 		return
 	}
 
 	var flags uint16
 
-	if err = binary.Read(r.r, binary.BigEndian, &flags); err != nil {
+	if err = binary.Read(lim, binary.BigEndian, &flags); err != nil {
 		return
 	}
 
 	if hasProperty(flags, flagContentType) {
-		if hf.Properties.ContentType, err = readShortstr(r.r); err != nil {
+		if hf.Properties.ContentType, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagContentEncoding) {
-		if hf.Properties.ContentEncoding, err = readShortstr(r.r); err != nil {
+		if hf.Properties.ContentEncoding, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagHeaders) {
-		if hf.Properties.Headers, err = readTable(r.r); err != nil {
+		if hf.Properties.Headers, err = readTable(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagDeliveryMode) {
-		if err = binary.Read(r.r, binary.BigEndian, &hf.Properties.DeliveryMode); err != nil {
+		if err = binary.Read(lim, binary.BigEndian, &hf.Properties.DeliveryMode); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagPriority) {
-		if err = binary.Read(r.r, binary.BigEndian, &hf.Properties.Priority); err != nil {
+		if err = binary.Read(lim, binary.BigEndian, &hf.Properties.Priority); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagCorrelationId) {
-		if hf.Properties.CorrelationId, err = readShortstr(r.r); err != nil {
+		if hf.Properties.CorrelationId, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagReplyTo) {
-		if hf.Properties.ReplyTo, err = readShortstr(r.r); err != nil {
+		if hf.Properties.ReplyTo, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagExpiration) {
-		if hf.Properties.Expiration, err = readShortstr(r.r); err != nil {
+		if hf.Properties.Expiration, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagMessageId) {
-		if hf.Properties.MessageId, err = readShortstr(r.r); err != nil {
+		if hf.Properties.MessageId, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagTimestamp) {
-		if hf.Properties.Timestamp, err = readTimestamp(r.r); err != nil {
+		if hf.Properties.Timestamp, err = readTimestamp(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagType) {
-		if hf.Properties.Type, err = readShortstr(r.r); err != nil {
+		if hf.Properties.Type, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagUserId) {
-		if hf.Properties.UserId, err = readShortstr(r.r); err != nil {
+		if hf.Properties.UserId, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagAppId) {
-		if hf.Properties.AppId, err = readShortstr(r.r); err != nil {
+		if hf.Properties.AppId, err = readShortstr(lim); err != nil {
 			return
 		}
 	}
 	if hasProperty(flags, flagReserved1) {
-		if hf.Properties.reserved1, err = readShortstr(r.r); err != nil {
+		if hf.Properties.reserved1, err = readShortstr(lim); err != nil {
+			return
+		}
+	}
+
+	// Drain any bytes remaining in the frame payload that were not consumed
+	// by property parsing (e.g. padding added by other AMQP implementations).
+	if lim.N > 0 {
+		if _, err = io.CopyN(io.Discard, lim, lim.N); err != nil {
 			return
 		}
 	}
