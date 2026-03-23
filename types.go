@@ -161,7 +161,7 @@ type properties struct {
 	DeliveryMode    uint8     // queue implementation use - Transient (1) or Persistent (2)
 	Priority        uint8     // queue implementation use - 0 to 9
 	CorrelationId   string    // application use - correlation identifier
-	ReplyTo         string    // application use - address to to reply to (ex: RPC)
+	ReplyTo         string    // application use - address to reply to (ex: RPC)
 	Expiration      string    // implementation use - message expiration spec
 	MessageId       string    // application use - message identifier
 	Timestamp       time.Time // application use - message timestamp
@@ -241,7 +241,7 @@ type Publishing struct {
 	DeliveryMode    uint8  // Transient (0 or 1) or Persistent (2)
 	Priority        uint8  // 0 to 9
 	CorrelationId   string // correlation identifier
-	ReplyTo         string // address to to reply to (ex: RPC)
+	ReplyTo         string // address to reply to (ex: RPC)
 	// Expiration represents the message TTL in milliseconds. A value of "0"
 	// indicates that the message will immediately expire if the message arrives
 	// at its destination and the message is not directly handled by a consumer

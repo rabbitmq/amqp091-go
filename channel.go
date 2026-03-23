@@ -307,7 +307,7 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 func (ch *Channel) dispatch(msg message) {
 	switch m := msg.(type) {
 	case *channelClose:
-		// Note: channel state is set to closed immedately after the message is
+		// Note: channel state is set to closed immediately after the message is
 		// decoded by the Connection
 
 		// lock before sending connection.close-ok

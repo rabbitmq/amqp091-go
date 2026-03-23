@@ -587,7 +587,7 @@ func TestDeferredConfirmations(t *testing.T) {
 	srv.send(1, &basicAck{DeliveryTag: 1})
 	assertReceive(<-acks, 1)
 	srv.send(1, &basicAck{DeliveryTag: 4, Multiple: true})
-	assertReceive(<-acks, 3, 4) // 3 and 4 are non-determistic due to map ordering
+	assertReceive(<-acks, 3, 4) // 3 and 4 are non-deterministic due to map ordering
 	assertReceive(<-acks, 3, 4)
 }
 
@@ -673,7 +673,7 @@ func TestNotifyClosesAllChansAfterConnectionClose(t *testing.T) {
 	select {
 	case <-ch.NotifyCancel(make(chan string)):
 	case <-time.After(time.Millisecond):
-		t.Errorf("expected to close Channel.NofityCancel chan after Connection.Close")
+		t.Errorf("expected to close Channel.NotifyCancel chan after Connection.Close")
 	}
 
 	select {

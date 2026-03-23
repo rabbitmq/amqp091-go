@@ -907,7 +907,7 @@ func (c *Connection) Channel() (*Channel, error) {
 }
 
 func (c *Connection) call(req message, res ...message) error {
-	// Special case for when the protocol header frame is sent insted of a
+	// Special case for when the protocol header frame is sent instead of a
 	// request method
 	if req != nil {
 		if err := c.send(&methodFrame{ChannelId: 0, Method: req}); err != nil {
