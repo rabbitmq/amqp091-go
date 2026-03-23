@@ -83,7 +83,7 @@ func ExampleConnection_reconnect() {
 			// Simulate a producer on a different connection showing that consumers
 			// continue where they were left off after each reconnect.
 			if err := pub.PublishWithContext(context.TODO(), "", queue, false, false, amqp.Publishing{
-				Body: []byte(fmt.Sprintf("%d", i)),
+				Body: fmt.Appendf(nil, "%d", i),
 			}); err != nil {
 				fmt.Println("err publish:", err)
 				return

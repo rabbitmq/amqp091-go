@@ -64,7 +64,7 @@ func TestErrorMessage(t *testing.T) {
 
 func TestValidateField(t *testing.T) {
 	// Test case for simple types
-	simpleTypes := []interface{}{
+	simpleTypes := []any{
 		nil, true, byte(1), int8(1), 10, int16(10), int32(10), int64(10),
 		float32(1.0), float64(1.0), "string", []byte("byte slice"),
 		Decimal{Scale: 2, Value: 12345},
@@ -76,19 +76,19 @@ func TestValidateField(t *testing.T) {
 		}
 	}
 
-	// Test case for []interface{}
-	sliceTypes := []interface{}{
+	// Test case for []any
+	sliceTypes := []any{
 		"string", 10, float64(1.0), Decimal{Scale: 2, Value: 12345},
 	}
 	if err := validateField(sliceTypes); err != nil {
-		t.Errorf("validateField failed for []interface{}: %s", err)
+		t.Errorf("validateField failed for []any: %s", err)
 	}
 
 	// Test case for Table
 	tableType := Table{
 		"key1": "value1",
 		"key2": 10,
-		"key3": []interface{}{"nested string", 20},
+		"key3": []any{"nested string", 20},
 	}
 	if err := validateField(tableType); err != nil {
 		t.Errorf("validateField failed for Table: %s", err)

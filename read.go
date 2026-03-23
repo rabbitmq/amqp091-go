@@ -140,7 +140,7 @@ func readTimestamp(r io.Reader) (v time.Time, err error) {
 }
 
 /*
-'A': []interface{}
+'A': any
 'D': Decimal
 'F': Table
 'I': int32
@@ -156,7 +156,7 @@ func readTimestamp(r io.Reader) (v time.Time, err error) {
 't': bool
 'x': []byte
 */
-func readField(r io.Reader) (v interface{}, err error) {
+func readField(r io.Reader) (v any, err error) {
 	var typ byte
 	if err = binary.Read(r, binary.BigEndian, &typ); err != nil {
 		return
@@ -275,7 +275,7 @@ func readTable(r io.Reader) (table Table, err error) {
 
 	for nested.Len() > 0 {
 		var key string
-		var value interface{}
+		var value any
 
 		if key, err = readShortstr(&nested); err != nil {
 			return
@@ -291,7 +291,7 @@ func readTable(r io.Reader) (table Table, err error) {
 	return
 }
 
-func readArray(r io.Reader) (arr []interface{}, err error) {
+func readArray(r io.Reader) (arr []any, err error) {
 	var size uint32
 
 	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
@@ -300,7 +300,7 @@ func readArray(r io.Reader) (arr []interface{}, err error) {
 
 	var (
 		lim   = &io.LimitedReader{R: r, N: int64(size)}
-		field interface{}
+		field any
 	)
 
 	for {

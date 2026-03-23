@@ -5,7 +5,7 @@
 package amqp091
 
 type Logging interface {
-	Printf(format string, v ...interface{})
+	Printf(format string, v ...any)
 }
 
 var Logger Logging = NullLogger{}
@@ -18,5 +18,5 @@ func SetLogger(logger Logging) {
 
 type NullLogger struct{}
 
-func (l NullLogger) Printf(format string, v ...interface{}) {
+func (l NullLogger) Printf(format string, v ...any) {
 }
