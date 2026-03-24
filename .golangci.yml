@@ -4,11 +4,18 @@ run:
     - integration
 linters:
   default: standard
+  enable:
+    - modernize
   disable:
     - testpackage
     - testableexamples
     - godox
     - gochecknoinits
+  settings:
+    modernize:
+      disable:
+        # enable when
+        - minmax
   exclusions:
     generated: lax
     presets:

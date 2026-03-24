@@ -4,7 +4,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build integration
-// +build integration
 
 package amqp091
 
@@ -255,7 +254,7 @@ func TestReaderGoRoutineTerminatesWhenMsgIsProcessedDuringClose(t *testing.T) {
 	c := integrationConnection(t, t.Name())
 
 	var wg sync.WaitGroup
-	startSigCh := make(chan interface{})
+	startSigCh := make(chan any)
 
 	for i := 0; i < routines; i++ {
 		wg.Add(1)

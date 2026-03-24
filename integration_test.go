@@ -4,7 +4,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build integration
-// +build integration
 
 package amqp091
 
@@ -1408,8 +1407,8 @@ func TestRoundTripAllFieldValueTypes61(t *testing.T) {
 		timestamp := time.Unix(100000000, 0)
 
 		headers := Table{
-			"A": []interface{}{
-				[]interface{}{"nested array", int32(3)},
+			"A": []any{
+				[]any{"nested array", int32(3)},
 				Decimal{2, 1},
 				Table{"S": "nested table in array"},
 				int32(2 << 20),
@@ -1561,7 +1560,7 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 			} else {
 				// pass if we've parsed an array
 				if v, ok := d.Headers["x-death"]; ok {
-					if _, ok := v.([]interface{}); ok {
+					if _, ok := v.([]any); ok {
 						return
 					}
 				}

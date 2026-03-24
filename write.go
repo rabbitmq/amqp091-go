@@ -273,7 +273,7 @@ func writeLongstr(w io.Writer, s string) (err error) {
 }
 
 /*
-'A': []interface{}
+'A': []any
 'D': Decimal
 'F': Table
 'I': int32
@@ -289,7 +289,7 @@ func writeLongstr(w io.Writer, s string) (err error) {
 't': bool
 'x': []byte
 */
-func writeField(w io.Writer, value interface{}) (err error) {
+func writeField(w io.Writer, value any) (err error) {
 	var buf [9]byte
 	var enc []byte
 
@@ -354,7 +354,7 @@ func writeField(w io.Writer, value interface{}) (err error) {
 		binary.BigEndian.PutUint32(buf[1:5], uint32(len(v)))
 		enc = append(buf[:5], []byte(v)...)
 
-	case []interface{}: // field-array
+	case []any: // field-array
 		buf[0] = 'A'
 
 		sec := new(bytes.Buffer)

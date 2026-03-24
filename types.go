@@ -393,7 +393,7 @@ const (
 //	amqp.Decimal
 //	amqp.Table
 //	[]byte
-//	[]interface{} - containing above types
+//	[]any - containing above types
 //
 // Functions taking a table will immediately fail when the table contains a
 // value of an unsupported type.
@@ -404,14 +404,14 @@ const (
 // Use a type assertion when reading values from a table for type conversion.
 //
 // RabbitMQ expects int32 for integer values.
-type Table map[string]interface{}
+type Table map[string]any
 
-func validateField(f interface{}) error {
+func validateField(f any) error {
 	switch fv := f.(type) {
 	case nil, bool, byte, int8, int, int16, int32, int64, float32, float64, string, []byte, Decimal, time.Time:
 		return nil
 
-	case []interface{}:
+	case []any:
 		for _, v := range fv {
 			if err := validateField(v); err != nil {
 				return fmt.Errorf("in array %s", err)
