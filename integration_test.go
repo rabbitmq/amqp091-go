@@ -1471,6 +1471,79 @@ func TestRoundTripAllFieldValueTypes61(t *testing.T) {
 	}
 }
 
+func TestIntegrationPublishConsumeUnsignedInts(t *testing.T) {
+	testCases := []struct {
+		name      string
+		uint16Val uint16
+		uint32Val uint32
+	}{
+		{name: "zero values", uint16Val: 0, uint32Val: 0},
+		{name: "small values", uint16Val: 42, uint32Val: 100},
+		{name: "max values", uint16Val: ^uint16(0), uint32Val: ^uint32(0)},
+		{name: "mid-range values", uint16Val: 1<<15 - 1, uint32Val: 1<<31 - 1},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			c := integrationConnection(t, t.Name())
+			if c == nil {
+				return
+			}
+			defer c.Close()
+
+			ch, err := c.Channel()
+			if err != nil {
+				t.Fatalf("create channel: %s", err)
+			}
+
+			queue := t.Name()
+			if _, err := ch.QueueDeclare(queue, false, true, false, false, nil); err != nil {
+				t.Fatalf("declare queue: %s", err)
+			}
+			defer integrationQueueDelete(t, ch, queue)
+
+			msgs, err := ch.Consume(queue, "", false, false, false, false, nil)
+			if err != nil {
+				t.Fatalf("consume: %s", err)
+			}
+
+			headers := Table{
+				"uint16-value": tc.uint16Val,
+				"uint32-value": tc.uint32Val,
+			}
+
+			if err := ch.PublishWithContext(context.TODO(), "", queue, false, false, Publishing{
+				Headers: headers,
+				Body:    []byte("unsigned-int-test"),
+			}); err != nil {
+				t.Fatalf("publish: %s", err)
+			}
+
+			select {
+			case msg := <-msgs:
+				gotUint16, ok := msg.Headers["uint16-value"].(uint16)
+				if !ok {
+					t.Fatalf("uint16 header: expected uint16, got %T", msg.Headers["uint16-value"])
+				}
+				if gotUint16 != tc.uint16Val {
+					t.Fatalf("uint16 mismatch: want %d, got %d", tc.uint16Val, gotUint16)
+				}
+
+				gotUint32, ok := msg.Headers["uint32-value"].(uint32)
+				if !ok {
+					t.Fatalf("uint32 header: expected uint32, got %T", msg.Headers["uint32-value"])
+				}
+				if gotUint32 != tc.uint32Val {
+					t.Fatalf("uint32 mismatch: want %d, got %d", tc.uint32Val, gotUint32)
+				}
+			case <-time.After(200 * time.Millisecond):
+				t.Fatalf("timeout waiting for message")
+			}
+		})
+	}
+}
+
 // Declares a queue with the x-message-ttl extension to exercise integer
 // serialization.
 //
