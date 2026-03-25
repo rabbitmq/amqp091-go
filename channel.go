@@ -926,8 +926,7 @@ exchange and queue, the attempt to rebind will be ignored and the existing
 binding will be retained.
 
 In the case that multiple bindings may cause the message to be routed to the
-same queue, the server will only route the publishing once.  This is possible
-with topic exchanges.
+same queue, the server will route the publishing to all queues that match.
 
 	QueueBind("pagers", "alert", "amq.topic", false, nil)
 	QueueBind("emails", "info", "amq.topic", false, nil)
@@ -936,6 +935,7 @@ with topic exchanges.
 	Delivery       Exchange        Key       Queue
 	-----------------------------------------------
 	key: alert --> amq.topic ----> alert --> pagers
+	                         \---> # ------> emails
 	key: info ---> amq.topic ----> # ------> emails
 	                         \---> info ---/
 	key: debug --> amq.topic ----> # ------> emails
