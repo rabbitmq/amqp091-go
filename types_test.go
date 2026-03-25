@@ -66,6 +66,7 @@ func TestValidateField(t *testing.T) {
 	// Test case for simple types
 	simpleTypes := []any{
 		nil, true, byte(1), int8(1), 10, int16(10), int32(10), int64(10),
+		uint16(10), uint32(10),
 		float32(1.0), float64(1.0), "string", []byte("byte slice"),
 		Decimal{Scale: 2, Value: 12345},
 		time.Now(),
@@ -78,7 +79,7 @@ func TestValidateField(t *testing.T) {
 
 	// Test case for []any
 	sliceTypes := []any{
-		"string", 10, float64(1.0), Decimal{Scale: 2, Value: 12345},
+		"string", 10, uint16(10), uint32(10), float64(1.0), Decimal{Scale: 2, Value: 12345},
 	}
 	if err := validateField(sliceTypes); err != nil {
 		t.Errorf("validateField failed for []any: %s", err)
@@ -88,10 +89,15 @@ func TestValidateField(t *testing.T) {
 	tableType := Table{
 		"key1": "value1",
 		"key2": 10,
-		"key3": []any{"nested string", 20},
+		"key3": []any{"nested string", 20, uint16(30)},
+		"key4": uint32(40),
 	}
 	if err := validateField(tableType); err != nil {
 		t.Errorf("validateField failed for Table: %s", err)
+	}
+
+	if err := validateField(uint64(10)); err == nil {
+		t.Error("validateField should fail for unsupported type uint64 but it didn't")
 	}
 
 	// Test case for unsupported type

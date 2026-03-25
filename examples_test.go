@@ -435,6 +435,20 @@ func ExampleTable_SetClientConnectionName() {
 	defer conn.Close()
 }
 
+func ExamplePublishing_unsignedHeaderValues() {
+	// This example demonstrates AMQP unsigned integer field values in headers.
+	// It intentionally does not connect to a broker and is documentation-only.
+	msg := amqp.Publishing{
+		Headers: amqp.Table{
+			"retry-delay-ms": uint16(500),
+			"sequence":       uint32(42),
+		},
+		Body: []byte("payload"),
+	}
+
+	_ = msg
+}
+
 func ExampleConnection_UpdateSecret() {
 	// In order to authenticate into RabbitMQ, the application must acquire a JWT token.
 	// This may be different, depending on the library used to communicate with the OAuth2

@@ -387,6 +387,8 @@ const (
 //	int16
 //	int32
 //	int64
+//	uint16
+//	uint32
 //	nil
 //	string
 //	time.Time
@@ -408,7 +410,7 @@ type Table map[string]any
 
 func validateField(f any) error {
 	switch fv := f.(type) {
-	case nil, bool, byte, int8, int, int16, int32, int64, float32, float64, string, []byte, Decimal, time.Time:
+	case nil, bool, byte, int8, int, int16, int32, int64, uint16, uint32, float32, float64, string, []byte, Decimal, time.Time:
 		return nil
 
 	case []any:
