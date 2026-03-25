@@ -122,7 +122,7 @@ type Connection struct {
 	Properties Table    // Server properties
 	Locales    []string // Server locales
 
-	closed int32 // Will be 1 if the connection is closed, 0 otherwise. Should only be accessed as atomic
+	closed atomic.Bool // Will be true if the connection is closed, false otherwise.
 }
 
 type readDeadliner interface {
@@ -486,7 +486,7 @@ func (c *Connection) closeWith(err *Error) error {
 // IsClosed returns true if the connection is marked as closed, otherwise false
 // is returned.
 func (c *Connection) IsClosed() bool {
-	return atomic.LoadInt32(&c.closed) == 1
+	return c.closed.Load()
 }
 
 // setDeadline is a wrapper to type assert Connection.conn and set an I/O
@@ -598,7 +598,7 @@ func (c *Connection) flush() (err error) {
 }
 
 func (c *Connection) shutdown(err *Error) {
-	atomic.StoreInt32(&c.closed, 1)
+	c.closed.Store(true)
 
 	c.destructor.Do(func() {
 		c.m.Lock()

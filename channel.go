@@ -38,8 +38,8 @@ type Channel struct {
 
 	id uint16
 
-	// closed is set to 1 when the channel has been closed - see Channel.send()
-	closed int32
+	// closed is set to true when the channel has been closed - see Channel.send()
+	closed atomic.Bool
 	close  chan struct{}
 
 	// true when we will never notify again
@@ -92,7 +92,7 @@ func newChannel(c *Connection, id uint16) *Channel {
 
 // Signal that from now on, Channel.send() should call Channel.sendClosed()
 func (ch *Channel) setClosed() {
-	atomic.StoreInt32(&ch.closed, 1)
+	ch.closed.Store(true)
 }
 
 // shutdown is called by Connection after the channel has been removed from the
@@ -488,7 +488,7 @@ func (ch *Channel) Close() error {
 // IsClosed returns true if the channel is marked as closed, otherwise false
 // is returned.
 func (ch *Channel) IsClosed() bool {
-	return atomic.LoadInt32(&ch.closed) == 1
+	return ch.closed.Load()
 }
 
 /*
