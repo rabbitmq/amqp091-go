@@ -17,12 +17,12 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: 'stable'
           check-latest: true
-      - uses: actions/checkout@v4
-      - uses: golangci/golangci-lint-action@v8
+      - uses: actions/checkout@v6
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           only-new-issues: false
