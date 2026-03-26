@@ -93,8 +93,8 @@ func NewConnectionProperties() Table {
 // multiplexed on this channel.  There must always be active receivers for
 // every asynchronous message on this connection.
 type Connection struct {
-	destructor sync.Once  // shutdown once
-	closeOnce  sync.Once  // close handshake once
+	destructor sync.Once // teardown: notify listeners, close channels and the socket
+	closeOnce  sync.Once // handshake: send one `connection.close` frame
 	sendM      sync.Mutex // conn writer mutex
 	m          sync.Mutex // struct field mutex
 
