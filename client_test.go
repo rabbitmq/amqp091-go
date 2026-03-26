@@ -10,6 +10,7 @@ import (
 	"context"
 	"io"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -905,5 +906,52 @@ func TestLeakClosedConsumersIssue264(t *testing.T) {
 
 	if _, open := <-consumer; open {
 		t.Fatalf("expected deliveries channel to be closed immediately when the connection is closed so not to leak the bufferDeliveries goroutine")
+	}
+}
+
+func TestConcurrentClose_OnlyOneCloseFrameSent(t *testing.T) {
+	const goroutines = 10
+
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
+
+	go func() {
+		srv.connectionOpen()
+		srv.connectionClose()
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	start := make(chan struct{})
+	errs := make([]error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = c.Close()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	var nilCount int
+	for _, err := range errs {
+		switch err {
+		case nil:
+			nilCount++
+		case ErrClosed:
+			// expected for goroutines that did not win the closeOnce race
+		default:
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if nilCount != 1 {
+		t.Errorf("expected exactly 1 successful close, got %d", nilCount)
 	}
 }
