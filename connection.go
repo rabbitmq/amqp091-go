@@ -93,7 +93,8 @@ func NewConnectionProperties() Table {
 // multiplexed on this channel.  There must always be active receivers for
 // every asynchronous message on this connection.
 type Connection struct {
-	destructor sync.Once  // shutdown once
+	destructor sync.Once  // teardown: notify listeners, close channels and the socket
+	closeOnce  sync.Once  // handshake: send one `connection.close` frame
 	sendM      sync.Mutex // conn writer mutex
 	m          sync.Mutex // struct field mutex
 
@@ -423,14 +424,23 @@ func (c *Connection) Close() error {
 		return ErrClosed
 	}
 
-	defer c.shutdown(nil)
-	return c.call(
-		&connectionClose{
-			ReplyCode: replySuccess,
-			ReplyText: "kthxbai",
-		},
-		&connectionCloseOk{},
-	)
+	var handshakeErr error
+	var initiated bool
+	c.closeOnce.Do(func() {
+		initiated = true
+		defer c.shutdown(nil)
+		handshakeErr = c.call(
+			&connectionClose{
+				ReplyCode: replySuccess,
+				ReplyText: "kthxbai",
+			},
+			&connectionCloseOk{},
+		)
+	})
+	if !initiated {
+		return ErrClosed
+	}
+	return handshakeErr
 }
 
 // CloseDeadline requests and waits for the response to close this AMQP connection.
@@ -451,20 +461,27 @@ func (c *Connection) CloseDeadline(deadline time.Time) error {
 		return ErrClosed
 	}
 
-	defer c.shutdown(nil)
-
-	err := c.setDeadline(deadline)
-	if err != nil {
-		return err
+	var handshakeErr error
+	var initiated bool
+	c.closeOnce.Do(func() {
+		initiated = true
+		defer c.shutdown(nil)
+		if err := c.setDeadline(deadline); err != nil {
+			handshakeErr = err
+			return
+		}
+		handshakeErr = c.call(
+			&connectionClose{
+				ReplyCode: replySuccess,
+				ReplyText: "kthxbai",
+			},
+			&connectionCloseOk{},
+		)
+	})
+	if !initiated {
+		return ErrClosed
 	}
-
-	return c.call(
-		&connectionClose{
-			ReplyCode: replySuccess,
-			ReplyText: "kthxbai",
-		},
-		&connectionCloseOk{},
-	)
+	return handshakeErr
 }
 
 func (c *Connection) closeWith(err *Error) error {
@@ -472,15 +489,23 @@ func (c *Connection) closeWith(err *Error) error {
 		return ErrClosed
 	}
 
-	defer c.shutdown(err)
-
-	return c.call(
-		&connectionClose{
-			ReplyCode: uint16(err.Code),
-			ReplyText: err.Reason,
-		},
-		&connectionCloseOk{},
-	)
+	var handshakeErr error
+	var initiated bool
+	c.closeOnce.Do(func() {
+		initiated = true
+		defer c.shutdown(err)
+		handshakeErr = c.call(
+			&connectionClose{
+				ReplyCode: uint16(err.Code),
+				ReplyText: err.Reason,
+			},
+			&connectionCloseOk{},
+		)
+	})
+	if !initiated {
+		return ErrClosed
+	}
+	return handshakeErr
 }
 
 // IsClosed returns true if the connection is marked as closed, otherwise false
