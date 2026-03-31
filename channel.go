@@ -1492,7 +1492,8 @@ func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg 
 /*
 PublishWithContext sends a Publishing from the client to an exchange on the server.
 
-NOTE: this function is equivalent to [Channel.Publish]. Context is not honoured.
+NOTE: If the context is cancelled, the publish operation may still complete in the background because the context is not propagated to the underlying Publish call.
+In this case, PublishWithContext will return the context error immediately rather than waiting for Publish to finish.
 
 When you want a single message to be delivered to a single queue, you can
 publish to the default exchange with the routingKey of the queue name.  This is
@@ -1523,8 +1524,22 @@ confirmations start at 1.  Exit when all publishings are confirmed.
 When Publish does not return an error and the channel is in confirm mode, the
 internal counter for DeliveryTags with the first confirmation starts at 1.
 */
-func (ch *Channel) PublishWithContext(_ context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
-	return ch.Publish(exchange, key, mandatory, immediate, msg)
+func (ch *Channel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
+	// check if context already cancelled then return early.
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ch.Publish(exchange, key, mandatory, immediate, msg)
+	}()
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 /*
