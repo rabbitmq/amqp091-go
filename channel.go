@@ -1598,11 +1598,28 @@ DeferredConfirmation, allowing the caller to wait on the publisher confirmation
 for this message. If the channel has not been put into confirm mode,
 the DeferredConfirmation will be nil.
 
-NOTE: PublishWithDeferredConfirmWithContext is equivalent to its non-context variant. The context passed
-to this function is not honoured.
+NOTE: If the context is cancelled, the publish operation may still complete in the background because the context is not propagated to the underlying PublishWithDeferredConfirm call.
+In this case, PublishWithDeferredConfirmWithContext will return the context error immediately rather than waiting for PublishWithDeferredConfirm to finish.
 */
-func (ch *Channel) PublishWithDeferredConfirmWithContext(_ context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
-	return ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
+func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	type result struct {
+		deferredConfirmation *DeferredConfirmation
+		err                  error
+	}
+	resultChan := make(chan result, 1)
+	go func() {
+		res, err := ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
+		resultChan <- result{deferredConfirmation: res, err: err}
+	}()
+	select {
+	case res := <-resultChan:
+		return res.deferredConfirmation, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 /*
