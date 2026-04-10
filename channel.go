@@ -1492,8 +1492,10 @@ func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg 
 /*
 PublishWithContext sends a Publishing from the client to an exchange on the server.
 
-NOTE: If the context is cancelled, the publish operation may still complete in the background because the context is not propagated to the underlying Publish call.
-In this case, PublishWithContext will return the context error immediately rather than waiting for Publish to finish.
+If the context is already cancelled when PublishWithContext is called, it
+returns the context error immediately without attempting to publish.  Context
+cancellation after the call has started does not interrupt an in-flight
+Publish, as the underlying I/O is not context-aware.
 
 When you want a single message to be delivered to a single queue, you can
 publish to the default exchange with the routingKey of the queue name.  This is
@@ -1525,20 +1527,11 @@ When Publish does not return an error and the channel is in confirm mode, the
 internal counter for DeliveryTags with the first confirmation starts at 1.
 */
 func (ch *Channel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
-	// check if context already cancelled then return early.
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- ch.Publish(exchange, key, mandatory, immediate, msg)
-	}()
 	select {
-	case err := <-errChan:
-		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	default:
+		return ch.Publish(exchange, key, mandatory, immediate, msg)
 	}
 }
 
@@ -1598,27 +1591,17 @@ DeferredConfirmation, allowing the caller to wait on the publisher confirmation
 for this message. If the channel has not been put into confirm mode,
 the DeferredConfirmation will be nil.
 
-NOTE: If the context is cancelled, the publish operation may still complete in the background because the context is not propagated to the underlying PublishWithDeferredConfirm call.
-In this case, PublishWithDeferredConfirmWithContext will return the context error immediately rather than waiting for PublishWithDeferredConfirm to finish.
+If the context is already cancelled when PublishWithDeferredConfirmWithContext is called, it
+returns the context error immediately without attempting to publish.  Context
+cancellation after the call has started does not interrupt an in-flight
+PublishWithDeferredConfirm, as the underlying I/O is not context-aware.
 */
 func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	type result struct {
-		deferredConfirmation *DeferredConfirmation
-		err                  error
-	}
-	resultChan := make(chan result, 1)
-	go func() {
-		res, err := ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
-		resultChan <- result{deferredConfirmation: res, err: err}
-	}()
 	select {
-	case res := <-resultChan:
-		return res.deferredConfirmation, res.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	default:
+		return ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
 	}
 }
 
