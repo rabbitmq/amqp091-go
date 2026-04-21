@@ -8,6 +8,7 @@ package amqp091
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"reflect"
 	"sync"
@@ -954,4 +955,65 @@ func TestConcurrentClose_OnlyOneCloseFrameSent(t *testing.T) {
 	if nilCount != 1 {
 		t.Errorf("expected exactly 1 successful close, got %d", nilCount)
 	}
+}
+
+func TestPublishWithContext_ContextCancelled(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel context immediately
+
+	err = ch.PublishWithContext(ctx, "", "q", false, false, Publishing{Body: []byte("test")})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+
+}
+
+func TestPublishWithDeferredConfirmWithContext_ContextCancelled(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel context immediately
+
+	res, err := ch.PublishWithDeferredConfirmWithContext(ctx, "", "q", false, false, Publishing{Body: []byte("test")})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.DeadlineExceeded, got: %v", err)
+	}
+	if res != nil {
+		t.Fatalf("expected nil, got %v", res)
+	}
+
 }
