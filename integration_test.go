@@ -276,7 +276,7 @@ func TestIntegrationQueueDeclarePassiveOnMissingExchangeShouldError(t *testing.T
 		if _, err := ch.QueueDeclarePassive(
 			"test-integration-missing-passive-queue", // name
 			false,                                    // duration (note: not durable)
-			true,                                     // auto-delete
+			false,                                    // auto-delete
 			true,                                     // exclusive
 			false,                                    // noWait
 			nil,                                      // arguments
@@ -306,7 +306,7 @@ func TestIntegrationQueueDeclarePassiveOnQueueTypeMismatchShouldError(t *testing
 		if _, err := ch.QueueDeclare(
 			queueName, // name
 			false,     // durable
-			true,      // auto-delete
+			false,     // auto-delete
 			true,      // exclusive
 			false,     // noWait
 			nil,       // arguments
@@ -319,7 +319,7 @@ func TestIntegrationQueueDeclarePassiveOnQueueTypeMismatchShouldError(t *testing
 		if _, err := ch.QueueDeclarePassive(
 			queueName, // name
 			false,     // duration (note: not durable)
-			true,      // auto-delete
+			false,     // auto-delete
 			true,      // exclusive
 			false,     // noWait
 			args,      // arguments
@@ -346,7 +346,7 @@ func TestIntegrationPassiveQueue(t *testing.T) {
 		if _, err := ch.QueueDeclare(
 			name,  // name
 			false, // durable
-			true,  // auto-delete
+			false, // auto-delete
 			true,  // exclusive
 			false, // noWait
 			nil,   // arguments
@@ -357,7 +357,7 @@ func TestIntegrationPassiveQueue(t *testing.T) {
 		if _, err := ch.QueueDeclarePassive(
 			name,  // name
 			false, // durable
-			true,  // auto-delete
+			false, // auto-delete
 			true,  // exclusive
 			false, // noWait
 			nil,   // arguments
@@ -368,7 +368,7 @@ func TestIntegrationPassiveQueue(t *testing.T) {
 		if _, err := ch.QueueDeclarePassive(
 			name,  // name
 			true,  // durable (note: differs)
-			true,  // auto-delete
+			false, // auto-delete
 			true,  // exclusive
 			false, // noWait
 			nil,   // arguments
@@ -632,7 +632,7 @@ func TestIntegrationMeaningfulChannelErrors(t *testing.T) {
 			t.Fatalf("Expected PreconditionFailed, got: %+v", e)
 		}
 
-		_, err = ch.QueueDeclare(queue, false, true, true, false, nil)
+		_, err = ch.QueueDeclare(queue, false, false, true, false, nil)
 		if err != ErrClosed {
 			t.Fatalf("Expected channel to be closed, got: %T", err)
 		}
@@ -652,7 +652,7 @@ func TestIntegrationNonBlockingClose(t *testing.T) {
 
 		queue := "test.integration.blocking.close"
 
-		_, err = ch.QueueDeclare(queue, false, true, true, false, nil)
+		_, err = ch.QueueDeclare(queue, false, false, true, false, nil)
 		if err != nil {
 			t.Fatalf("Could not declare")
 		}
@@ -834,7 +834,7 @@ func TestIntegrationConsumeCancel(t *testing.T) {
 
 		ch, _ := c.Channel()
 
-		if _, e := ch.QueueDeclare(queue, false, true, true, false, nil); e != nil {
+		if _, e := ch.QueueDeclare(queue, false, false, true, false, nil); e != nil {
 			t.Fatalf("error declaring queue %s: %v", queue, e)
 		}
 
@@ -878,7 +878,7 @@ func TestIntegrationConsumeCancelWithContext(t *testing.T) {
 
 		ch, _ := c.Channel()
 
-		if _, e := ch.QueueDeclare(queue, false, true, true, false, nil); e != nil {
+		if _, e := ch.QueueDeclare(queue, false, false, true, false, nil); e != nil {
 			t.Fatalf("error declaring queue %s: %v", queue, e)
 		}
 
@@ -978,7 +978,7 @@ func TestQuickPublishOnly(t *testing.T) {
 		}
 		queue := "test-publish"
 
-		if _, err = pub.QueueDeclare(queue, false, true, true, false, nil); err != nil {
+		if _, err = pub.QueueDeclare(queue, false, false, true, false, nil); err != nil {
 			t.Fatalf("Failed to declare: %s", err)
 			return
 		}
@@ -1006,7 +1006,7 @@ func TestPublishEmptyBody(t *testing.T) {
 
 		queue := "test-TestPublishEmptyBody"
 
-		if _, err := ch.QueueDeclare(queue, false, true, true, false, nil); err != nil {
+		if _, err := ch.QueueDeclare(queue, false, false, true, false, nil); err != nil {
 			t.Fatalf("Could not declare")
 		}
 
@@ -1046,7 +1046,7 @@ func TestPublishEmptyBodyWithHeadersIssue67(t *testing.T) {
 
 		queue := "test-TestPublishEmptyBodyWithHeaders"
 
-		if _, err := ch.QueueDeclare(queue, false, true, true, false, nil); err != nil {
+		if _, err := ch.QueueDeclare(queue, false, false, true, false, nil); err != nil {
 			t.Fatalf("Could not declare")
 		}
 
@@ -1249,7 +1249,7 @@ func TestIntegrationTxCommit(t *testing.T) {
 		queue := "test.tx.commit"
 		ch, _ := c.Channel()
 
-		if _, err := ch.QueueDeclare(queue, false, true, true, false, nil); err != nil {
+		if _, err := ch.QueueDeclare(queue, false, false, true, false, nil); err != nil {
 			t.Fatalf("Failed to declare: %s", err)
 		}
 
@@ -1284,7 +1284,7 @@ func TestIntegrationTxRollback(t *testing.T) {
 		queue := "test.tx.rollback"
 		ch, _ := c.Channel()
 
-		if _, err := ch.QueueDeclare(queue, false, true, true, false, nil); err != nil {
+		if _, err := ch.QueueDeclare(queue, false, false, true, false, nil); err != nil {
 			t.Fatalf("Failed to declare: %s", err)
 		}
 
@@ -1443,7 +1443,7 @@ func TestRoundTripAllFieldValueTypes61(t *testing.T) {
 		queue := "test.issue61-roundtrip"
 		ch, _ := conn.Channel()
 
-		if _, err := ch.QueueDeclare(queue, false, true, true, false, nil); err != nil {
+		if _, err := ch.QueueDeclare(queue, false, false, true, false, nil); err != nil {
 			t.Fatalf("Could not declare")
 		}
 
@@ -1498,7 +1498,7 @@ func TestIntegrationPublishConsumeUnsignedInts(t *testing.T) {
 			}
 
 			queue := t.Name()
-			if _, err := ch.QueueDeclare(queue, false, true, true, false, nil); err != nil {
+			if _, err := ch.QueueDeclare(queue, false, false, true, false, nil); err != nil {
 				t.Fatalf("declare queue: %s", err)
 			}
 			defer integrationQueueDelete(t, ch, queue)
@@ -1556,7 +1556,7 @@ func TestDeclareArgsXMessageTTL(t *testing.T) {
 		args := Table{"x-message-ttl": int32(9000000)}
 
 		// should not drop the connection
-		if _, err := ch.QueueDeclare("declareWithTTL", false, true, true, false, args); err != nil {
+		if _, err := ch.QueueDeclare("declareWithTTL", false, false, true, false, args); err != nil {
 			t.Fatalf("cannot declare with TTL: got: %v", err)
 		}
 	}
@@ -1583,7 +1583,7 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 			t.Fatalf("cannot declare %v: got: %v", dlex, err)
 		}
 
-		if _, err := ch.QueueDeclare(dlq, false, true, true, false, nil); err != nil {
+		if _, err := ch.QueueDeclare(dlq, false, false, true, false, nil); err != nil {
 			t.Fatalf("cannot declare %v: got: %v", dlq, err)
 		}
 
@@ -1591,7 +1591,7 @@ func TestDeclareArgsRejectToDeadLetterQueue(t *testing.T) {
 			t.Fatalf("cannot bind %v to %v: got: %v", dlq, dlex, err)
 		}
 
-		if _, err := ch.QueueDeclare(q, false, true, true, false, Table{
+		if _, err := ch.QueueDeclare(q, false, false, true, false, Table{
 			"x-dead-letter-exchange": dlex,
 		}); err != nil {
 			t.Fatalf("cannot declare %v with dlq %v: got: %v", q, dlex, err)
@@ -1666,7 +1666,7 @@ func TestDeadlockConsumerIssue48(t *testing.T) {
 
 		queue := "test-issue48"
 
-		if _, err := ch.QueueDeclare(queue, false, true, true, false, nil); err != nil {
+		if _, err := ch.QueueDeclare(queue, false, false, true, false, nil); err != nil {
 			t.Fatalf("expected to declare a queue: %v", err)
 		}
 
