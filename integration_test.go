@@ -286,6 +286,154 @@ func TestIntegrationQueueDeclarePassiveOnMissingExchangeShouldError(t *testing.T
 	}
 }
 
+// Tests Exchange to Exchange binding and unbinding
+func TestIntegrationExchangeToExchangeBindAndUnbind(t *testing.T) {
+	queue := "test-integration-exchange-bind-unbind"
+	routingKey := "exchange-bind"
+	c := integrationConnection(t, "exchange-bind-unbind")
+	if c != nil {
+		defer c.Close()
+
+		ch, err := c.Channel()
+		if err != nil {
+			t.Fatalf("create channel: %s", err)
+		}
+		defer ch.Close()
+
+		srcExchange := "test-integration-src-exchange"
+		destExchange := "test-integration-dest-exchange"
+
+		// Declare source exchange
+		if err = ch.ExchangeDeclare(
+			srcExchange, // name
+			"direct",    // type
+			false,       // duration
+			false,       // auto-delete
+			false,       // internal
+			false,       // nowait
+			nil,         // args
+		); err != nil {
+			t.Fatalf("declare source exchange: %s", err)
+		}
+		defer func() {
+			if err = ch.ExchangeDelete(srcExchange, false, false); err != nil {
+				t.Fatalf("delete source exchange: %s", err)
+			}
+		}()
+
+		// Declare destination exchange
+		if err = ch.ExchangeDeclare(
+			destExchange, // name
+			"direct",     // type
+			false,        // duration
+			false,        // auto-delete
+			false,        // internal
+			false,        // nowait
+			nil,          // args
+		); err != nil {
+			t.Fatalf("declare destination exchange: %s", err)
+		}
+		defer func() {
+			if err = ch.ExchangeDelete(destExchange, false, false); err != nil {
+				t.Fatalf("delete destination exchange: %s", err)
+			}
+		}()
+
+		// Declare queue
+		if _, err := ch.QueueDeclare(
+			queue, // name
+			false, // durable
+			false, // auto-delete
+			true,  // exclusive
+			false, // noWait
+			nil,   // arguments
+		); err != nil {
+			t.Fatalf("queue declare: %s", err)
+		}
+
+		// Bind queue to destination exchange
+		if err = ch.QueueBind(
+			queue,        // name
+			routingKey,   // routing key
+			destExchange, // source
+			false,        // noWait
+			nil,          // args
+		); err != nil {
+			t.Fatalf("queue bind: %s", err)
+		}
+
+		// Bind destination exchange to source exchange
+		if err = ch.ExchangeBind(
+			destExchange, // destination
+			routingKey,   // routing key
+			srcExchange,  // source
+			false,        // noWait
+			nil,          // args
+		); err != nil {
+			t.Fatalf("exchange bind: %s", err)
+		}
+
+		// Consume messages from queue
+		messages, err := ch.Consume(queue, "", false, false, false, false, nil)
+		if err != nil {
+			t.Fatalf("Could not consume")
+		}
+
+		// Publish message to source exchange
+		err = ch.PublishWithContext(context.TODO(), srcExchange, routingKey, true, false, Publishing{Body: []byte("test message")})
+		if err != nil {
+			t.Fatalf("Could not publish")
+		}
+
+		// Verify message is delivered to destination queue
+		select {
+		case msg := <-messages:
+			if err = msg.Ack(false); err != nil {
+				t.Fatalf("error acking: %v", err)
+			}
+			t.Logf("Received message: %s", string(msg.Body))
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("Timeout on receive")
+		}
+
+		// Unbind destination exchange from source exchange
+		if err := ch.ExchangeUnbind(
+			destExchange, // destination
+			routingKey,   // routing key
+			srcExchange,  // source
+			false,        // noWait
+			nil,          // args
+		); err != nil {
+			t.Fatalf("exchange unbind: %s", err)
+		}
+
+		// Verify message is returned
+		ret := make(chan Return, 1)
+
+		ch.NotifyReturn(ret)
+
+		// mandatory publish to an exchange without a binding should be returned
+		err = ch.PublishWithContext(context.TODO(), srcExchange, routingKey, true, false, Publishing{Body: []byte("test return message")})
+		if err != nil {
+			t.Fatalf("Could not publish")
+		}
+
+		select {
+		case res := <-ret:
+			if string(res.Body) != "test return message" {
+				t.Fatalf("expected return of the same message, got: %s", string(res.Body))
+			}
+
+			if res.ReplyCode != NoRoute {
+				t.Fatalf("expected no consumers reply code on the Return result, got: %v", res.ReplyCode)
+			}
+
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("no return was received within 200ms")
+		}
+	}
+}
+
 // https://github.com/rabbitmq/amqp091-go/issues/273
 // Note: RabbitMQ behaves according to spec.
 // Passive declarations ignore everything but the queue name
