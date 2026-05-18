@@ -1166,6 +1166,35 @@ func TestIntegrationConsumeFlow(t *testing.T) {
 	}
 }
 
+// Tests publish with immediate=true
+// Latest RabbitMQ does not support immediate=true, so the server should return a channel close exception
+func TestIntegrationPublishImmediate(t *testing.T) {
+	queue := "test.integration.publish-immediate"
+
+	c, ch := integrationQueue(t, queue)
+	if c != nil && ch != nil {
+		defer c.Close()
+		defer ch.Close()
+
+		// 1. Setup a channel to listen for asynchronous closure errors
+		closeChan := ch.NotifyClose(make(chan *Error, 1))
+		// 2. Publish with immediate=true, returns nil immediately because it's fire-and-forget
+		err := ch.PublishWithContext(context.TODO(), "", queue, false, true, Publishing{Body: []byte("test message")})
+		if err != nil {
+			t.Fatalf("Publish returned unexpected error: %v", err)
+		}
+		// 3. Wait for the server to asynchronously close the channel due to the exception
+		select {
+		case ex := <-closeChan:
+			if ex == nil || ex.Code != 540 {
+				t.Fatalf("Expected NOT IMPLEMENTED (540) got: %v", ex)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("Timeout waiting for channel close exception")
+		}
+	}
+}
+
 func TestIntegrationRecoverNotImplemented(t *testing.T) {
 	// TODO: remove this when Channel.Recover is removed
 	queue := "test.recover"
