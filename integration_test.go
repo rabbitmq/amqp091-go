@@ -630,6 +630,224 @@ func TestIntegrationBasicQueueOperations(t *testing.T) {
 	}
 }
 
+// Tests queue unbinding and return of messages to publisher
+func TestIntegrationQueueUnbind(t *testing.T) {
+	c := integrationConnection(t, "queue-unbind")
+	if c != nil {
+		defer c.Close()
+
+		channel, err := c.Channel()
+		if err != nil {
+			t.Fatalf("create channel: %s", err)
+		}
+		defer channel.Close()
+
+		exchange := "test-integration-exchange-queue-unbind"
+		queue := "test-integration-queue-unbind"
+		routingKey := "test-integration-routing-key-queue-unbind"
+
+		// Declare exchange
+		if err := channel.ExchangeDeclare(
+			exchange, // name
+			"direct", // type
+			false,    // duration
+			false,    // auto-delete
+			false,    // internal
+			false,    // nowait
+			nil,      // args
+		); err != nil {
+			t.Fatalf("declare exchange: %s", err)
+		}
+		defer func() {
+			if err := channel.ExchangeDelete(exchange, false, false); err != nil {
+				t.Fatalf("delete exchange: %s", err)
+			}
+		}()
+
+		// Declare queue
+		if _, err := channel.QueueDeclare(
+			queue, // name
+			false, // durable
+			false, // auto-delete
+			true,  // exclusive
+			false, // noWait
+			nil,   // arguments
+		); err != nil {
+			t.Fatalf("declare queue: %s", err)
+		}
+
+		// Bind queue to exchange
+		if err := channel.QueueBind(
+			queue,      // name
+			routingKey, // routing key
+			exchange,   // source
+			false,      // noWait
+			nil,        // arguments
+		); err != nil {
+			t.Fatalf("queue bind: %s", err)
+		}
+
+		// Consume messages from queue
+		messages, err := channel.Consume(queue, "", false, false, false, false, nil)
+		if err != nil {
+			t.Fatalf("could not consume: %s", err)
+		}
+
+		// Publish message to exchange
+		err = channel.PublishWithContext(context.TODO(), exchange, routingKey, false, false, Publishing{Body: []byte("test message")})
+		if err != nil {
+			t.Fatalf("could not publish: %s", err)
+		}
+
+		select {
+		case msg := <-messages:
+			if err = msg.Ack(false); err != nil {
+				t.Fatalf("error acking: %v", err)
+			}
+			t.Logf("Received message: %s", string(msg.Body))
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("Timeout on receive")
+		}
+
+		// Unbind queue from exchange
+		if err := channel.QueueUnbind(queue, routingKey, exchange, nil); err != nil {
+			t.Fatalf("queue unbind: %s", err)
+		}
+		t.Logf("queue unbind OK")
+
+		ret := make(chan Return, 1)
+		channel.NotifyReturn(ret)
+
+		err = channel.PublishWithContext(context.TODO(), exchange, routingKey, true, false, Publishing{Body: []byte("test message")})
+		if err != nil {
+			t.Fatalf("could not publish: %s", err)
+		}
+
+		// Verify message is returned
+		select {
+		case res := <-ret:
+			if string(res.Body) != "test message" {
+				t.Fatalf("expected return of the same message, got: %s", string(res.Body))
+			}
+
+			if res.ReplyCode != NoRoute {
+				t.Fatalf("expected no consumers reply code on the Return result, got: %v", res.ReplyCode)
+			}
+			t.Logf("received return with NoRoute OK")
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("no return was received within 200ms")
+		}
+	}
+}
+
+// Tests queue purge and message count
+func TestIntegrationQueuePurge(t *testing.T) {
+	c := integrationConnection(t, "queue-purge")
+	if c != nil {
+		defer c.Close()
+		channel, err := c.Channel()
+		if err != nil {
+			t.Fatalf("create channel: %s", err)
+		}
+		defer channel.Close()
+
+		exchange := "test-integration-exchange-queue-purge"
+		queue := "test-integration-queue-purge"
+		routingKey := "test-integration-routing-key-queue-purge"
+
+		// Declare exchange
+		if err := channel.ExchangeDeclare(
+			exchange, // name
+			"direct", // type
+			false,    // duration
+			false,    // auto-delete
+			false,    // internal
+			false,    // nowait
+			nil,      // args
+		); err != nil {
+			t.Fatalf("declare exchange: %s", err)
+		}
+		defer func() {
+			if err := channel.ExchangeDelete(exchange, false, false); err != nil {
+				t.Fatalf("delete exchange: %s", err)
+			}
+		}()
+
+		// Declare queue
+		q, err := channel.QueueDeclare(
+			queue, // name
+			false, // durable
+			false, // auto-delete
+			true,  // exclusive
+			false, // noWait
+			nil,   // arguments
+		)
+		if err != nil {
+			t.Fatalf("declare queue: %s", err)
+		}
+
+		if err := channel.QueueBind(queue, routingKey, exchange, false, nil); err != nil {
+			t.Fatalf("queue bind: %s", err)
+		}
+
+		//Verify queue has zero messages
+		if q.Messages != 0 {
+			t.Fatalf("expected queue to have 0 messages, got: %d", q.Messages)
+		}
+
+		err = channel.Confirm(false)
+		if err != nil {
+			t.Fatalf("could not enable confirm: %s", err)
+		}
+		confirms := channel.NotifyPublish(make(chan Confirmation, 1))
+
+		// Publish message to exchange
+		err = channel.Publish(exchange, routingKey, true, false, Publishing{Body: []byte("test message")})
+		if err != nil {
+			t.Fatalf("could not publish: %s", err)
+		}
+
+		// Verify message is published
+		select {
+		case confirmed := <-confirms:
+			if confirmed.DeliveryTag != 1 {
+				t.Fatalf("expected ack starting with delivery tag of 1")
+			}
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("no confirmation was received within 200ms")
+		}
+
+		q, err = channel.QueueDeclare(
+			queue, // name
+			false, // durable
+			false, // auto-delete
+			true,  // exclusive
+			false, // noWait
+			nil,   // arguments
+		)
+		if err != nil {
+			t.Fatalf("declare queue: %s", err)
+		}
+
+		//Verify queue has one message
+		if q.Messages != 1 {
+			t.Fatalf("expected queue to have 1 message, got: %d", q.Messages)
+		}
+		t.Logf("queue has 1 message OK")
+
+		//Purge queue
+		purged, err := channel.QueuePurge(queue, false)
+		if err != nil {
+			t.Fatalf("queue purge: %s", err)
+		}
+		t.Logf("queue purge OK")
+		if purged != 1 {
+			t.Fatalf("expected queue to be purged of 1 message, got: %d", purged)
+		}
+		t.Logf("queue purged 1 message OK")
+	}
+}
+
 func TestIntegrationConnectionNegotiatesMaxChannels(t *testing.T) {
 	config := Config{ChannelMax: 0}
 
