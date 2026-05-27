@@ -7,9 +7,11 @@ package amqp091
 
 import (
 	"context"
+	"math/rand"
 	"reflect"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // 0      1         3             7                  size+7 size+8
@@ -26,10 +28,11 @@ exchange.  Errors on methods with this Channel as a receiver means this channel
 should be discarded and a new channel established.
 */
 type Channel struct {
-	destructor sync.Once
-	m          sync.Mutex // struct field mutex
-	confirmM   sync.Mutex // publisher confirms state mutex
-	notifyM    sync.RWMutex
+	destructorM sync.Mutex
+	destructed  bool
+	m           sync.Mutex // struct field mutex
+	confirmM    sync.Mutex // publisher confirms state mutex
+	notifyM     sync.RWMutex
 
 	connection *Connection
 
@@ -74,6 +77,8 @@ type Channel struct {
 	message messageWithContent
 	header  *headerFrame
 	body    []byte
+
+	reconnecting sync.Mutex
 }
 
 // Constructs a new channel with the given framing rules
@@ -100,23 +105,34 @@ func (ch *Channel) setClosed() {
 func (ch *Channel) shutdown(e *Error) {
 	ch.setClosed()
 
-	ch.destructor.Do(func() {
-		ch.m.Lock()
-		defer ch.m.Unlock()
+	ch.destructorM.Lock()
+	if ch.destructed {
+		ch.destructorM.Unlock()
+		return
+	}
+	ch.destructed = true
+	ch.destructorM.Unlock()
 
-		// Grab an exclusive lock for the notify channels
-		ch.notifyM.Lock()
-		defer ch.notifyM.Unlock()
+	ch.m.Lock()
+	defer ch.m.Unlock()
 
-		// Broadcast abnormal shutdown
-		if e != nil {
-			for _, c := range ch.closes {
-				c <- e
-			}
-			// Notify RPC if we're selecting
-			ch.errors <- e
+	// Grab an exclusive lock for the notify channels
+	ch.notifyM.Lock()
+	defer ch.notifyM.Unlock()
+
+	// Broadcast abnormal shutdown
+	if e != nil {
+		for _, c := range ch.closes {
+			c <- e
 		}
+		// Notify RPC if we're selecting
+		select {
+		case ch.errors <- e:
+		default:
+		}
+	}
 
+	if e == nil || !ch.connection.IsRecoveryEnabled() {
 		ch.consumers.close()
 
 		for _, c := range ch.closes {
@@ -149,7 +165,10 @@ func (ch *Channel) shutdown(e *Error) {
 		close(ch.errors)
 		close(ch.close)
 		ch.noNotify = true
-	})
+	} else {
+		close(ch.errors)
+		close(ch.close)
+	}
 }
 
 // send calls Channel.sendOpen() during normal operation.
@@ -1124,7 +1143,16 @@ func (ch *Channel) Consume(queue, consumer string, autoAck, exclusive, noLocal, 
 
 	deliveries := make(chan Delivery)
 
-	ch.consumers.add(consumer, deliveries)
+	config := ConsumerConfig{
+		Queue:     queue,
+		Consumer:  consumer,
+		AutoAck:   autoAck,
+		Exclusive: exclusive,
+		NoLocal:   noLocal,
+		NoWait:    noWait,
+		Args:      args,
+	}
+	ch.consumers.add(consumer, deliveries, config)
 
 	if err := ch.call(req, res); err != nil {
 		ch.consumers.cancel(consumer)
@@ -1228,7 +1256,16 @@ func (ch *Channel) ConsumeWithContext(ctx context.Context, queue, consumer strin
 
 	deliveries := make(chan Delivery)
 
-	ch.consumers.add(consumer, deliveries)
+	config := ConsumerConfig{
+		Queue:     queue,
+		Consumer:  consumer,
+		AutoAck:   autoAck,
+		Exclusive: exclusive,
+		NoLocal:   noLocal,
+		NoWait:    noWait,
+		Args:      args,
+	}
+	ch.consumers.add(consumer, deliveries, config)
 
 	if err := ch.call(req, res); err != nil {
 		ch.consumers.cancel(consumer)
@@ -1840,4 +1877,142 @@ func (ch *Channel) GetNextPublishSeqNo() uint64 {
 	defer ch.confirms.publishedMut.Unlock()
 
 	return ch.confirms.published + 1
+}
+
+func (ch *Channel) cleanup() {
+	ch.m.Lock()
+	defer ch.m.Unlock()
+
+	ch.notifyM.Lock()
+	defer ch.notifyM.Unlock()
+
+	ch.consumers.close()
+
+	for _, c := range ch.closes {
+		close(c)
+	}
+
+	for _, c := range ch.flows {
+		close(c)
+	}
+
+	for _, c := range ch.returns {
+		close(c)
+	}
+
+	for _, c := range ch.cancels {
+		close(c)
+	}
+
+	ch.flows = nil
+	ch.closes = nil
+	ch.returns = nil
+	ch.cancels = nil
+
+	if ch.confirms != nil {
+		ch.confirms.Close()
+	}
+
+	ch.noNotify = true
+}
+
+func (ch *Channel) Reconnect() error {
+	if !ch.connection.IsRecoveryEnabled() {
+		return ErrClosed
+	}
+
+	ch.reconnecting.Lock()
+	defer ch.reconnecting.Unlock()
+
+	if !ch.IsClosed() {
+		return nil
+	}
+
+	var err error
+	for i := 0; i < ch.connection.MaxRetryCount(); i++ {
+		Logger.Printf("Channel %d recovery attempt %d of %d", ch.id, i+1, ch.connection.MaxRetryCount())
+		jitter := time.Duration(rand.Intn(500)) * time.Millisecond // Random 500ms jitter to avoid thundering herd
+		time.Sleep(ch.connection.RetryInterval() + jitter)
+
+		// Reset state
+		ch.m.Lock()
+		ch.resetState()
+		ch.m.Unlock()
+
+		if err = ch.open(); err != nil {
+			Logger.Printf("Channel %d recovery open error: %v", ch.id, err)
+			continue
+		}
+
+		// Re-enable confirms if needed
+		if ch.confirming {
+			if err = ch.Confirm(false); err != nil {
+				Logger.Printf("Channel %d recovery Confirm error: %v", ch.id, err)
+				continue
+			}
+		}
+
+		// Re-issue consumers
+		ch.consumers.Lock()
+		configs := make(map[string]ConsumerConfig, len(ch.consumers.configs))
+		for tag, config := range ch.consumers.configs {
+			configs[tag] = config
+		}
+		ch.consumers.Unlock()
+
+		var consumeErr error
+		for tag, config := range configs {
+			req := &basicConsume{
+				Queue:       config.Queue,
+				ConsumerTag: tag,
+				NoLocal:     config.NoLocal,
+				NoAck:       config.AutoAck,
+				Exclusive:   config.Exclusive,
+				NoWait:      config.NoWait,
+				Arguments:   config.Args,
+			}
+			res := &basicConsumeOk{}
+			if err = ch.call(req, res); err != nil {
+				Logger.Printf("Channel %d recovery consume error for tag %s: %v", ch.id, tag, err)
+				consumeErr = err
+				break
+			}
+		}
+
+		if consumeErr != nil {
+			continue
+		}
+
+		Logger.Printf("Channel %d recovery successful", ch.id)
+		return nil
+	}
+
+	Logger.Printf("Channel %d recovery exhausted all %d retries", ch.id, ch.connection.MaxRetryCount())
+	ch.setClosed()
+	return err
+}
+
+// resetState clears the shutdown flags and re-initializes the internal
+// channels so the AMQP channel can be reused after a successful reconnection.
+// The caller must hold ch.m.
+func (ch *Channel) resetState() {
+	ch.closed.Store(false)
+
+	ch.destructorM.Lock()
+	ch.destructed = false
+	ch.destructorM.Unlock()
+
+	ch.errors = make(chan *Error, 1)
+	ch.close = make(chan struct{})
+	ch.rpc = make(chan message)
+
+	if ch.confirms != nil {
+		ch.confirms.publishedMut.Lock()
+		ch.confirms.published = 0
+		ch.confirms.publishedMut.Unlock()
+
+		ch.confirms.m.Lock()
+		ch.confirms.expecting = 1
+		ch.confirms.m.Unlock()
+	}
 }

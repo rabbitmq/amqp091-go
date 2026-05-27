@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"os"
 	"reflect"
@@ -74,6 +75,9 @@ type Config struct {
 	// If Dial is nil, net.DialTimeout with a 30s connection and 30s deadline is
 	// used during TLS and AMQP handshaking.
 	Dial func(network, addr string) (net.Conn, error)
+
+	// Recovery configuration for automatic reconnection
+	Recovery *Recovery
 }
 
 // NewConnectionProperties creates an amqp.Table to be used as amqp.Config.Properties.
@@ -93,10 +97,12 @@ func NewConnectionProperties() Table {
 // multiplexed on this channel.  There must always be active receivers for
 // every asynchronous message on this connection.
 type Connection struct {
-	destructor sync.Once  // teardown: notify listeners, close channels and the socket
-	closeOnce  sync.Once  // handshake: send one `connection.close` frame
-	sendM      sync.Mutex // conn writer mutex
-	m          sync.Mutex // struct field mutex
+	destructorM sync.Mutex // teardown: notify listeners, close channels and the socket
+	destructed  bool
+	closeM      sync.Mutex // handshake: send one `connection.close` frame
+	closeInit   bool
+	sendM       sync.Mutex // conn writer mutex
+	m           sync.Mutex // struct field mutex
 
 	conn io.ReadWriteCloser
 
@@ -118,12 +124,16 @@ type Connection struct {
 
 	Config Config // The negotiated Config after connection.open
 
+	url string // Stored for recovery
+
 	Major      int      // Server's major version
 	Minor      int      // Server's minor version
 	Properties Table    // Server properties
 	Locales    []string // Server locales
 
 	closed atomic.Bool // Will be true if the connection is closed, false otherwise.
+
+	reconnecting sync.Mutex
 }
 
 type readDeadliner interface {
@@ -281,7 +291,27 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		conn = client
 	}
 
-	return Open(conn, config)
+	if config.Recovery != nil {
+		if config.Recovery.ReconnectionConfig == nil {
+			config.Recovery.ReconnectionConfig = &ReconnectionConfig{
+				MaxRetryCount: 5,
+				RetryInterval: 5 * time.Second,
+			}
+		}
+		if config.Recovery.ConnectionRecovery == nil {
+			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{
+				config: config.Recovery.ReconnectionConfig,
+			}
+		}
+	}
+
+	c, err := Open(conn, config)
+	if c != nil && c.IsRecoveryEnabled() {
+		c.url = url
+		config.Recovery.ConnectionRecovery.WatchConnection(c)
+	}
+
+	return c, err
 }
 
 /*
@@ -299,6 +329,7 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 		errors:    make(chan *Error, 1),
 		close:     make(chan struct{}),
 		deadlines: make(chan readDeadliner, 1),
+		Config:    config,
 	}
 	go c.reader(conn)
 	return c, c.open(config)
@@ -426,8 +457,15 @@ func (c *Connection) Close() error {
 
 	var handshakeErr error
 	var initiated bool
-	c.closeOnce.Do(func() {
+
+	c.closeM.Lock()
+	if !c.closeInit {
+		c.closeInit = true
 		initiated = true
+	}
+	c.closeM.Unlock()
+
+	if initiated {
 		defer c.shutdown(nil)
 		handshakeErr = c.call(
 			&connectionClose{
@@ -436,7 +474,7 @@ func (c *Connection) Close() error {
 			},
 			&connectionCloseOk{},
 		)
-	})
+	}
 	if !initiated {
 		return ErrClosed
 	}
@@ -463,12 +501,19 @@ func (c *Connection) CloseDeadline(deadline time.Time) error {
 
 	var handshakeErr error
 	var initiated bool
-	c.closeOnce.Do(func() {
+
+	c.closeM.Lock()
+	if !c.closeInit {
+		c.closeInit = true
 		initiated = true
+	}
+	c.closeM.Unlock()
+
+	if initiated {
 		defer c.shutdown(nil)
 		if err := c.setDeadline(deadline); err != nil {
 			handshakeErr = err
-			return
+			return err
 		}
 		handshakeErr = c.call(
 			&connectionClose{
@@ -477,7 +522,7 @@ func (c *Connection) CloseDeadline(deadline time.Time) error {
 			},
 			&connectionCloseOk{},
 		)
-	})
+	}
 	if !initiated {
 		return ErrClosed
 	}
@@ -491,8 +536,15 @@ func (c *Connection) closeWith(err *Error) error {
 
 	var handshakeErr error
 	var initiated bool
-	c.closeOnce.Do(func() {
+
+	c.closeM.Lock()
+	if !c.closeInit {
+		c.closeInit = true
 		initiated = true
+	}
+	c.closeM.Unlock()
+
+	if initiated {
 		defer c.shutdown(err)
 		handshakeErr = c.call(
 			&connectionClose{
@@ -501,7 +553,7 @@ func (c *Connection) closeWith(err *Error) error {
 			},
 			&connectionCloseOk{},
 		)
-	})
+	}
 	if !initiated {
 		return ErrClosed
 	}
@@ -625,44 +677,59 @@ func (c *Connection) flush() (err error) {
 func (c *Connection) shutdown(err *Error) {
 	c.closed.Store(true)
 
-	c.destructor.Do(func() {
-		c.m.Lock()
-		defer c.m.Unlock()
+	c.destructorM.Lock()
+	if c.destructed {
+		c.destructorM.Unlock()
+		return
+	}
+	c.destructed = true
+	c.destructorM.Unlock()
 
-		if err != nil {
-			for _, c := range c.closes {
-				c <- err
-			}
-			c.errors <- err
-		}
-		// Shutdown handler goroutine can still receive the result.
-		close(c.errors)
+	c.m.Lock()
+	defer c.m.Unlock()
 
-		for _, c := range c.closes {
-			close(c)
-		}
-
-		for _, c := range c.blocks {
-			close(c)
+	if err != nil {
+		for _, listener := range c.closes {
+			listener <- err
 		}
 
-		// Shutdown the channel, but do not use closeChannel() as it calls
-		// releaseChannel() which requires the connection lock.
-		//
-		// Ranging over c.channels and calling releaseChannel() that mutates
-		// c.channels is racy - see commit 6063341 for an example.
-		for _, ch := range c.channels {
-			ch.shutdown(err)
+		select {
+		case c.errors <- err:
+		default:
+		}
+	}
+
+	// Shutdown handler goroutine can still receive the result.
+	close(c.errors)
+
+	if err == nil || !c.IsRecoveryEnabled() {
+		for _, listener := range c.closes {
+			close(listener)
 		}
 
-		c.conn.Close()
-		// reader exit
-		close(c.close)
+		for _, block := range c.blocks {
+			close(block)
+		}
+	}
 
+	// Shutdown the channel, but do not use closeChannel() as it calls
+	// releaseChannel() which requires the connection lock.
+	//
+	// Ranging over c.channels and calling releaseChannel() that mutates
+	// c.channels is racy - see commit 6063341 for an example.
+	for _, ch := range c.channels {
+		ch.shutdown(err)
+	}
+
+	c.conn.Close()
+	// reader exit
+	close(c.close)
+
+	if err == nil || !c.IsRecoveryEnabled() {
 		c.channels = nil
 		c.allocator = nil
 		c.noNotify = true
-	})
+	}
 }
 
 // All methods sent to the connection channel should be synchronous so we
@@ -907,6 +974,11 @@ func (c *Connection) openChannel() (*Channel, error) {
 		c.releaseChannel(ch)
 		return nil, err
 	}
+
+	if c.IsRecoveryEnabled() {
+		c.Config.Recovery.ConnectionRecovery.WatchChannel(ch)
+	}
+
 	return ch, nil
 }
 
@@ -1197,3 +1269,256 @@ func pick(client, server int) int {
 	}
 	return min(client, server)
 }
+
+func (c *Connection) cleanup() {
+	c.m.Lock()
+	defer c.m.Unlock()
+
+	for _, listener := range c.closes {
+		close(listener)
+	}
+
+	for _, block := range c.blocks {
+		close(block)
+	}
+
+	for _, ch := range c.channels {
+		ch.cleanup()
+	}
+
+	c.channels = nil
+	c.allocator = nil
+	c.noNotify = true
+}
+
+type ReconnectionConfig struct {
+	MaxRetryCount int
+	RetryInterval time.Duration
+}
+
+type IConnectionRecovery interface {
+	OnConnectionClose(conn *Connection, err *Error)
+	OnChannelClose(ch *Channel, err *Error)
+	WatchConnection(conn *Connection)
+	WatchChannel(ch *Channel)
+}
+
+type ITopologyRecovery interface {
+}
+
+type Recovery struct {
+	ReconnectionConfig *ReconnectionConfig
+	ConnectionRecovery IConnectionRecovery
+	TopologyRecovery   ITopologyRecovery
+}
+
+type DefaultConnectionRecovery struct {
+	config *ReconnectionConfig
+}
+
+func (d *DefaultConnectionRecovery) WatchConnection(conn *Connection) {
+	errCh := conn.NotifyClose(make(chan *Error, 1))
+	go func() {
+		for err := range errCh {
+			if err != nil {
+				Logger.Printf("Connection closed unexpectedly: %v", err)
+				d.OnConnectionClose(conn, err)
+			}
+		}
+	}()
+}
+
+func (d *DefaultConnectionRecovery) WatchChannel(ch *Channel) {
+	errCh := ch.NotifyClose(make(chan *Error, 1))
+	go func() {
+		for err := range errCh {
+			if err != nil {
+				Logger.Printf("Channel %d closed unexpectedly: %v", ch.id, err)
+				d.OnChannelClose(ch, err)
+			}
+		}
+	}()
+}
+
+func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Error) {
+	if !conn.IsRecoveryEnabled() {
+		Logger.Printf("Connection %d recovery is not enabled, skipping reconnect", conn.url)
+		return
+	}
+
+	// Reconnect connection
+	if err := conn.Reconnect(); err != nil {
+		Logger.Printf("Connection %d recovery failed: %v.", conn.url, err)
+		conn.cleanup()
+	}
+}
+
+func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
+	if !ch.connection.IsRecoveryEnabled() {
+		Logger.Printf("Channel %d recovery is not enabled, skipping reconnect", ch.id)
+		return
+	}
+
+	if ch.connection.IsClosed() {
+		Logger.Printf("Connection is closed, letting connection recovery handle channel %d", ch.id)
+		return
+	}
+
+	// Reconnect channel
+	if err := ch.Reconnect(); err != nil {
+		Logger.Printf("Channel %d recovery failed: %v.", ch.id, err)
+		ch.cleanup()
+	}
+}
+
+func DialRecovery(url string, recovery *Recovery) (*Connection, error) {
+	if recovery == nil {
+		recovery = &Recovery{}
+	}
+	config := Config{
+		Locale:   defaultLocale,
+		Recovery: recovery,
+	}
+	return DialConfig(url, config)
+}
+
+func (c *Connection) Reconnect() error {
+	if !c.IsRecoveryEnabled() {
+		return ErrClosed
+	}
+
+	c.reconnecting.Lock()
+	defer c.reconnecting.Unlock()
+
+	if !c.IsClosed() {
+		return nil
+	}
+
+	var err error
+	for i := 0; i < c.MaxRetryCount(); i++ {
+		Logger.Printf("Connection recovery attempt %d of %d", i+1, c.MaxRetryCount())
+		jitter := time.Duration(rand.Intn(500)) * time.Millisecond // Random 500ms jitter to avoid thundering herd
+		time.Sleep(c.RetryInterval() + jitter)
+
+		// Re-dial
+		var conn net.Conn
+		dialer := c.Config.Dial
+		if dialer == nil {
+			dialer = DefaultDial(defaultConnectionTimeout)
+		}
+
+		// We need to parse URL to get addr
+		uri, err := ParseURI(c.url)
+		if err != nil {
+			Logger.Printf("Connection recovery failed to parse URI: %v", err)
+			return err
+		}
+		addr := net.JoinHostPort(uri.Host, strconv.FormatInt(int64(uri.Port), 10))
+
+		conn, err = dialer("tcp", addr)
+		if err != nil {
+			Logger.Printf("Connection recovery dial error: %v", err)
+			continue
+		}
+
+		// TLS handshake if needed
+		if uri.Scheme == "amqps" {
+			client := tls.Client(conn, c.Config.TLSClientConfig)
+			if err = client.Handshake(); err != nil {
+				Logger.Printf("Connection recovery TLS handshake error: %v", err)
+				conn.Close()
+				continue
+			}
+			conn = client
+		}
+
+		c.m.Lock()
+		// Swap the connection
+		c.conn = conn
+		c.writer = &writer{bufio.NewWriter(conn)}
+
+		// Reset state
+		c.resetState()
+		c.m.Unlock()
+
+		go c.reader(conn)
+
+		if err = c.open(c.Config); err != nil {
+			Logger.Printf("Connection recovery open error: %v", err)
+			conn.Close()
+			continue
+		}
+
+		// Reconnect channels
+		c.m.Lock()
+		channels := make([]*Channel, 0, len(c.channels))
+		for _, ch := range c.channels {
+			channels = append(channels, ch)
+		}
+		c.m.Unlock()
+
+		for _, ch := range channels {
+			if err = ch.Reconnect(); err != nil {
+				Logger.Printf("Connection recovery failed to reconnect channel %d: %v", ch.id, err)
+				conn.Close()
+				break
+			}
+		}
+
+		// This error check is for retrying when the channels are not able to reconnect
+		if err != nil {
+			continue
+		}
+
+		Logger.Printf("Connection recovery successful")
+		return nil
+	}
+
+	Logger.Printf("Connection recovery exhausted all %d retries", c.MaxRetryCount())
+	if c.conn != nil {
+		c.conn.Close()
+	}
+	c.closed.Store(true)
+
+	return err
+}
+
+// resetState clears the shutdown and close flags and re-initializes the internal
+// channels so the connection can be reused after a successful reconnection.
+// The caller must hold c.m.
+func (c *Connection) resetState() {
+	c.closed.Store(false)
+
+	c.destructorM.Lock()
+	c.destructed = false
+	c.destructorM.Unlock()
+
+	c.closeM.Lock()
+	c.closeInit = false
+	c.closeM.Unlock()
+
+	c.errors = make(chan *Error, 1)
+	c.close = make(chan struct{})
+
+	// Re-create the rpc channel so we don't read stale messages from the previous connection
+	c.rpc = make(chan message)
+}
+
+func (c *Connection) IsRecoveryEnabled() bool {
+	return c.Config.Recovery != nil && c.Config.Recovery.ReconnectionConfig != nil && c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0
+}
+
+func (c *Connection) MaxRetryCount() int {
+	if c.IsRecoveryEnabled() {
+		return c.Config.Recovery.ReconnectionConfig.MaxRetryCount
+	}
+	return 0
+}
+
+func (c *Connection) RetryInterval() time.Duration {
+	if c.IsRecoveryEnabled() {
+		return c.Config.Recovery.ReconnectionConfig.RetryInterval
+	}
+	return 0
+}
+
