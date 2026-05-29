@@ -7,6 +7,7 @@ package amqp091
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"reflect"
 	"sync"
@@ -29,7 +30,7 @@ should be discarded and a new channel established.
 */
 type Channel struct {
 	destructorM sync.Mutex
-	destructed  bool
+	destructed  bool       // Will be true if the channel has been destroyed, false otherwise.
 	m           sync.Mutex // struct field mutex
 	confirmM    sync.Mutex // publisher confirms state mutex
 	notifyM     sync.RWMutex
@@ -78,7 +79,8 @@ type Channel struct {
 	header  *headerFrame
 	body    []byte
 
-	reconnecting sync.Mutex
+	reconnecting sync.Mutex // Will be true if the channel is reconnecting, false otherwise.
+	lifeCycle    *LifeCycle // The current state of the channel.
 }
 
 // Constructs a new channel with the given framing rules
@@ -92,6 +94,7 @@ func newChannel(c *Connection, id uint16) *Channel {
 		recv:       (*Channel).recvMethod,
 		errors:     make(chan *Error, 1),
 		close:      make(chan struct{}),
+		lifeCycle:  NewLifeCycle(),
 	}
 }
 
@@ -123,7 +126,14 @@ func (ch *Channel) shutdown(e *Error) {
 	// Broadcast abnormal shutdown
 	if e != nil {
 		for _, c := range ch.closes {
-			c <- e
+			select {
+			case c <- e:
+			default:
+				// If blocked/full, send in a goroutine so we never deadlock the shutdown sequence
+				go func(listener chan *Error, err *Error) {
+					listener <- err
+				}(c, e)
+			}
 		}
 		// Notify RPC if we're selecting
 		select {
@@ -165,6 +175,12 @@ func (ch *Channel) shutdown(e *Error) {
 		close(ch.errors)
 		close(ch.close)
 		ch.noNotify = true
+
+		var err error
+		if e != nil {
+			err = errors.New(e.Error())
+		}
+		ch.lifeCycle.SetState(&StateClosed{error: err})
 	} else {
 		close(ch.errors)
 		close(ch.close)
@@ -497,6 +513,8 @@ func (ch *Channel) Close() error {
 		return nil
 	}
 
+	ch.lifeCycle.SetState(&StateClosing{})
+
 	defer ch.connection.closeChannel(ch, nil)
 	return ch.call(
 		&channelClose{ReplyCode: replySuccess},
@@ -508,6 +526,11 @@ func (ch *Channel) Close() error {
 // is returned.
 func (ch *Channel) IsClosed() bool {
 	return ch.closed.Load()
+}
+
+// NotifyStateChange registers a listener for state changes.
+func (ch *Channel) NotifyStateChange(c chan *StateChanged) {
+	ch.lifeCycle.notifyStateChange(c)
 }
 
 /*
@@ -1928,11 +1951,15 @@ func (ch *Channel) Reconnect() error {
 		return nil
 	}
 
+	ch.lifeCycle.SetState(&StateReconnecting{})
+
 	var err error
 	for i := 0; i < ch.connection.MaxRetryCount(); i++ {
 		Logger.Printf("Channel %d recovery attempt %d of %d", ch.id, i+1, ch.connection.MaxRetryCount())
-		jitter := time.Duration(rand.Intn(500)) * time.Millisecond // Random 500ms jitter to avoid thundering herd
-		time.Sleep(ch.connection.RetryInterval() + jitter)
+		if i > 0 {
+			jitter := time.Duration(rand.Intn(500)) * time.Millisecond // Random 500ms jitter to avoid thundering herd
+			time.Sleep(ch.connection.RetryInterval() + jitter)
+		}
 
 		// Reset state
 		ch.m.Lock()
@@ -1984,11 +2011,13 @@ func (ch *Channel) Reconnect() error {
 		}
 
 		Logger.Printf("Channel %d recovery successful", ch.id)
+		ch.lifeCycle.SetState(&StateOpen{})
 		return nil
 	}
 
 	Logger.Printf("Channel %d recovery exhausted all %d retries", ch.id, ch.connection.MaxRetryCount())
 	ch.setClosed()
+	ch.lifeCycle.SetState(&StateClosed{error: err})
 	return err
 }
 
@@ -2007,12 +2036,6 @@ func (ch *Channel) resetState() {
 	ch.rpc = make(chan message)
 
 	if ch.confirms != nil {
-		ch.confirms.publishedMut.Lock()
-		ch.confirms.published = 0
-		ch.confirms.publishedMut.Unlock()
-
-		ch.confirms.m.Lock()
-		ch.confirms.expecting = 1
-		ch.confirms.m.Unlock()
+		ch.confirms.Reset()
 	}
 }

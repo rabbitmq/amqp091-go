@@ -133,7 +133,8 @@ type Connection struct {
 
 	closed atomic.Bool // Will be true if the connection is closed, false otherwise.
 
-	reconnecting sync.Mutex
+	reconnecting sync.Mutex // Will be true if the connection is reconnecting, false otherwise.
+	lifeCycle    *LifeCycle // The current state of the connection.
 }
 
 type readDeadliner interface {
@@ -198,6 +199,28 @@ func DialTLS_ExternalAuth(url string, amqps *tls.Config) (*Connection, error) {
 		TLSClientConfig: amqps,
 		SASL:            []Authentication{&ExternalAuth{}},
 	})
+}
+
+/*
+DialRecovery dials a connection with the given URL and recovery configuration.
+
+When a network failure occurs, the connection and all its channels will automatically
+attempt to reconnect based on the parameters specified in the Recovery configuration.
+If `recovery` is nil, a default recovery configuration is used.
+
+During the recovery process, applications can monitor state changes (such as reconnecting
+or closed) by registering a listener using `Connection.NotifyStateChange` and
+`Channel.NotifyStateChange`.
+*/
+func DialRecovery(url string, recovery *Recovery) (*Connection, error) {
+	if recovery == nil {
+		recovery = &Recovery{}
+	}
+	config := Config{
+		Locale:   defaultLocale,
+		Recovery: recovery,
+	}
+	return DialConfig(url, config)
 }
 
 // DialConfig accepts a string in the AMQP URI format and a configuration for
@@ -330,9 +353,14 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 		close:     make(chan struct{}),
 		deadlines: make(chan readDeadliner, 1),
 		Config:    config,
+		lifeCycle: NewLifeCycle(),
 	}
 	go c.reader(conn)
-	return c, c.open(config)
+	err := c.open(config)
+	if err == nil {
+		c.lifeCycle.SetState(&StateOpen{})
+	}
+	return c, err
 }
 
 /*
@@ -386,6 +414,11 @@ func (c *Connection) ConnectionState() tls.ConnectionState {
 		return conn.ConnectionState()
 	}
 	return tls.ConnectionState{}
+}
+
+// NotifyStateChange registers a listener for state changes.
+func (c *Connection) NotifyStateChange(ch chan *StateChanged) {
+	c.lifeCycle.notifyStateChange(ch)
 }
 
 /*
@@ -454,6 +487,8 @@ func (c *Connection) Close() error {
 	if c.IsClosed() {
 		return ErrClosed
 	}
+
+	c.lifeCycle.SetState(&StateClosing{})
 
 	var handshakeErr error
 	var initiated bool
@@ -690,7 +725,14 @@ func (c *Connection) shutdown(err *Error) {
 
 	if err != nil {
 		for _, listener := range c.closes {
-			listener <- err
+			select {
+			case listener <- err:
+			default:
+				// If blocked/full, send in a goroutine so we never deadlock the shutdown sequence
+				go func(l chan *Error, e *Error) {
+					l <- e
+				}(listener, err)
+			}
 		}
 
 		select {
@@ -729,6 +771,12 @@ func (c *Connection) shutdown(err *Error) {
 		c.channels = nil
 		c.allocator = nil
 		c.noNotify = true
+
+		var e error
+		if err != nil {
+			e = errors.New(err.Error())
+		}
+		c.lifeCycle.SetState(&StateClosed{error: e})
 	}
 }
 
@@ -866,7 +914,7 @@ func (c *Connection) reader(r io.Reader) {
 
 // Ensures that at least one frame is being sent at the tuned interval with a
 // jitter tolerance of 1s
-func (c *Connection) heartbeater(interval time.Duration, done chan *Error) {
+func (c *Connection) heartbeater(interval time.Duration, done chan struct{}) {
 	const maxServerHeartbeatsInFlight = 3
 
 	var sendTicks <-chan time.Time
@@ -974,6 +1022,8 @@ func (c *Connection) openChannel() (*Channel, error) {
 		c.releaseChannel(ch)
 		return nil, err
 	}
+
+	ch.lifeCycle.SetState(&StateOpen{})
 
 	if c.IsRecoveryEnabled() {
 		c.Config.Recovery.ConnectionRecovery.WatchChannel(ch)
@@ -1143,7 +1193,7 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 
 	// "The client should start sending heartbeats after receiving a
 	// Connection.Tune method"
-	go c.heartbeater(c.Config.Heartbeat/2, c.NotifyClose(make(chan *Error, 1)))
+	go c.heartbeater(c.Config.Heartbeat/2, c.close)
 
 	if err := c.send(&methodFrame{
 		ChannelId: 0,
@@ -1291,29 +1341,29 @@ func (c *Connection) cleanup() {
 	c.noNotify = true
 }
 
+// ReconnectionConfig is the configuration for the reconnection.
 type ReconnectionConfig struct {
-	MaxRetryCount int
-	RetryInterval time.Duration
+	MaxRetryCount int           // The maximum number of retries.
+	RetryInterval time.Duration // The interval between retries.
 }
 
+// IConnectionRecovery is the interface for the connection recovery.
 type IConnectionRecovery interface {
-	OnConnectionClose(conn *Connection, err *Error)
-	OnChannelClose(ch *Channel, err *Error)
-	WatchConnection(conn *Connection)
-	WatchChannel(ch *Channel)
+	OnConnectionClose(conn *Connection, err *Error) // Called when the connection is closed.
+	OnChannelClose(ch *Channel, err *Error)         // Called when the channel is closed.
+	WatchConnection(conn *Connection)               // Watch the connection for closed events.
+	WatchChannel(ch *Channel)                       // Watch the channel for closed events.
 }
 
-type ITopologyRecovery interface {
-}
-
+// Recovery is the configuration for the recovery.
 type Recovery struct {
-	ReconnectionConfig *ReconnectionConfig
-	ConnectionRecovery IConnectionRecovery
-	TopologyRecovery   ITopologyRecovery
+	ReconnectionConfig *ReconnectionConfig // The configuration for the reconnection.
+	ConnectionRecovery IConnectionRecovery // The implementation of the connection recovery.
 }
 
+// DefaultConnectionRecovery is the default implementation of the connection recovery.
 type DefaultConnectionRecovery struct {
-	config *ReconnectionConfig
+	config *ReconnectionConfig // The configuration for the reconnection.
 }
 
 func (d *DefaultConnectionRecovery) WatchConnection(conn *Connection) {
@@ -1371,17 +1421,7 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 	}
 }
 
-func DialRecovery(url string, recovery *Recovery) (*Connection, error) {
-	if recovery == nil {
-		recovery = &Recovery{}
-	}
-	config := Config{
-		Locale:   defaultLocale,
-		Recovery: recovery,
-	}
-	return DialConfig(url, config)
-}
-
+// Reconnect reconnects the connection.
 func (c *Connection) Reconnect() error {
 	if !c.IsRecoveryEnabled() {
 		return ErrClosed
@@ -1393,6 +1433,8 @@ func (c *Connection) Reconnect() error {
 	if !c.IsClosed() {
 		return nil
 	}
+
+	c.lifeCycle.SetState(&StateReconnecting{})
 
 	var err error
 	for i := 0; i < c.MaxRetryCount(); i++ {
@@ -1408,7 +1450,8 @@ func (c *Connection) Reconnect() error {
 		}
 
 		// We need to parse URL to get addr
-		uri, err := ParseURI(c.url)
+		var uri URI
+		uri, err = ParseURI(c.url)
 		if err != nil {
 			Logger.Printf("Connection recovery failed to parse URI: %v", err)
 			return err
@@ -1471,6 +1514,7 @@ func (c *Connection) Reconnect() error {
 		}
 
 		Logger.Printf("Connection recovery successful")
+		c.lifeCycle.SetState(&StateOpen{})
 		return nil
 	}
 
@@ -1479,6 +1523,7 @@ func (c *Connection) Reconnect() error {
 		c.conn.Close()
 	}
 	c.closed.Store(true)
+	c.lifeCycle.SetState(&StateClosed{error: err})
 
 	return err
 }
@@ -1504,10 +1549,12 @@ func (c *Connection) resetState() {
 	c.rpc = make(chan message)
 }
 
+// IsRecoveryEnabled checks if the recovery is enabled.
 func (c *Connection) IsRecoveryEnabled() bool {
 	return c.Config.Recovery != nil && c.Config.Recovery.ReconnectionConfig != nil && c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0
 }
 
+// MaxRetryCount returns the maximum number of retries if recovery is enabled, otherwise returns 0.
 func (c *Connection) MaxRetryCount() int {
 	if c.IsRecoveryEnabled() {
 		return c.Config.Recovery.ReconnectionConfig.MaxRetryCount
@@ -1515,10 +1562,10 @@ func (c *Connection) MaxRetryCount() int {
 	return 0
 }
 
+// RetryInterval returns the interval between retries if recovery is enabled, otherwise returns 0.
 func (c *Connection) RetryInterval() time.Duration {
 	if c.IsRecoveryEnabled() {
 		return c.Config.Recovery.ReconnectionConfig.RetryInterval
 	}
 	return 0
 }
-

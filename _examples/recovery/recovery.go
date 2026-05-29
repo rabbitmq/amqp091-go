@@ -17,13 +17,13 @@ func main() {
 	// Enable library logging
 	amqp.Logger = log.Default()
 
-	// 4. Register signal.NotifyContext with sigterm so that program exits gracefully on CTLR+C
+	// Register signal.NotifyContext with sigterm so that program exits gracefully on CTLR+C
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	url := "amqp://guest:guest@localhost:5672/"
 
-	// 1. Create a connection with DialRecovery(url, nil) , i.e. default recovery configuration
+	// Create a connection with DialRecovery(url, nil) , i.e. default recovery configuration
 	log.Printf("Dialing %s", url)
 	conn, err := amqp.DialRecovery(url, nil)
 	if err != nil {
@@ -31,11 +31,55 @@ func main() {
 	}
 	defer conn.Close()
 
+	signalBlock := sync.Cond{L: &sync.Mutex{}}
+	var isReconnecting bool
+	stateChanged := make(chan *amqp.StateChanged, 1)
+	conn.NotifyStateChange(stateChanged)
+
+	go func(ch chan *amqp.StateChanged) {
+		for statusChanged := range ch {
+			log.Printf("[connection] Status changed: %v", statusChanged)
+			switch statusChanged.To.(type) {
+			case *amqp.StateOpen:
+				signalBlock.L.Lock()
+				isReconnecting = false
+				signalBlock.Broadcast()
+				signalBlock.L.Unlock()
+			case *amqp.StateReconnecting:
+				log.Printf("[connection] Reconnecting to the AMQP server")
+				signalBlock.L.Lock()
+				isReconnecting = true
+				signalBlock.L.Unlock()
+			case *amqp.StateClosed:
+				stateClosed := statusChanged.To.(*amqp.StateClosed)
+				if stateClosed.GetError() != nil {
+					log.Printf("[connection] Connection closed with error: %v", stateClosed.GetError())
+				} else {
+					log.Printf("[connection] Connection closed normally")
+				}
+				signalBlock.L.Lock()
+				isReconnecting = false
+				signalBlock.Broadcast()
+				signalBlock.L.Unlock()
+				cancel()
+			}
+		}
+	}(stateChanged)
+
 	ch, err := conn.Channel()
 	if err != nil {
 		log.Fatalf("Failed to open a channel: %v", err)
 	}
 	defer ch.Close()
+
+	chanStateChanged := make(chan *amqp.StateChanged, 1)
+	ch.NotifyStateChange(chanStateChanged)
+
+	go func(c chan *amqp.StateChanged) {
+		for statusChanged := range c {
+			log.Printf("[channel] Status changed: %v", statusChanged)
+		}
+	}(chanStateChanged)
 
 	queueName := "recovery_test_queue"
 	q, err := ch.QueueDeclare(
@@ -52,7 +96,7 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// 3. Consumer goroutine is continuosly consume message
+	// Consumer goroutine is continuosly consume message
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -79,6 +123,9 @@ func main() {
 				return
 			case d, ok := <-msgs:
 				if !ok {
+					// Note: Consume channel does not close during automatic recovery.
+					// It simply blocks until recovery is complete and new messages arrive.
+					// If it does close, it means recovery failed or was disabled.
 					log.Println("Consumer channel closed")
 					return
 				}
@@ -87,7 +134,7 @@ func main() {
 		}
 	}()
 
-	// 2. Publisher goroutine will continuosly publish message, assume "Published Msg: 1" with increamental number.
+	// Publisher goroutine will continuosly publish message.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -115,6 +162,16 @@ func main() {
 					})
 				if err != nil {
 					log.Printf("Failed to publish message %d: %v", counter, err)
+					log.Println("Publisher is blocked, waiting for recovery...")
+					time.Sleep(10 * time.Millisecond) // Let the notifier run to update the state
+					signalBlock.L.Lock()
+					for isReconnecting { // Avoid spurious wakeups
+						signalBlock.Wait()
+					}
+					signalBlock.L.Unlock()
+					log.Println("Publisher is unblocked")
+					// Retry publishing the same message
+					continue
 				} else {
 					log.Printf("Published: %s", body)
 				}
