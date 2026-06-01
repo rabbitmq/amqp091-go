@@ -717,7 +717,7 @@ func (c *Connection) shutdown(err *Error) {
 		return
 	}
 	c.destructed = true
-	c.destructorM.Unlock()
+	defer c.destructorM.Unlock()
 
 	c.m.Lock()
 	defer c.m.Unlock()
@@ -1474,14 +1474,22 @@ func (c *Connection) Reconnect() error {
 			conn = client
 		}
 
+		// Reset state and swap connection under locks to ensure atomicity
+		// and prevent data races with concurrent readers/writers.
+		// Acquiring destructorM -> closeM -> m avoids any lock ordering deadlocks.
+		c.destructorM.Lock()
+		c.closeM.Lock()
 		c.m.Lock()
+
 		// Swap the connection
 		c.conn = conn
 		c.writer = &writer{bufio.NewWriter(conn)}
 
-		// Reset state
 		c.resetState()
+
 		c.m.Unlock()
+		c.closeM.Unlock()
+		c.destructorM.Unlock()
 
 		go c.reader(conn)
 
@@ -1529,17 +1537,11 @@ func (c *Connection) Reconnect() error {
 
 // resetState clears the shutdown and close flags and re-initializes the internal
 // channels so the connection can be reused after a successful reconnection.
-// The caller must hold c.m.
+// The caller must hold c.destructorM, c.closeM and c.m.
 func (c *Connection) resetState() {
 	c.closed.Store(false)
-
-	c.destructorM.Lock()
 	c.destructed = false
-	c.destructorM.Unlock()
-
-	c.closeM.Lock()
 	c.closeInit = false
-	c.closeM.Unlock()
 
 	c.errors = make(chan *Error, 1)
 	c.close = make(chan struct{})
@@ -1550,6 +1552,15 @@ func (c *Connection) resetState() {
 
 // IsRecoveryEnabled checks if the recovery is enabled.
 func (c *Connection) IsRecoveryEnabled() bool {
+	if c == nil {
+		return false
+	}
+	c.closeM.Lock()
+	closedOrClosing := c.closeInit
+	c.closeM.Unlock()
+	if closedOrClosing {
+		return false
+	}
 	return c.Config.Recovery != nil && c.Config.Recovery.ReconnectionConfig != nil && c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0
 }
 

@@ -114,7 +114,7 @@ func (ch *Channel) shutdown(e *Error) {
 		return
 	}
 	ch.destructed = true
-	ch.destructorM.Unlock()
+	defer ch.destructorM.Unlock()
 
 	ch.m.Lock()
 	defer ch.m.Unlock()
@@ -1961,10 +1961,13 @@ func (ch *Channel) Reconnect() error {
 			time.Sleep(ch.connection.RetryInterval() + jitter)
 		}
 
-		// Reset state
+		// Reset state under locks to ensure atomicity and prevent data races.
+		// Acquiring destructorM -> m avoids any lock ordering deadlocks.
+		ch.destructorM.Lock()
 		ch.m.Lock()
 		ch.resetState()
 		ch.m.Unlock()
+		ch.destructorM.Unlock()
 
 		if err = ch.open(); err != nil {
 			Logger.Printf("Channel %d recovery open error: %v", ch.id, err)
@@ -2023,13 +2026,10 @@ func (ch *Channel) Reconnect() error {
 
 // resetState clears the shutdown flags and re-initializes the internal
 // channels so the AMQP channel can be reused after a successful reconnection.
-// The caller must hold ch.m.
+// The caller must hold ch.destructorM and ch.m.
 func (ch *Channel) resetState() {
 	ch.closed.Store(false)
-
-	ch.destructorM.Lock()
 	ch.destructed = false
-	ch.destructorM.Unlock()
 
 	ch.errors = make(chan *Error, 1)
 	ch.close = make(chan struct{})
