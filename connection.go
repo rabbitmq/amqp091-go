@@ -547,7 +547,6 @@ func (c *Connection) CloseDeadline(deadline time.Time) error {
 	if initiated {
 		defer c.shutdown(nil)
 		if err := c.setDeadline(deadline); err != nil {
-			handshakeErr = err
 			return err
 		}
 		handshakeErr = c.call(
