@@ -13,9 +13,13 @@ import (
 	"strconv"
 )
 
+type ClientProperties struct {
+	ConnectionName string `json:"connection_name"`
+}
+
 type Connection struct {
-	Name        string `json:"name"`
-	ContainerId string `json:"container_id"`
+	Name             string           `json:"name"`
+	ClientProperties ClientProperties `json:"client_properties"`
 }
 
 func Connections() ([]Connection, error) {
@@ -32,42 +36,18 @@ func Connections() ([]Connection, error) {
 	return data, nil
 }
 
-func GetConnectionByContainerID(Id string) (*Connection, error) {
+func GetConnectionByName(name string) (*Connection, error) {
 	connections, err := Connections()
 	if err != nil {
 		return nil, err
 	}
 	for _, conn := range connections {
-		if conn.ContainerId == Id {
+		if conn.ClientProperties.ConnectionName == name {
 			return &conn, nil
 		}
 	}
 
 	return nil, errors.New("connection not found")
-}
-
-func DropConnectionContainerID(Id string) error {
-	connections, err := Connections()
-	if err != nil {
-		return err
-	}
-	connectionToDrop := ""
-	for _, conn := range connections {
-		if conn.ContainerId == Id {
-			connectionToDrop = conn.Name
-			break
-		}
-	}
-
-	if connectionToDrop == "" {
-		return errors.New("connection not found")
-	}
-
-	err = DropConnection(connectionToDrop, "15672")
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func DropConnection(name string, port string) error {

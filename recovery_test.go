@@ -7,9 +7,7 @@ package amqp091
 
 import (
 	"context"
-	"net"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -26,13 +24,17 @@ func (l testLogger) Printf(format string, v ...any) {
 
 // TestConnectionRecoveryPublish tests the connection recovery for publish.
 func TestConnectionRecoveryPublish(t *testing.T) {
-	SetLogger(testLogger{t: t})
-	defer SetLogger(NullLogger{})
-
-	// Create a connection with DialRecovery(url, nil)
-	conn, err := DialRecovery(amqpURL, nil)
+	connectionName := "test-connection-recovery-publish"
+	// Create a connection with Recovery
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
 	if err != nil {
-		t.Fatalf("DialRecovery failed: %v", err)
+		t.Fatalf("DialConfig failed: %v", err)
 	}
 	defer conn.Close()
 
@@ -59,7 +61,7 @@ func TestConnectionRecoveryPublish(t *testing.T) {
 		_ = ch.ExchangeDelete(exchangeName, false, false)
 	}()
 
-	queueName := "recovery_queue"
+	queueName := "recovery_publish_queue"
 	_, err = ch.QueueDeclare(
 		queueName, // name
 		true,      // durable
@@ -88,6 +90,7 @@ func TestConnectionRecoveryPublish(t *testing.T) {
 	}
 
 	// Publish message on the given channel
+	preRecoveryMessage := "hello recovery 1"
 	err = ch.PublishWithContext(
 		context.Background(),
 		exchangeName,
@@ -96,22 +99,23 @@ func TestConnectionRecoveryPublish(t *testing.T) {
 		false,
 		Publishing{
 			ContentType: "text/plain",
-			Body:        []byte("hello recovery 1"),
+			Body:        []byte(preRecoveryMessage),
 		},
 	)
 	if err != nil {
-		t.Fatalf("Publish 1 failed: %v", err)
+		t.Fatalf("Publish pre-recovery message failed: %v", err)
 	}
+	t.Logf("Published message pre-recovery: %s", preRecoveryMessage)
 
 	// Consume message on the given channel
 	msgs, err := ch.Consume(
 		queueName,
-		"",    // consumer tag
-		true,  // autoAck
-		false, // exclusive
-		false, // noLocal
-		false, // noWait
-		nil,   // args
+		"recovery_publish_consumer", // consumer tag
+		true,                        // autoAck
+		false,                       // exclusive
+		false,                       // noLocal
+		false,                       // noWait
+		nil,                         // args
 	)
 	if err != nil {
 		t.Fatalf("Consume failed: %v", err)
@@ -122,11 +126,12 @@ func TestConnectionRecoveryPublish(t *testing.T) {
 		if !ok {
 			t.Fatalf("Consume channel closed prematurely")
 		}
-		if string(d.Body) != "hello recovery 1" {
-			t.Fatalf("Expected message 'hello recovery 1', got: %s", string(d.Body))
+		if string(d.Body) != preRecoveryMessage {
+			t.Fatalf("Expected message '%s', got: %s", preRecoveryMessage, string(d.Body))
 		}
+		t.Logf("Received message pre-recovery: %s", string(d.Body))
 	case <-time.After(5 * time.Second):
-		t.Fatalf("Timeout waiting for message 1")
+		t.Fatalf("Timeout waiting for receive message pre-recovery: %s", preRecoveryMessage)
 	}
 
 	// Register with connection for NotifyStateChange
@@ -138,7 +143,7 @@ func TestConnectionRecoveryPublish(t *testing.T) {
 	ch.NotifyStateChange(chanStateChanged)
 
 	// Call Http API to close the current connection
-	dropConnection(t, conn)
+	dropConnection(t, connectionName)
 
 	// Wait for connection to be open
 	waitForConnectionOpen(t, stateChanged)
@@ -147,6 +152,7 @@ func TestConnectionRecoveryPublish(t *testing.T) {
 	waitForChannelOpen(t, chanStateChanged)
 
 	// Verify Publish message on the given channel post-recovery.
+	postRecoveryMessage := "hello recovery 2"
 	err = ch.PublishWithContext(
 		context.Background(),
 		exchangeName,
@@ -155,12 +161,13 @@ func TestConnectionRecoveryPublish(t *testing.T) {
 		false,
 		Publishing{
 			ContentType: "text/plain",
-			Body:        []byte("hello recovery 2"),
+			Body:        []byte(postRecoveryMessage),
 		},
 	)
 	if err != nil {
-		t.Fatalf("Publish 2 failed: %v", err)
+		t.Fatalf("Publish post-recovery message failed: %v", err)
 	}
+	t.Logf("Published message post-recovery: %s", postRecoveryMessage)
 
 	// Verify message is received on the given channel post-recovery.
 	select {
@@ -168,22 +175,28 @@ func TestConnectionRecoveryPublish(t *testing.T) {
 		if !ok {
 			t.Fatalf("Consume channel closed after recovery")
 		}
-		if string(d.Body) != "hello recovery 2" {
-			t.Fatalf("Expected message 'hello recovery 2', got: %s", string(d.Body))
+		if string(d.Body) != postRecoveryMessage {
+			t.Fatalf("Expected message '%s', got: %s", postRecoveryMessage, string(d.Body))
 		}
+		t.Logf("Received message post-recovery: %s", string(d.Body))
 	case <-time.After(10 * time.Second):
-		t.Fatalf("Timeout waiting for message 2 post-recovery")
+		t.Fatalf("Timeout waiting for receive message post-recovery: %s", postRecoveryMessage)
 	}
 }
 
 // TestConnectionRecoveryConsume tests the connection recovery for consume.
 func TestConnectionRecoveryConsume(t *testing.T) {
-	SetLogger(testLogger{t: t})
-	defer SetLogger(NullLogger{})
-
-	conn, err := DialRecovery(amqpURL, nil)
+	connectionName := "test-connection-recovery-consume"
+	// Create a connection with Recovery
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
 	if err != nil {
-		t.Fatalf("DialRecovery failed: %v", err)
+		t.Fatalf("DialConfig failed: %v", err)
 	}
 	defer conn.Close()
 
@@ -262,7 +275,7 @@ func TestConnectionRecoveryConsume(t *testing.T) {
 	ch.NotifyStateChange(chanStateChanged)
 
 	// Drop the connection
-	dropConnection(t, conn)
+	dropConnection(t, connectionName)
 
 	// Wait for connection to recover using connection.NotifyStateChange like before
 	waitForConnectionOpen(t, stateChanged)
@@ -290,43 +303,27 @@ func TestConnectionRecoveryConsume(t *testing.T) {
 	}
 }
 
-func dropConnection(t *testing.T, conn *Connection) {
-	localAddr := conn.LocalAddr().String()
-	_, localPortStr, err := net.SplitHostPort(localAddr)
-	if err != nil {
-		t.Fatalf("SplitHostPort failed for localAddr %s: %v", localAddr, err)
-	}
-
+func dropConnection(t *testing.T, name string) {
 	var targetConnName string
 	loopDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(loopDeadline) {
-		conns, err := utils.Connections()
+		connection, err := utils.GetConnectionByName(name)
 		if err != nil {
-			t.Logf("Failure listing connections (will retry): %v", err)
-			time.Sleep(time.Second)
+			t.Logf("Failure getting connection by name (will retry): %v", err)
+			time.Sleep(2 * time.Second)
 			continue
 		}
-
-		for _, c := range conns {
-			if strings.Contains(c.Name, ":"+localPortStr+" ->") {
-				targetConnName = c.Name
-				break
-			}
-		}
-
-		if targetConnName != "" {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+		targetConnName = connection.Name
+		break
 	}
 
 	if targetConnName == "" {
 		conns, _ := utils.Connections()
-		t.Fatalf("Could not find connection name for local address: %s (port: %s) in connections: %+v", localAddr, localPortStr, conns)
+		t.Fatalf("Could not find connection by name: %s in connections: %+v", name, conns)
 	}
 
 	t.Logf("Dropping connection: %s", targetConnName)
-	err = utils.DropConnection(url.PathEscape(targetConnName), "15672")
+	err := utils.DropConnection(url.PathEscape(targetConnName), "15672")
 	if err != nil {
 		t.Fatalf("DropConnection failed: %v", err)
 	}
