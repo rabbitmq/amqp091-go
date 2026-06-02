@@ -14,14 +14,6 @@ import (
 	"github.com/rabbitmq/amqp091-go/test/utils"
 )
 
-type testLogger struct {
-	t *testing.T
-}
-
-func (l testLogger) Printf(format string, v ...any) {
-	l.t.Logf("[lib] "+format, v...)
-}
-
 // TestConnectionRecoveryPublish tests the connection recovery for publish.
 func TestConnectionRecoveryPublish(t *testing.T) {
 	connectionName := "test-connection-recovery-publish"

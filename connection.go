@@ -331,7 +331,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 	c, err := Open(conn, config)
 	if c != nil && c.IsRecoveryEnabled() {
 		c.url = url
-		config.Recovery.ConnectionRecovery.WatchConnection(c)
+		c.watchConnection()
 	}
 
 	return c, err
@@ -1025,7 +1025,7 @@ func (c *Connection) openChannel() (*Channel, error) {
 	ch.lifeCycle.SetState(&StateOpen{})
 
 	if c.IsRecoveryEnabled() {
-		c.Config.Recovery.ConnectionRecovery.WatchChannel(ch)
+		ch.watchChannel()
 	}
 
 	return ch, nil
@@ -1340,6 +1340,20 @@ func (c *Connection) cleanup() {
 	c.noNotify = true
 }
 
+func (c *Connection) watchConnection() {
+	errCh := c.NotifyClose(make(chan *Error, 1))
+	go func() {
+		for err := range errCh {
+			if err != nil {
+				Logger.Printf("Connection closed unexpectedly: %v", err)
+				if c.Config.Recovery != nil && c.Config.Recovery.ConnectionRecovery != nil {
+					c.Config.Recovery.ConnectionRecovery.OnConnectionClose(c, err)
+				}
+			}
+		}
+	}()
+}
+
 // ReconnectionConfig is the configuration for the reconnection.
 type ReconnectionConfig struct {
 	MaxRetryCount int           // The maximum number of retries.
@@ -1347,11 +1361,15 @@ type ReconnectionConfig struct {
 }
 
 // IConnectionRecovery is the interface for the connection recovery.
+//
+// The err parameter in OnConnectionClose and OnChannelClose provides the reason
+// why the connection or channel was closed. Custom implementations can use this
+// parameter to perform conditional recovery (e.g., skip recovery for specific
+// protocol errors like 403 ACCESS_REFUSED or 404 NOT_FOUND), log errors to
+// external monitoring systems (e.g., Prometheus), or trigger alerts.
 type IConnectionRecovery interface {
 	OnConnectionClose(conn *Connection, err *Error) // Called when the connection is closed.
 	OnChannelClose(ch *Channel, err *Error)         // Called when the channel is closed.
-	WatchConnection(conn *Connection)               // Watch the connection for closed events.
-	WatchChannel(ch *Channel)                       // Watch the channel for closed events.
 }
 
 // Recovery is the configuration for the recovery.
@@ -1365,54 +1383,34 @@ type DefaultConnectionRecovery struct {
 	config *ReconnectionConfig // The configuration for the reconnection.
 }
 
-func (d *DefaultConnectionRecovery) WatchConnection(conn *Connection) {
-	errCh := conn.NotifyClose(make(chan *Error, 1))
-	go func() {
-		for err := range errCh {
-			if err != nil {
-				Logger.Printf("Connection closed unexpectedly: %v", err)
-				d.OnConnectionClose(conn, err)
-			}
-		}
-	}()
-}
-
-func (d *DefaultConnectionRecovery) WatchChannel(ch *Channel) {
-	errCh := ch.NotifyClose(make(chan *Error, 1))
-	go func() {
-		for err := range errCh {
-			if err != nil {
-				Logger.Printf("Channel %d closed unexpectedly: %v", ch.id, err)
-				d.OnChannelClose(ch, err)
-			}
-		}
-	}()
-}
-
 func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Error) {
+	Logger.Printf("Connection closed with error: %v", err)
 	if !conn.IsRecoveryEnabled() {
-		Logger.Printf("Connection %d recovery is not enabled, skipping reconnect", conn.url)
+		Logger.Printf("Connection %s recovery is not enabled, skipping reconnect. ", conn.url)
 		return
 	}
 
+	Logger.Printf("Initiating connection recovery for %s.", conn.url)
 	// Reconnect connection
 	if err := conn.Reconnect(); err != nil {
-		Logger.Printf("Connection %d recovery failed: %v.", conn.url, err)
+		Logger.Printf("Connection %s recovery failed: %v.", conn.url, err)
 		conn.cleanup()
 	}
 }
 
 func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
+	Logger.Printf("Channel %d closed with error: %v", ch.id, err)
 	if !ch.connection.IsRecoveryEnabled() {
-		Logger.Printf("Channel %d recovery is not enabled, skipping reconnect", ch.id)
+		Logger.Printf("Channel %d recovery is not enabled, skipping reconnect.", ch.id)
 		return
 	}
 
 	if ch.connection.IsClosed() {
-		Logger.Printf("Connection is closed, letting connection recovery handle channel %d", ch.id)
+		Logger.Printf("Connection is closed, letting connection recovery handle channel %d.", ch.id)
 		return
 	}
 
+	Logger.Printf("Initiating channel %d recovery", ch.id)
 	// Reconnect channel
 	if err := ch.Reconnect(); err != nil {
 		Logger.Printf("Channel %d recovery failed: %v.", ch.id, err)

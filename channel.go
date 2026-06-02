@@ -1939,6 +1939,20 @@ func (ch *Channel) cleanup() {
 	ch.noNotify = true
 }
 
+func (ch *Channel) watchChannel() {
+	errCh := ch.NotifyClose(make(chan *Error, 1))
+	go func() {
+		for err := range errCh {
+			if err != nil {
+				Logger.Printf("Channel %d closed unexpectedly: %v", ch.id, err)
+				if ch.connection.Config.Recovery != nil && ch.connection.Config.Recovery.ConnectionRecovery != nil {
+					ch.connection.Config.Recovery.ConnectionRecovery.OnChannelClose(ch, err)
+				}
+			}
+		}
+	}()
+}
+
 func (ch *Channel) Reconnect() error {
 	if !ch.connection.IsRecoveryEnabled() {
 		return ErrClosed
