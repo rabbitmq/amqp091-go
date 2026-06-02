@@ -2,16 +2,24 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+var url = flag.String("url", "amqp://guest:guest@localhost:5672/", "AMQP URL")
+
+func init() {
+	flag.Parse()
+}
 
 func main() {
 	// Enable library logging
@@ -21,11 +29,9 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	url := "amqp://guest:guest@localhost:5672/"
-
 	// Create a connection with DialRecovery(url, nil) , i.e. default recovery configuration
-	log.Printf("Dialing %s", url)
-	conn, err := amqp.DialRecovery(url, nil)
+	log.Printf("Dialing %s", *url)
+	conn, err := amqp.DialRecovery(*url, nil)
 	if err != nil {
 		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
 	}
@@ -176,6 +182,26 @@ func main() {
 					log.Printf("Published: %s", body)
 				}
 				counter++
+			}
+		}
+	}()
+
+	// Stats will continuosly monitor the number of active goroutines every 1 minute.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		log.Println("Stats started. Monitoring goroutines...")
+		for {
+			select {
+			case <-ctx.Done():
+				log.Println("Context cancelled, stopping stats")
+				return
+			case <-ticker.C:
+				log.Printf("[stats] Goroutines: %d", runtime.NumGoroutine())
 			}
 		}
 	}()
