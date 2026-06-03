@@ -359,3 +359,172 @@ func waitForChannelOpen(t *testing.T, chanStateChanged chan *StateChanged) {
 		}
 	}
 }
+
+func waitForChannelClose(t *testing.T, chanStateChanged chan *StateChanged, chanID int, reason string) {
+	var chanClosedSeen bool
+	var chanReconnectingSeen bool
+	var chanOpenSeen bool
+
+	loopDeadline := time.After(3 * time.Second)
+	for {
+		select {
+		case sc := <-chanStateChanged:
+			t.Logf("Channel %d state changed: %s", chanID, sc)
+			if _, ok := sc.To.(*StateClosed); ok {
+				chanClosedSeen = true
+			}
+			if _, ok := sc.To.(*StateReconnecting); ok {
+				chanReconnectingSeen = true
+			}
+			if _, ok := sc.To.(*StateOpen); ok {
+				chanOpenSeen = true
+			}
+		case <-loopDeadline:
+			if !chanClosedSeen {
+				t.Fatalf("Expected Channel %d to transition to StateClosed", chanID)
+			}
+			if chanReconnectingSeen || chanOpenSeen {
+				t.Fatalf("Channel %d recovery was triggered for %s!", chanID, reason)
+			}
+			return
+		}
+	}
+}
+
+// TestConnectionRecoveryNonRecoverableChannelClose tests that channel recovery is NOT triggered
+// when a channel is closed due to soft exceptions (errors not present in RecoverableExceptionsCodes).
+// It verifies both PRECONDITION_FAILED (406) and RESOURCE_LOCKED (405) leave the connection open,
+// transition the channel to StateClosed, and do not trigger automatic recovery.
+func TestConnectionRecoveryNonRecoverableChannelClose(t *testing.T) {
+	connectionName := "test-non-recoverable-channel-close"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	// --- 1. Test PRECONDITION_FAILED (406) using a durable mismatch on a non-exclusive queue ---
+	ch1, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("First Channel creation failed: %v", err)
+	}
+	defer ch1.Close()
+
+	chanStateChanged1 := make(chan *StateChanged, 10)
+	ch1.NotifyStateChange(chanStateChanged1)
+
+	queueNamePrecondition := "precondition_failed_test_queue"
+	_, _ = ch1.QueueDelete(queueNamePrecondition, false, false, false)
+
+	// Declare non-exclusive queue as durable: true
+	_, err = ch1.QueueDeclare(
+		queueNamePrecondition,
+		true,  // durable
+		false, // auto-delete
+		false, // exclusive
+		false, // no-wait
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("QueueDeclare durable:true failed: %v", err)
+	}
+	defer func() {
+		// Clean up queue using a fresh channel since ch1 will be closed
+		if !conn.IsClosed() {
+			if cleanCh, err := conn.Channel(); err == nil {
+				_, _ = cleanCh.QueueDelete(queueNamePrecondition, false, false, false)
+				cleanCh.Close()
+			}
+		}
+	}()
+
+	// Declare again on SAME channel with durable: false (PreconditionFailed)
+	_, err = ch1.QueueDeclare(
+		queueNamePrecondition,
+		false, // durable (mismatched)
+		false, // auto-delete
+		false, // exclusive
+		false, // no-wait
+		nil,
+	)
+	if err == nil {
+		t.Fatalf("Expected PreconditionFailed error but second QueueDeclare succeeded")
+	}
+
+	amqpErr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("Expected amqp.Error, got: %T (%v)", err, err)
+	}
+	if amqpErr.Code != PreconditionFailed {
+		t.Fatalf("Expected PreconditionFailed (406), got code: %d", amqpErr.Code)
+	}
+
+	// Verify ch1 transitioned to StateClosed and did not trigger recovery
+	waitForChannelClose(t, chanStateChanged1, int(ch1.id), "PreconditionFailed")
+
+	if conn.IsClosed() {
+		t.Fatalf("Expected connection to remain open after PRECONDITION_FAILED soft exception")
+	}
+	t.Log("Verified connection remains open after PRECONDITION_FAILED")
+
+	// --- 2. Test RESOURCE_LOCKED (405) using exclusive queue settings ---
+	ch2, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Second Channel creation failed: %v", err)
+	}
+	defer ch2.Close()
+
+	chanStateChanged2 := make(chan *StateChanged, 10)
+	ch2.NotifyStateChange(chanStateChanged2)
+
+	queueNameResource := "resource_locked_test_queue"
+	_, _ = ch2.QueueDelete(queueNameResource, false, false, false)
+
+	// Declare as exclusive: true, auto-delete: true
+	_, err = ch2.QueueDeclare(
+		queueNameResource,
+		false, // durable
+		true,  // auto-delete
+		true,  // exclusive
+		false, // no-wait
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("QueueDeclare exclusive:true failed: %v", err)
+	}
+
+	// Declare again on SAME channel with exclusive: false (ResourceLocked)
+	_, err = ch2.QueueDeclare(
+		queueNameResource,
+		false, // durable
+		true,  // auto-delete
+		false, // exclusive (mismatched)
+		false, // no-wait
+		nil,
+	)
+	if err == nil {
+		t.Fatalf("Expected ResourceLocked error but second QueueDeclare succeeded")
+	}
+
+	amqpErr, ok = err.(*Error)
+	if !ok {
+		t.Fatalf("Expected amqp.Error, got: %T (%v)", err, err)
+	}
+	if amqpErr.Code != ResourceLocked {
+		t.Fatalf("Expected ResourceLocked (405), got code: %d", amqpErr.Code)
+	}
+
+	// Verify ch2 transitioned to StateClosed and did not trigger recovery
+	waitForChannelClose(t, chanStateChanged2, int(ch2.id), "ResourceLocked")
+
+	if conn.IsClosed() {
+		t.Fatalf("Expected connection to remain open after RESOURCE_LOCKED soft exception")
+	}
+	t.Log("Verified connection remains open after RESOURCE_LOCKED")
+}

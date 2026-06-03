@@ -142,7 +142,7 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 	}
 
-	if e == nil || !ch.connection.IsRecoveryEnabled() {
+	if e == nil || !ch.connection.IsRecoveryEnabled() || !ch.connection.isRecoverable(e) {
 		ch.consumers.close()
 
 		for _, c := range ch.closes {

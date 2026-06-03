@@ -316,10 +316,9 @@ func DialConfig(url string, config Config) (*Connection, error) {
 
 	if config.Recovery != nil {
 		if config.Recovery.ReconnectionConfig == nil {
-			config.Recovery.ReconnectionConfig = &ReconnectionConfig{
-				MaxRetryCount: 5,
-				RetryInterval: 5 * time.Second,
-			}
+			config.Recovery.ReconnectionConfig = DefaultReconnectionConfig.Clone()
+		} else if config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes == nil {
+			config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes = DefaultRecoverableExceptionsCodes
 		}
 		if config.Recovery.ConnectionRecovery == nil {
 			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{
@@ -1354,70 +1353,6 @@ func (c *Connection) watchConnection() {
 	}()
 }
 
-// ReconnectionConfig is the configuration for the reconnection.
-type ReconnectionConfig struct {
-	MaxRetryCount int           // The maximum number of retries.
-	RetryInterval time.Duration // The interval between retries.
-}
-
-// IConnectionRecovery is the interface for the connection recovery.
-//
-// The err parameter in OnConnectionClose and OnChannelClose provides the reason
-// why the connection or channel was closed. Custom implementations can use this
-// parameter to perform conditional recovery (e.g., skip recovery for specific
-// protocol errors like 403 ACCESS_REFUSED or 404 NOT_FOUND), log errors to
-// external monitoring systems (e.g., Prometheus), or trigger alerts.
-type IConnectionRecovery interface {
-	OnConnectionClose(conn *Connection, err *Error) // Called when the connection is closed.
-	OnChannelClose(ch *Channel, err *Error)         // Called when the channel is closed.
-}
-
-// Recovery is the configuration for the recovery.
-type Recovery struct {
-	ReconnectionConfig *ReconnectionConfig // The configuration for the reconnection.
-	ConnectionRecovery IConnectionRecovery // The implementation of the connection recovery.
-}
-
-// DefaultConnectionRecovery is the default implementation of the connection recovery.
-type DefaultConnectionRecovery struct {
-	config *ReconnectionConfig // The configuration for the reconnection.
-}
-
-func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Error) {
-	Logger.Printf("Connection closed with error: %v", err)
-	if !conn.IsRecoveryEnabled() {
-		Logger.Printf("Connection %s recovery is not enabled, skipping reconnect. ", conn.url)
-		return
-	}
-
-	Logger.Printf("Initiating connection recovery for %s.", conn.url)
-	// Reconnect connection
-	if err := conn.Reconnect(); err != nil {
-		Logger.Printf("Connection %s recovery failed: %v.", conn.url, err)
-		conn.cleanup()
-	}
-}
-
-func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
-	Logger.Printf("Channel %d closed with error: %v", ch.id, err)
-	if !ch.connection.IsRecoveryEnabled() {
-		Logger.Printf("Channel %d recovery is not enabled, skipping reconnect.", ch.id)
-		return
-	}
-
-	if ch.connection.IsClosed() {
-		Logger.Printf("Connection is closed, letting connection recovery handle channel %d.", ch.id)
-		return
-	}
-
-	Logger.Printf("Initiating channel %d recovery", ch.id)
-	// Reconnect channel
-	if err := ch.Reconnect(); err != nil {
-		Logger.Printf("Channel %d recovery failed: %v.", ch.id, err)
-		ch.cleanup()
-	}
-}
-
 // Reconnect reconnects the connection.
 func (c *Connection) Reconnect() error {
 	if !c.IsRecoveryEnabled() {
@@ -1559,7 +1494,10 @@ func (c *Connection) IsRecoveryEnabled() bool {
 	if closedOrClosing {
 		return false
 	}
-	return c.Config.Recovery != nil && c.Config.Recovery.ReconnectionConfig != nil && c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0
+	return c.Config.Recovery != nil &&
+		c.Config.Recovery.ReconnectionConfig != nil &&
+		c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0 &&
+		len(c.Config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes) > 0
 }
 
 // MaxRetryCount returns the maximum number of retries if recovery is enabled, otherwise returns 0.
