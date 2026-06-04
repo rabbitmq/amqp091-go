@@ -16,22 +16,22 @@ const (
 )
 
 var (
-	// DefaultRecoverableExceptionsCodes contains the default exception codes that trigger recovery.
-	DefaultRecoverableExceptionsCodes = []int{ConnectionForced, InternalError}
+	// DefaultRecoverableErrorCodes contains the default exception codes that trigger recovery.
+	DefaultRecoverableErrorCodes = []int{ConnectionForced, InternalError}
 
 	// DefaultReconnectionConfig is the default reconnection config settings.
 	DefaultReconnectionConfig = &ReconnectionConfig{
-		MaxRetryCount:              DefaultMaxRetryCount,
-		RetryInterval:              DefaultRetryInterval,
-		RecoverableExceptionsCodes: DefaultRecoverableExceptionsCodes,
+		MaxRetryCount:         DefaultMaxRetryCount,
+		RetryInterval:         DefaultRetryInterval,
+		RecoverableErrorCodes: DefaultRecoverableErrorCodes,
 	}
 )
 
 // ReconnectionConfig is the configuration for the reconnection.
 type ReconnectionConfig struct {
-	MaxRetryCount              int           // The maximum number of retries.
-	RetryInterval              time.Duration // The interval between retries.
-	RecoverableExceptionsCodes []int         // Predefined error codes that trigger recovery.
+	MaxRetryCount         int           // The maximum number of retries.
+	RetryInterval         time.Duration // The interval between retries.
+	RecoverableErrorCodes []int         // The error codes that trigger recovery.
 }
 
 // Clone returns a deep copy of the ReconnectionConfig.
@@ -40,14 +40,14 @@ func (rc *ReconnectionConfig) Clone() *ReconnectionConfig {
 		return nil
 	}
 	var codes []int
-	if rc.RecoverableExceptionsCodes != nil {
-		codes = make([]int, len(rc.RecoverableExceptionsCodes))
-		copy(codes, rc.RecoverableExceptionsCodes)
+	if rc.RecoverableErrorCodes != nil {
+		codes = make([]int, len(rc.RecoverableErrorCodes))
+		copy(codes, rc.RecoverableErrorCodes)
 	}
 	return &ReconnectionConfig{
-		MaxRetryCount:              rc.MaxRetryCount,
-		RetryInterval:              rc.RetryInterval,
-		RecoverableExceptionsCodes: codes,
+		MaxRetryCount:         rc.MaxRetryCount,
+		RetryInterval:         rc.RetryInterval,
+		RecoverableErrorCodes: codes,
 	}
 }
 
@@ -55,9 +55,9 @@ func (rc *ReconnectionConfig) Clone() *ReconnectionConfig {
 //
 // The err parameter in OnConnectionClose and OnChannelClose provides the reason
 // why the connection or channel was closed. Under the hood, DefaultConnectionRecovery
-// performs conditional recovery based on RecoverableExceptionsCodes. You can also customize
-// the list of recoverable errors dynamically using Connection.SetRecoverableExceptionsCodes and
-// Connection.AddRecoverableExceptionsCodes, or use custom implementations of this interface to
+// performs conditional recovery based on RecoverableErrorCodes. You can also customize
+// the list of recoverable errors dynamically using Connection.SetRecoverableErrorCodes and
+// Connection.AddRecoverableErrorCodes, or use custom implementations of this interface to
 // perform more advanced logic, log errors to external monitoring systems (e.g., Prometheus),
 // or trigger alerts.
 type IConnectionRecovery interface {
@@ -127,44 +127,4 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 		Logger.Printf("Channel %d recovery failed: %v.", ch.id, err)
 		ch.cleanup()
 	}
-}
-
-// isRecoverable returns true if the given error is recoverable based on RecoverableExceptionsCodes.
-func (c *Connection) isRecoverable(err *Error) bool {
-	if !c.IsRecoveryEnabled() {
-		return false
-	}
-	if err == nil {
-		return true
-	}
-	for _, code := range c.Config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes {
-		if err.Code == code {
-			return true
-		}
-	}
-	return false
-}
-
-// SetRecoverableExceptionsCodes sets the list of exception codes that trigger recovery.
-func (c *Connection) SetRecoverableExceptionsCodes(codes []int) error {
-	if c == nil {
-		return ErrClosed
-	}
-	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
-		return ErrRecoveryNotEnabled
-	}
-	c.Config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes = codes
-	return nil
-}
-
-// AddRecoverableExceptionsCodes adds one or more exception codes to the list of recoverable exceptions.
-func (c *Connection) AddRecoverableExceptionsCodes(codes ...int) error {
-	if c == nil {
-		return ErrClosed
-	}
-	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
-		return ErrRecoveryNotEnabled
-	}
-	c.Config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes = append(c.Config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes, codes...)
-	return nil
 }

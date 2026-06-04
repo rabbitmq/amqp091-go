@@ -392,7 +392,7 @@ func waitForChannelClose(t *testing.T, chanStateChanged chan *StateChanged, chan
 }
 
 // TestConnectionRecoveryNonRecoverableChannelClose tests that channel recovery is NOT triggered
-// when a channel is closed due to soft exceptions (errors not present in RecoverableExceptionsCodes).
+// when a channel is closed due to soft exceptions (errors not present in RecoverableErrorCodes).
 // It verifies both PRECONDITION_FAILED (406) and RESOURCE_LOCKED (405) leave the connection open,
 // transition the channel to StateClosed, and do not trigger automatic recovery.
 func TestConnectionRecoveryNonRecoverableChannelClose(t *testing.T) {

@@ -97,10 +97,10 @@ func NewConnectionProperties() Table {
 // multiplexed on this channel.  There must always be active receivers for
 // every asynchronous message on this connection.
 type Connection struct {
-	destructorM sync.Mutex // teardown: notify listeners, close channels and the socket
-	destructed  bool
-	closeM      sync.Mutex // handshake: send one `connection.close` frame
-	closeInit   bool
+	destructorM sync.Mutex // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
+	destructed  bool       // true when the connection has been destructed (teardown is initiated or completed)
+	closeM      sync.Mutex // Mutex for connection close handshake: sending a single connection.close frame to the broker
+	closeInit   bool       // true when a connection close has been initiated (connection.close frame has been or is being sent)
 	sendM       sync.Mutex // conn writer mutex
 	m           sync.Mutex // struct field mutex
 
@@ -124,7 +124,7 @@ type Connection struct {
 
 	Config Config // The negotiated Config after connection.open
 
-	url string // Stored for recovery
+	url string // Connection URL stored for recovery
 
 	Major      int      // Server's major version
 	Minor      int      // Server's minor version
@@ -133,7 +133,7 @@ type Connection struct {
 
 	closed atomic.Bool // Will be true if the connection is closed, false otherwise.
 
-	reconnecting sync.Mutex // Will be true if the connection is reconnecting, false otherwise.
+	reconnecting sync.Mutex // Mutex for protecting reconnect/recovery operations to ensure serialization and prevent race conditions.
 	lifeCycle    *LifeCycle // The current state of the connection.
 }
 
@@ -317,8 +317,8 @@ func DialConfig(url string, config Config) (*Connection, error) {
 	if config.Recovery != nil {
 		if config.Recovery.ReconnectionConfig == nil {
 			config.Recovery.ReconnectionConfig = DefaultReconnectionConfig.Clone()
-		} else if config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes == nil {
-			config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes = DefaultRecoverableExceptionsCodes
+		} else if config.Recovery.ReconnectionConfig.RecoverableErrorCodes == nil {
+			config.Recovery.ReconnectionConfig.RecoverableErrorCodes = DefaultRecoverableErrorCodes
 		}
 		if config.Recovery.ConnectionRecovery == nil {
 			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{
@@ -1318,6 +1318,7 @@ func pick(client, server int) int {
 	return min(client, server)
 }
 
+// cleanup releases registered resources and performs final teardown of the connection.
 func (c *Connection) cleanup() {
 	c.m.Lock()
 	defer c.m.Unlock()
@@ -1339,6 +1340,7 @@ func (c *Connection) cleanup() {
 	c.noNotify = true
 }
 
+// watchConnection watches the connection for close events and triggers recovery if needed.
 func (c *Connection) watchConnection() {
 	errCh := c.NotifyClose(make(chan *Error, 1))
 	go func() {
@@ -1353,7 +1355,10 @@ func (c *Connection) watchConnection() {
 	}()
 }
 
-// Reconnect reconnects the connection.
+// Reconnect establishes a new socket connection, replaces the existing closed/closing connection,
+// and recovers both connection and channel states.
+// It performs a retry loop to dial the broker, negotiate the AMQP handshake, and recover all
+// active channels and their registered consumers sequentially.
 func (c *Connection) Reconnect() error {
 	if !c.IsRecoveryEnabled() {
 		return ErrClosed
@@ -1497,7 +1502,23 @@ func (c *Connection) IsRecoveryEnabled() bool {
 	return c.Config.Recovery != nil &&
 		c.Config.Recovery.ReconnectionConfig != nil &&
 		c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0 &&
-		len(c.Config.Recovery.ReconnectionConfig.RecoverableExceptionsCodes) > 0
+		len(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes) > 0
+}
+
+// isRecoverable returns true if the given error is recoverable based on RecoverableErrorCodes.
+func (c *Connection) isRecoverable(err *Error) bool {
+	if !c.IsRecoveryEnabled() {
+		return false
+	}
+	if err == nil {
+		return true
+	}
+	for _, code := range c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes {
+		if err.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 // MaxRetryCount returns the maximum number of retries if recovery is enabled, otherwise returns 0.
@@ -1514,4 +1535,28 @@ func (c *Connection) RetryInterval() time.Duration {
 		return c.Config.Recovery.ReconnectionConfig.RetryInterval
 	}
 	return 0
+}
+
+// SetRecoverableErrorCodes sets the list of error codes that trigger recovery.
+func (c *Connection) SetRecoverableErrorCodes(codes []int) error {
+	if c == nil {
+		return ErrClosed
+	}
+	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
+		return ErrRecoveryNotEnabled
+	}
+	c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes = codes
+	return nil
+}
+
+// AddRecoverableErrorCodes adds one or more error codes to the list of recoverable error codes.
+func (c *Connection) AddRecoverableErrorCodes(codes ...int) error {
+	if c == nil {
+		return ErrClosed
+	}
+	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
+		return ErrRecoveryNotEnabled
+	}
+	c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes = append(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes, codes...)
+	return nil
 }

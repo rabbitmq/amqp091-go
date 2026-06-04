@@ -32,6 +32,10 @@ func commandNameBasedUniqueConsumerTag(commandName string) string {
 	return tagPrefix + tagInfix + tagSuffix
 }
 
+// ConsumerConfig stores the configuration parameters used when a consumer is registered.
+// This is required during automatic connection and channel recovery. When a network connection
+// drops and is restored, the library uses these stored parameters to automatically re-register
+// and resume all consumers on the recovered channels seamlessly, preserving the subscriber topology.
 type ConsumerConfig struct {
 	Queue     string
 	Consumer  string
@@ -43,6 +47,9 @@ type ConsumerConfig struct {
 }
 
 type consumerBuffers map[string]chan *Delivery
+
+// consumerConfigs maps unique consumer tags to their respective ConsumerConfig parameters,
+// facilitating the automatic re-registration of all consumers during channel recovery.
 type consumerConfigs map[string]ConsumerConfig
 
 // Concurrent type that manages the consumerTag ->

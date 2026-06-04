@@ -29,11 +29,11 @@ exchange.  Errors on methods with this Channel as a receiver means this channel
 should be discarded and a new channel established.
 */
 type Channel struct {
-	destructorM sync.Mutex
-	destructed  bool       // Will be true if the channel has been destroyed, false otherwise.
-	m           sync.Mutex // struct field mutex
-	confirmM    sync.Mutex // publisher confirms state mutex
-	notifyM     sync.RWMutex
+	destructorM sync.Mutex   // Mutex for destroying the channel.
+	destructed  bool         // Will be true if the channel has been destroyed, false otherwise.
+	m           sync.Mutex   // Mutex for the channel.
+	confirmM    sync.Mutex   // Mutex for the publisher confirms state.
+	notifyM     sync.RWMutex // Mutex for the notify state.
 
 	connection *Connection
 
@@ -79,7 +79,7 @@ type Channel struct {
 	header  *headerFrame
 	body    []byte
 
-	reconnecting sync.Mutex // Will be true if the channel is reconnecting, false otherwise.
+	reconnecting sync.Mutex // Mutex for reconnecting channel.
 	lifeCycle    *LifeCycle // The current state of the channel.
 }
 
@@ -1902,6 +1902,7 @@ func (ch *Channel) GetNextPublishSeqNo() uint64 {
 	return ch.confirms.published + 1
 }
 
+// cleanup closes all the channels and the confirms.
 func (ch *Channel) cleanup() {
 	ch.m.Lock()
 	defer ch.m.Unlock()
@@ -1939,6 +1940,7 @@ func (ch *Channel) cleanup() {
 	ch.noNotify = true
 }
 
+// watchChannel watches the channel for close events and triggers recovery if needed.
 func (ch *Channel) watchChannel() {
 	errCh := ch.NotifyClose(make(chan *Error, 1))
 	go func() {
@@ -1953,6 +1955,9 @@ func (ch *Channel) watchChannel() {
 	}()
 }
 
+// Reconnect initiates automatic channel recovery,
+// re-opens the AMQP channel with the same channel id and configuration,
+// and re-establishes all active publisher confirmations and consumer subscriptions.
 func (ch *Channel) Reconnect() error {
 	if !ch.connection.IsRecoveryEnabled() {
 		return ErrClosed
