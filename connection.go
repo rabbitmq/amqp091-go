@@ -97,12 +97,13 @@ func NewConnectionProperties() Table {
 // multiplexed on this channel.  There must always be active receivers for
 // every asynchronous message on this connection.
 type Connection struct {
-	destructorM sync.Mutex // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
-	destructed  bool       // true when the connection has been destructed (teardown is initiated or completed)
-	closeM      sync.Mutex // Mutex for connection close handshake: sending a single connection.close frame to the broker
-	closeInit   bool       // true when a connection close has been initiated (connection.close frame has been or is being sent)
-	sendM       sync.Mutex // conn writer mutex
-	m           sync.Mutex // struct field mutex
+	destructorM         sync.Mutex // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
+	destructed          bool       // true when the connection has been destructed (teardown is initiated or completed)
+	closeM              sync.Mutex // Mutex for connection close handshake: sending a single connection.close frame to the broker
+	closeInit           bool       // true when a connection close has been initiated (connection.close frame has been or is being sent)
+	sendM               sync.Mutex // conn writer mutex
+	m                   sync.Mutex // struct field mutex
+	recoveryErrorCodesM sync.Mutex // Mutex for protecting RecoverableErrorCodes updates and reads
 
 	conn io.ReadWriteCloser
 
@@ -318,7 +319,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		if config.Recovery.ReconnectionConfig == nil {
 			config.Recovery.ReconnectionConfig = DefaultReconnectionConfig.Clone()
 		} else if config.Recovery.ReconnectionConfig.RecoverableErrorCodes == nil {
-			config.Recovery.ReconnectionConfig.RecoverableErrorCodes = DefaultRecoverableErrorCodes
+			config.Recovery.ReconnectionConfig.RecoverableErrorCodes = cloneRecoverableErrorCodes(defaultRecoverableErrorCodes)
 		}
 		if config.Recovery.ConnectionRecovery == nil {
 			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{
@@ -1502,7 +1503,7 @@ func (c *Connection) IsRecoveryEnabled() bool {
 	return c.Config.Recovery != nil &&
 		c.Config.Recovery.ReconnectionConfig != nil &&
 		c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0 &&
-		len(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes) > 0
+		len(c.GetRecoverableErrorCodes()) > 0
 }
 
 // isRecoverable returns true if the given error is recoverable based on RecoverableErrorCodes.
@@ -1513,12 +1514,26 @@ func (c *Connection) isRecoverable(err *Error) bool {
 	if err == nil {
 		return true
 	}
-	for _, code := range c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes {
+	for _, code := range c.GetRecoverableErrorCodes() {
 		if err.Code == code {
 			return true
 		}
 	}
 	return false
+}
+
+// GetRecoverableErrorCodes returns a copy of the recoverable error codes.
+func (c *Connection) GetRecoverableErrorCodes() []int {
+	if c == nil {
+		return nil
+	}
+	c.recoveryErrorCodesM.Lock()
+	defer c.recoveryErrorCodesM.Unlock()
+	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
+		return nil
+	}
+
+	return cloneRecoverableErrorCodes(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes)
 }
 
 // MaxRetryCount returns the maximum number of retries if recovery is enabled, otherwise returns 0.
@@ -1545,6 +1560,8 @@ func (c *Connection) SetRecoverableErrorCodes(codes []int) error {
 	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
 		return ErrRecoveryNotEnabled
 	}
+	c.recoveryErrorCodesM.Lock()
+	defer c.recoveryErrorCodesM.Unlock()
 	c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes = codes
 	return nil
 }
@@ -1557,6 +1574,8 @@ func (c *Connection) AddRecoverableErrorCodes(codes ...int) error {
 	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
 		return ErrRecoveryNotEnabled
 	}
+	c.recoveryErrorCodesM.Lock()
+	defer c.recoveryErrorCodesM.Unlock()
 	c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes = append(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes, codes...)
 	return nil
 }

@@ -16,16 +16,27 @@ const (
 )
 
 var (
-	// DefaultRecoverableErrorCodes contains the default exception codes that trigger recovery.
-	DefaultRecoverableErrorCodes = []int{ConnectionForced, InternalError}
+	// defaultRecoverableErrorCodes contains the default exception codes that trigger recovery.
+	defaultRecoverableErrorCodes = []int{ConnectionForced, InternalError}
 
 	// DefaultReconnectionConfig is the default reconnection config settings.
 	DefaultReconnectionConfig = &ReconnectionConfig{
 		MaxRetryCount:         DefaultMaxRetryCount,
 		RetryInterval:         DefaultRetryInterval,
-		RecoverableErrorCodes: DefaultRecoverableErrorCodes,
+		RecoverableErrorCodes: cloneRecoverableErrorCodes(defaultRecoverableErrorCodes),
 	}
 )
+
+// cloneRecoverableErrorCodes returns a clone of given RecoverableErrorCodes slice.
+// It is used to avoid modifying the original slice.
+func cloneRecoverableErrorCodes(inRecoverableErrorCodes []int) []int {
+	if inRecoverableErrorCodes == nil {
+		return nil
+	}
+	codes := make([]int, len(inRecoverableErrorCodes))
+	copy(codes, inRecoverableErrorCodes)
+	return codes
+}
 
 // ReconnectionConfig is the configuration for the reconnection.
 type ReconnectionConfig struct {
@@ -39,15 +50,10 @@ func (rc *ReconnectionConfig) Clone() *ReconnectionConfig {
 	if rc == nil {
 		return nil
 	}
-	var codes []int
-	if rc.RecoverableErrorCodes != nil {
-		codes = make([]int, len(rc.RecoverableErrorCodes))
-		copy(codes, rc.RecoverableErrorCodes)
-	}
 	return &ReconnectionConfig{
 		MaxRetryCount:         rc.MaxRetryCount,
 		RetryInterval:         rc.RetryInterval,
-		RecoverableErrorCodes: codes,
+		RecoverableErrorCodes: cloneRecoverableErrorCodes(rc.RecoverableErrorCodes),
 	}
 }
 
