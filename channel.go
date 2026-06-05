@@ -1980,6 +1980,7 @@ func (ch *Channel) Reconnect() error {
 			time.Sleep(ch.connection.RetryInterval() + jitter)
 		}
 
+		// 1. Reset client-side state
 		// Reset state under locks to ensure atomicity and prevent data races.
 		// Acquiring destructorM -> m avoids any lock ordering deadlocks.
 		ch.destructorM.Lock()
@@ -1988,50 +1989,22 @@ func (ch *Channel) Reconnect() error {
 		ch.m.Unlock()
 		ch.destructorM.Unlock()
 
+		// 2. Open a fresh channel on the broker
 		if err = ch.open(); err != nil {
 			Logger.Printf("Channel %d recovery open error: %v", ch.id, err)
 			continue
 		}
 
-		// Re-enable confirms if needed
-		if ch.confirming {
-			if err = ch.Confirm(false); err != nil {
-				Logger.Printf("Channel %d recovery Confirm error: %v", ch.id, err)
-				continue
-			}
-		}
-
-		// Re-issue consumers
-		ch.consumers.Lock()
-		configs := make(map[string]ConsumerConfig, len(ch.consumers.configs))
-		for tag, config := range ch.consumers.configs {
-			configs[tag] = config
-		}
-		ch.consumers.Unlock()
-
-		var consumeErr error
-		for tag, config := range configs {
-			req := &basicConsume{
-				Queue:       config.Queue,
-				ConsumerTag: tag,
-				NoLocal:     config.NoLocal,
-				NoAck:       config.AutoAck,
-				Exclusive:   config.Exclusive,
-				NoWait:      config.NoWait,
-				Arguments:   config.Args,
-			}
-			res := &basicConsumeOk{}
-			if err = ch.call(req, res); err != nil {
-				Logger.Printf("Channel %d recovery consume error for tag %s: %v", ch.id, tag, err)
-				consumeErr = err
-				break
-			}
-		}
-
-		if consumeErr != nil {
+		// 3. Perform setup steps. If ANY step fails, we close the channel and retry.
+		if err = ch.setupChannel(); err != nil {
+			Logger.Printf("Channel %d setup failed: %v, closing and retrying...", ch.id, err)
+			ch.setClosed() // Marks closed locally
+			// Send channel.close to the broker so it knows this channel is defunct
+			_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Recovery retry"}, &channelCloseOk{})
 			continue
 		}
 
+		// If we reached here, recovery was 100% successful!
 		Logger.Printf("Channel %d recovery successful", ch.id)
 		ch.lifeCycle.SetState(&StateOpen{})
 		return nil
@@ -2041,6 +2014,48 @@ func (ch *Channel) Reconnect() error {
 	ch.setClosed()
 	ch.lifeCycle.SetState(&StateClosed{error: err})
 	return err
+}
+
+// setupChannel performs all channel-level setup steps sequentially.
+// If any of these fail, we return the error immediately so the reconnect loop can try a new channel.
+func (ch *Channel) setupChannel() error {
+	var err error
+	// TODO Re-enable QoS if it was tracked
+
+	// Re-enable confirms if needed
+	if ch.confirming {
+		if err = ch.Confirm(false); err != nil {
+			Logger.Printf("Channel %d recovery Confirm error: %v", ch.id, err)
+			return err
+		}
+	}
+
+	// TODO Recover Topology (Exchanges, Queues, Bindings) here
+
+	// Re-subscribe consumers
+	ch.consumers.Lock()
+	configs := make(map[string]ConsumerConfig, len(ch.consumers.configs))
+	for tag, config := range ch.consumers.configs {
+		configs[tag] = config
+	}
+	ch.consumers.Unlock()
+	for tag, config := range configs {
+		req := &basicConsume{
+			Queue:       config.Queue,
+			ConsumerTag: tag,
+			NoLocal:     config.NoLocal,
+			NoAck:       config.AutoAck,
+			Exclusive:   config.Exclusive,
+			NoWait:      config.NoWait,
+			Arguments:   config.Args,
+		}
+		res := &basicConsumeOk{}
+		if err = ch.call(req, res); err != nil {
+			Logger.Printf("Channel %d recovery consume error for tag %s: %v", ch.id, tag, err)
+			return err
+		}
+	}
+	return nil
 }
 
 // resetState clears the shutdown flags and re-initializes the internal
