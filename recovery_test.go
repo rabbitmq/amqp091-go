@@ -528,3 +528,122 @@ func TestConnectionRecoveryNonRecoverableChannelClose(t *testing.T) {
 	}
 	t.Log("Verified connection remains open after RESOURCE_LOCKED")
 }
+
+// TestConnectionRecoveryChannelIDReservation verifies that after connection recovery,
+// the allocator correctly reserves the IDs of recovered channels, and subsequently
+// opened channels do not conflict with the recovered channel's ID.
+func TestConnectionRecoveryChannelIDReservation(t *testing.T) {
+	connectionName := "test-channel-id-reservation-recovery"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	// Open channels 1, 2, 3, 4
+	ch1, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 1 creation failed: %v", err)
+	}
+	defer ch1.Close()
+
+	ch2, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 2 creation failed: %v", err)
+	}
+	defer ch2.Close()
+
+	ch3, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 3 creation failed: %v", err)
+	}
+	defer ch3.Close()
+
+	ch4, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 4 creation failed: %v", err)
+	}
+	defer ch4.Close()
+
+	id1, id2, id3, id4 := ch1.id, ch2.id, ch3.id, ch4.id
+	t.Logf("Opened channels with IDs: %d, %d, %d, %d", id1, id2, id3, id4)
+
+	// Close channels 2 and 4
+	if err := ch2.Close(); err != nil {
+		t.Fatalf("Failed to close channel 2: %v", err)
+	}
+	if err := ch4.Close(); err != nil {
+		t.Fatalf("Failed to close channel 4: %v", err)
+	}
+	t.Logf("Closed channels with IDs: %d, %d", id2, id4)
+
+	// Register for NotifyStateChange
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+
+	chanStateChanged1 := make(chan *StateChanged, 10)
+	ch1.NotifyStateChange(chanStateChanged1)
+
+	chanStateChanged3 := make(chan *StateChanged, 10)
+	ch3.NotifyStateChange(chanStateChanged3)
+
+	// Drop connection
+	dropConnection(t, connectionName)
+
+	// Wait for connection and channel recovery
+	waitForConnectionOpen(t, stateChanged)
+	waitForChannelOpen(t, chanStateChanged1)
+	waitForChannelOpen(t, chanStateChanged3)
+
+	// Verify channel IDs are reserved in the connection allocator
+	conn.m.Lock()
+	if conn.allocator == nil {
+		conn.m.Unlock()
+		t.Fatalf("Expected allocator to be initialized post-recovery")
+	}
+	isReserved1 := conn.allocator.reserved(int(id1))
+	isReserved3 := conn.allocator.reserved(int(id3))
+	isReserved2 := conn.allocator.reserved(int(id2))
+	isReserved4 := conn.allocator.reserved(int(id4))
+	conn.m.Unlock()
+
+	if !isReserved1 {
+		t.Fatalf("Expected recovered channel ID %d to be reserved in the allocator", id1)
+	}
+	if !isReserved3 {
+		t.Fatalf("Expected recovered channel ID %d to be reserved in the allocator", id3)
+	}
+	if isReserved2 {
+		t.Fatalf("Expected closed channel ID %d to NOT be reserved in the allocator", id2)
+	}
+	if isReserved4 {
+		t.Fatalf("Expected closed channel ID %d to NOT be reserved in the allocator", id4)
+	}
+	t.Logf("Verified channel IDs %d and %d are correctly reserved, and %d and %d are free in the allocator", id1, id3, id2, id4)
+
+	// Churn open channels post-recovery and verify they don't conflict with the recovered channel IDs
+	var activeChannels []*Channel
+	for i := 0; i < 5; i++ {
+		ch, err := conn.Channel()
+		if err != nil {
+			t.Fatalf("Failed to create channel during churn at iteration %d: %v", i, err)
+		}
+		activeChannels = append(activeChannels, ch)
+		t.Logf("Opened new channel with ID: %d", ch.id)
+
+		if ch.id == id1 || ch.id == id3 {
+			t.Fatalf("Conflict detected! New channel allocated with recovered channel ID: %d", ch.id)
+		}
+	}
+
+	// Close the churned channels
+	for _, ch := range activeChannels {
+		ch.Close()
+	}
+}

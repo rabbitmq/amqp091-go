@@ -1177,6 +1177,11 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	c.Config.ChannelMax = minUInt16(c.Config.ChannelMax, maxChannelMax)
 
 	c.allocator = newAllocator(1, int(c.Config.ChannelMax))
+	// Reserve all the channels that are already open
+	// This is to avoid allocating the same channel ID after a reconnection
+	for id := range c.channels {
+		c.allocator.reserve(int(id))
+	}
 
 	c.m.Unlock()
 
