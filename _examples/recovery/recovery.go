@@ -102,7 +102,7 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// Consumer goroutine is continuosly consume message
+	// Consumer goroutine will continuously consume message
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -140,7 +140,7 @@ func main() {
 		}
 	}()
 
-	// Publisher goroutine will continuosly publish message.
+	// Publisher goroutine will continuously publish message
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -186,7 +186,7 @@ func main() {
 		}
 	}()
 
-	// Stats will continuosly monitor the number of active goroutines every 1 minute.
+	// Stats will continuously monitor the number of active goroutines every 1 minute
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

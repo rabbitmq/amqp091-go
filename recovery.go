@@ -4,6 +4,7 @@
 package amqp091
 
 import (
+	"net/url"
 	"time"
 )
 
@@ -78,14 +79,19 @@ type Recovery struct {
 }
 
 // DefaultConnectionRecovery is the default implementation of the connection recovery.
-type DefaultConnectionRecovery struct {
-	config *ReconnectionConfig // The configuration for the reconnection.
-}
+type DefaultConnectionRecovery struct{}
 
 func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Error) {
 	Logger.Printf("Connection closed with error: %v", err)
+
+	parsedURL, err1 := url.Parse(conn.url)
+	if err1 != nil {
+		Logger.Printf("Error parsing connection URL: %v", err1)
+		return
+	}
+
 	if !conn.IsRecoveryEnabled() {
-		Logger.Printf("Connection %s recovery is not enabled, skipping reconnect. ", conn.url)
+		Logger.Printf("Connection %s recovery is not enabled, skipping reconnect. ", parsedURL.Redacted())
 		return
 	}
 
@@ -94,14 +100,14 @@ func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Err
 		if err != nil {
 			code = err.Code
 		}
-		Logger.Printf("Connection %s closed with non-recoverable error code %d, skipping reconnect.", conn.url, code)
+		Logger.Printf("Connection %s closed with non-recoverable error code %d, skipping reconnect.", parsedURL.Redacted(), code)
 		return
 	}
 
-	Logger.Printf("Initiating connection recovery for %s.", conn.url)
+	Logger.Printf("Initiating connection recovery for %s.", parsedURL.Redacted())
 	// Reconnect connection
 	if err := conn.Reconnect(); err != nil {
-		Logger.Printf("Connection %s recovery failed: %v.", conn.url, err)
+		Logger.Printf("Connection %s recovery failed: %v.", parsedURL.Redacted(), err)
 		conn.cleanup()
 	}
 }

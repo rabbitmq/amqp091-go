@@ -322,9 +322,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 			config.Recovery.ReconnectionConfig.RecoverableErrorCodes = cloneRecoverableErrorCodes(defaultRecoverableErrorCodes)
 		}
 		if config.Recovery.ConnectionRecovery == nil {
-			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{
-				config: config.Recovery.ReconnectionConfig,
-			}
+			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{}
 		}
 	}
 
