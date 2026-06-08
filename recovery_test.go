@@ -368,7 +368,16 @@ func waitForChannelClose(t *testing.T, chanStateChanged chan *StateChanged, chan
 	loopDeadline := time.After(3 * time.Second)
 	for {
 		select {
-		case sc := <-chanStateChanged:
+		case sc, ok := <-chanStateChanged:
+			if !ok {
+				if !chanClosedSeen {
+					t.Fatalf("Expected Channel %d to transition to StateClosed before channel closed", chanID)
+				}
+				if chanReconnectingSeen || chanOpenSeen {
+					t.Fatalf("Channel %d recovery was triggered for %s!", chanID, reason)
+				}
+				return
+			}
 			t.Logf("Channel %d state changed: %s", chanID, sc)
 			if _, ok := sc.To.(*StateClosed); ok {
 				chanClosedSeen = true
@@ -388,6 +397,21 @@ func waitForChannelClose(t *testing.T, chanStateChanged chan *StateChanged, chan
 			}
 			return
 		}
+	}
+}
+
+func waitForStateChangeClose(t *testing.T, ch chan *StateChanged, name, listenerName string) {
+	done := make(chan struct{})
+	go func() {
+		for range ch {
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Logf("State change channel for %s %s cleanly closed", name, listenerName)
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for state change channel for %s %s to close", name, listenerName)
 	}
 }
 
@@ -646,4 +670,90 @@ func TestConnectionRecoveryChannelIDReservation(t *testing.T) {
 	for _, ch := range activeChannels {
 		ch.Close()
 	}
+}
+
+// TestConnectionRecoveryLifeCycleNotifyStateChange tests that state change listener channels
+// are cleanly closed when connection or channels are closed.
+func TestConnectionRecoveryLifeCycleNotifyStateChange(t *testing.T) {
+	connectionName := "test-connection-recovery-lifecycle-notify-state-change"
+	// Create a connection with Recovery
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch1Name := "channel 1"
+	ch1, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("%s creation failed: %v", ch1Name, err)
+	}
+	defer ch1.Close()
+
+	ch2Name := "channel 2"
+	ch2, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("%s creation failed: %v", ch2Name, err)
+	}
+	defer ch2.Close()
+
+	// Register state change notifications on connection and channels
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+
+	chanStateChanged11 := make(chan *StateChanged, 10)
+	ch1.NotifyStateChange(chanStateChanged11)
+
+	// Register one more listener for channel 1
+	chanStateChanged12 := make(chan *StateChanged, 10)
+	ch1.NotifyStateChange(chanStateChanged12)
+
+	chanStateChanged21 := make(chan *StateChanged, 10)
+	ch2.NotifyStateChange(chanStateChanged21)
+
+	// Register one more listener for channel 2
+	chanStateChanged22 := make(chan *StateChanged, 10)
+	ch2.NotifyStateChange(chanStateChanged22)
+
+	// Drop connection
+	dropConnection(t, connectionName)
+
+	// Wait for connection and channels to recover
+	waitForConnectionOpen(t, stateChanged)
+	waitForChannelOpen(t, chanStateChanged11)
+	waitForChannelOpen(t, chanStateChanged21)
+
+	// Close channels
+	if err := ch1.Close(); err != nil {
+		t.Fatalf("Failed to close %s: %v", ch1Name, err)
+	}
+	if err := ch2.Close(); err != nil {
+		t.Fatalf("Failed to close %s: %v", ch2Name, err)
+	}
+
+	// Verify channel 1 listener 1 is cleanly closed within a timeout
+	waitForStateChangeClose(t, chanStateChanged11, ch1Name, "listener 1")
+
+	// Verify channel 1 listener 2 is cleanly closed within a timeout
+	waitForStateChangeClose(t, chanStateChanged12, ch1Name, "listener 2")
+
+	// Verify channel 2 listener is cleanly closed within a timeout
+	waitForStateChangeClose(t, chanStateChanged21, ch2Name, "listener 1")
+
+	// Verify channel 2 listener 2 is cleanly closed within a timeout
+	waitForStateChangeClose(t, chanStateChanged22, ch2Name, "listener 2")
+
+	// Close connection
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Failed to close %s: %v", connectionName, err)
+	}
+
+	// Verify connection listener is cleanly closed within a timeout
+	waitForStateChangeClose(t, stateChanged, connectionName, "listener 1")
 }

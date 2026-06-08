@@ -88,13 +88,39 @@ func (s StateChanged) String() string {
 	return fmt.Sprintf("From: %s, To: %s", statusToString(s.From), statusToString(s.To))
 }
 
+type stateListener struct {
+	ch      chan *StateChanged
+	queue   []*StateChanged
+	sending bool
+}
+
+// enqueue appends a state change to the listener's bounded queue using a sliding window.
+// If the queue size exceeds maxQueueSize, the oldest state change is dropped.
+// This assumes the caller holds the LifeCycle mutex.
+func (sl *stateListener) enqueue(sc *StateChanged) {
+	const maxQueueSize = 50
+	if len(sl.queue) < maxQueueSize {
+		sl.queue = append(sl.queue, sc)
+	} else {
+		sl.queue = append(sl.queue[1:], sc)
+	}
+}
+
 // LifeCycle is the lifecycle of the connection or channel.
+//
+// The listener framework manages state change notifications for registered channels.
+// Key characteristics:
+//   - Multiple listeners can register concurrently via NotifyStateChange.
+//   - Each listener operates concurrently and is isolated from others; a blocked or slow
+//     listener will not block other listeners or the main SetState() execution.
+//   - Strict FIFO ordering of state transitions is guaranteed for each listener by spawning
+//     at most one dedicated delivery goroutine per listener.
+//   - Memory usage is strictly bounded by a sliding-window queue per listener (maxQueueSize = 50).
+//   - Listener channels are cleanly closed as soon as the final StateClosed transition is sent.
 type LifeCycle struct {
-	state           ILifeCycleState    // The current state of the connection or channel.
-	chStatusChanged chan *StateChanged // The channel to send the state changes to.
-	mutex           *sync.Mutex        // The mutex to protect the state changes.
-	queue           []*StateChanged    // Queue to hold state transitions for sequential FIFO delivery.
-	sending         bool               // True if deliverLoop is currently active.
+	state     ILifeCycleState  // The current state of the connection or channel.
+	listeners []*stateListener // The registered state change listeners.
+	mutex     *sync.Mutex      // The mutex to protect the state changes.
 }
 
 func NewLifeCycle() *LifeCycle {
@@ -120,41 +146,80 @@ func (l *LifeCycle) SetState(value ILifeCycleState) {
 	oldState := l.state
 	l.state = value
 
-	if l.chStatusChanged == nil {
-		return
-	}
-
 	sc := &StateChanged{
 		From: oldState,
 		To:   value,
 	}
 
-	l.queue = append(l.queue, sc)
-	if !l.sending {
-		l.sending = true
-		go l.deliverLoop()
+	for _, listener := range l.listeners {
+		listener.enqueue(sc)
+		if !listener.sending {
+			listener.sending = true
+			go l.deliverToListener(listener)
+		}
 	}
 }
 
-func (l *LifeCycle) deliverLoop() {
+func (l *LifeCycle) deliverToListener(listener *stateListener) {
 	for {
 		l.mutex.Lock()
-		if len(l.queue) == 0 || l.chStatusChanged == nil {
-			l.sending = false
+		if len(listener.queue) == 0 {
+			listener.sending = false
 			l.mutex.Unlock()
 			return
 		}
-		sc := l.queue[0]
-		l.queue = l.queue[1:]
-		ch := l.chStatusChanged
+		sc := listener.queue[0]
+		listener.queue = listener.queue[1:]
+		ch := listener.ch
 		l.mutex.Unlock()
 
 		ch <- sc
+
+		// If the transition is to StateClosed, this is the terminal state.
+		// We can safely close the channel now because:
+		// 1. No more states will be appended (StateClosed is final).
+		// 2. The StateClosed notification was just successfully sent.
+		if _, ok := sc.To.(*StateClosed); ok {
+			l.mutex.Lock()
+			close(ch)
+			l.removeListener(listener)
+			l.mutex.Unlock()
+			return
+		}
+	}
+}
+
+func (l *LifeCycle) removeListener(listener *stateListener) {
+	for i, lis := range l.listeners {
+		if lis == listener {
+			l.listeners = append(l.listeners[:i], l.listeners[i+1:]...)
+			break
+		}
 	}
 }
 
 func (l *LifeCycle) notifyStateChange(channel chan *StateChanged) {
+	if channel == nil {
+		return
+	}
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
-	l.chStatusChanged = channel
+
+	// If the connection/channel is already closed, close the channel immediately.
+	if _, ok := l.state.(*StateClosed); ok {
+		close(channel)
+		return
+	}
+
+	// Prevent duplicate registration of the same channel.
+	for _, lis := range l.listeners {
+		if lis.ch == channel {
+			return
+		}
+	}
+
+	listener := &stateListener{
+		ch: channel,
+	}
+	l.listeners = append(l.listeners, listener)
 }
