@@ -136,6 +136,8 @@ type Connection struct {
 
 	reconnecting sync.Mutex // Mutex for protecting reconnect/recovery operations to ensure serialization and prevent race conditions.
 	lifeCycle    *LifeCycle // The current state of the connection.
+
+	recoveryCancels []chan struct{} // listeners for connection recovery cancellation
 }
 
 type readDeadliner interface {
@@ -446,6 +448,40 @@ func (c *Connection) NotifyClose(receiver chan *Error) chan *Error {
 }
 
 /*
+NotifyRecoveryCancel registers a listener that is notified (via a channel close)
+when connection recovery has been canceled or aborted (for example, when Close()
+or CloseDeadline() is called during an active reconnect process).
+
+The returned channel will be closed immediately if the connection is already closing
+or closed, or when Close() is called.
+*/
+func (c *Connection) NotifyRecoveryCancel(receiver chan struct{}) chan struct{} {
+	c.m.Lock()
+	defer c.m.Unlock()
+
+	state := c.lifeCycle.State().getState()
+	if state == stateClosing || state == stateClosed {
+		close(receiver)
+	} else {
+		c.recoveryCancels = append(c.recoveryCancels, receiver)
+	}
+
+	return receiver
+}
+
+// CloseRecovery stops any active connection recovery process by notifying
+// and closing all recovery cancellation listeners.
+func (c *Connection) CloseRecovery() {
+	c.m.Lock()
+	defer c.m.Unlock()
+
+	for _, listener := range c.recoveryCancels {
+		close(listener)
+	}
+	c.recoveryCancels = nil
+}
+
+/*
 NotifyBlocked registers a listener for RabbitMQ specific TCP flow control
 method extensions connection.blocked and connection.unblocked.  Flow control is
 active with a reason when Blocking.Blocked is true.  When a Connection is
@@ -482,6 +518,8 @@ including the underlying io, Channels, Notify listeners and Channel consumers
 will also be closed.
 */
 func (c *Connection) Close() error {
+	c.CloseRecovery() // Stop any active recovery process
+
 	if c.IsClosed() {
 		return ErrClosed
 	}
@@ -528,6 +566,8 @@ func (c *Connection) Close() error {
 // including the underlying io, Channels, Notify listeners and Channel consumers
 // will also be closed.
 func (c *Connection) CloseDeadline(deadline time.Time) error {
+	c.CloseRecovery() // Stop any active recovery process
+
 	if c.IsClosed() {
 		return ErrClosed
 	}
@@ -1339,6 +1379,11 @@ func (c *Connection) cleanup() {
 		ch.cleanup()
 	}
 
+	for _, listener := range c.recoveryCancels {
+		close(listener)
+	}
+
+	c.recoveryCancels = nil
 	c.channels = nil
 	c.allocator = nil
 	c.noNotify = true
@@ -1377,11 +1422,20 @@ func (c *Connection) Reconnect() error {
 
 	c.lifeCycle.SetState(&StateReconnecting{})
 
+	cancelCh := c.NotifyRecoveryCancel(make(chan struct{}))
+
 	var err error
 	for i := 0; i < c.MaxRetryCount(); i++ {
 		Logger.Printf("Connection recovery attempt %d of %d", i+1, c.MaxRetryCount())
 		jitter := time.Duration(rand.Intn(500)) * time.Millisecond // Random 500ms jitter to avoid thundering herd
-		time.Sleep(c.RetryInterval() + jitter)
+
+		// Wait with select to allow immediate interruption of sleep
+		select {
+		case <-cancelCh:
+			Logger.Printf("Connection recovery aborted: connection closed during backoff.")
+			return ErrClosed
+		case <-time.After(c.RetryInterval() + jitter):
+		}
 
 		// Re-dial
 		var conn net.Conn

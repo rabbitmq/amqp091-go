@@ -81,6 +81,8 @@ type Channel struct {
 
 	reconnecting sync.Mutex // Mutex for reconnecting channel.
 	lifeCycle    *LifeCycle // The current state of the channel.
+
+	recoveryCancels []chan struct{} // listeners for channel recovery cancellation
 }
 
 // Constructs a new channel with the given framing rules
@@ -509,6 +511,8 @@ code set to '200'.
 It is safe to call this method multiple times.
 */
 func (ch *Channel) Close() error {
+	ch.CloseRecovery() // Stop any active recovery process
+
 	if ch.IsClosed() {
 		return nil
 	}
@@ -557,6 +561,37 @@ func (ch *Channel) NotifyClose(c chan *Error) chan *Error {
 	}
 
 	return c
+}
+
+/*
+NotifyRecoveryCancel registers a listener that is notified (via a channel close)
+when channel recovery has been canceled or aborted (for example, when Close()
+is called during an active channel reconnect process).
+*/
+func (ch *Channel) NotifyRecoveryCancel(receiver chan struct{}) chan struct{} {
+	ch.m.Lock()
+	defer ch.m.Unlock()
+
+	state := ch.lifeCycle.State().getState()
+	if state == stateClosing || state == stateClosed {
+		close(receiver)
+	} else {
+		ch.recoveryCancels = append(ch.recoveryCancels, receiver)
+	}
+
+	return receiver
+}
+
+// CloseRecovery stops any active channel recovery process by notifying
+// and closing all recovery cancellation listeners.
+func (ch *Channel) CloseRecovery() {
+	ch.m.Lock()
+	defer ch.m.Unlock()
+
+	for _, listener := range ch.recoveryCancels {
+		close(listener)
+	}
+	ch.recoveryCancels = nil
 }
 
 /*
@@ -1928,6 +1963,11 @@ func (ch *Channel) cleanup() {
 		close(c)
 	}
 
+	for _, c := range ch.recoveryCancels {
+		close(c)
+	}
+
+	ch.recoveryCancels = nil
 	ch.flows = nil
 	ch.closes = nil
 	ch.returns = nil
@@ -1972,12 +2012,29 @@ func (ch *Channel) Reconnect() error {
 
 	ch.lifeCycle.SetState(&StateReconnecting{})
 
+	cancelCh := ch.NotifyRecoveryCancel(make(chan struct{}))
+
 	var err error
 	for i := 0; i < ch.connection.MaxRetryCount(); i++ {
+		// Exit early if Close() was already called
+		select {
+		case <-cancelCh:
+			Logger.Printf("Channel %d recovery aborted: channel closed.", ch.id)
+			return ErrClosed
+		default:
+		}
+
 		Logger.Printf("Channel %d recovery attempt %d of %d", ch.id, i+1, ch.connection.MaxRetryCount())
 		if i > 0 {
 			jitter := time.Duration(rand.Intn(500)) * time.Millisecond // Random 500ms jitter to avoid thundering herd
-			time.Sleep(ch.connection.RetryInterval() + jitter)
+
+			// Wait with select to allow immediate interruption of sleep
+			select {
+			case <-cancelCh:
+				Logger.Printf("Channel %d recovery aborted: channel closed during backoff.", ch.id)
+				return ErrClosed
+			case <-time.After(ch.connection.RetryInterval() + jitter):
+			}
 		}
 
 		// 1. Reset client-side state

@@ -757,3 +757,124 @@ func TestConnectionRecoveryLifeCycleNotifyStateChange(t *testing.T) {
 	// Verify connection listener is cleanly closed within a timeout
 	waitForStateChangeClose(t, stateChanged, connectionName, "listener 1")
 }
+
+// TestConnectionRecoveryCancelInterrupt tests that connection and channel recovery cancel events
+// are received when the connection or channel is closed during an active recovery process.
+func TestConnectionRecoveryCancelInterrupt(t *testing.T) {
+	connectionName := "test-connection-recovery-cancel-interrupt"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{
+				MaxRetryCount: 5,
+				RetryInterval: 5 * time.Second,
+			},
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	// 1. Register for NotifyRecoveryCancel on connection and channel
+	connCancelCh := conn.NotifyRecoveryCancel(make(chan struct{}))
+	chCancelCh := ch.NotifyRecoveryCancel(make(chan struct{}))
+
+	// Register state change notifications on connection and channel
+	connStateCh := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(connStateCh)
+
+	chanStateCh := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(chanStateCh)
+
+	// 2. Drop connection
+	dropConnection(t, connectionName)
+
+	// 3. Wait for status to change to Reconnecting for both connection and channel
+	var connReconnectingSeen bool
+	var chanReconnectingSeen bool
+
+	timeout := time.After(10 * time.Second)
+	for !connReconnectingSeen || !chanReconnectingSeen {
+		select {
+		case sc := <-connStateCh:
+			t.Logf("Connection state changed: %s", sc)
+			if _, ok := sc.To.(*StateReconnecting); ok {
+				connReconnectingSeen = true
+			}
+		case sc := <-chanStateCh:
+			t.Logf("Channel state changed: %s", sc)
+			if _, ok := sc.To.(*StateReconnecting); ok {
+				chanReconnectingSeen = true
+			}
+		case <-timeout:
+			t.Fatalf("Timeout waiting for connection and channel to enter Reconnecting state")
+		}
+	}
+
+	// 4. Close channel
+	t.Log("Closing channel during recovery to trigger abort...")
+	if err := ch.Close(); err != nil {
+		t.Fatalf("Channel Close failed: %v", err)
+	}
+
+	// 5. Close connection
+	t.Log("Closing connection during recovery to trigger abort...")
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Connection Close failed: %v", err)
+	}
+
+	// 6. Verify immediately recovery is terminated and event is received on NotifyRecoveryCancel channel
+	select {
+	case <-chCancelCh:
+		t.Log("Channel recovery cancel event received successfully")
+	case <-time.After(2 * time.Second):
+		t.Error("Timeout waiting for channel recovery cancel event")
+	}
+
+	select {
+	case <-connCancelCh:
+		t.Log("Connection recovery cancel event received successfully")
+	case <-time.After(2 * time.Second):
+		t.Error("Timeout waiting for connection recovery cancel event")
+	}
+
+	// 7. Verify state changed to Closed
+	var connClosedSeen bool
+	var chanClosedSeen bool
+
+	timeout = time.After(2 * time.Second)
+	for !connClosedSeen || !chanClosedSeen {
+		select {
+		case sc, ok := <-connStateCh:
+			if !ok {
+				connClosedSeen = true
+				continue
+			}
+			t.Logf("Connection state changed post-close: %s", sc)
+			if _, ok := sc.To.(*StateClosed); ok {
+				connClosedSeen = true
+			}
+		case sc, ok := <-chanStateCh:
+			if !ok {
+				chanClosedSeen = true
+				continue
+			}
+			t.Logf("Channel state changed post-close: %s", sc)
+			if _, ok := sc.To.(*StateClosed); ok {
+				chanClosedSeen = true
+			}
+		case <-timeout:
+			t.Fatalf("Timeout waiting for connection and channel state to change to Closed. connClosedSeen=%t, chanClosedSeen=%t", connClosedSeen, chanClosedSeen)
+		}
+	}
+}
