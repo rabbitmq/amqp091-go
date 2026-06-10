@@ -328,10 +328,10 @@ func waitForConnectionOpen(t *testing.T, stateChanged chan *StateChanged) {
 		select {
 		case sc := <-stateChanged:
 			t.Logf("Connection state changed: %s", sc)
-			if _, ok := sc.To.(*StateReconnecting); ok {
+			if sc.To == StateReconnecting {
 				connReconnectingSeen = true
 			}
-			if _, ok := sc.To.(*StateOpen); ok {
+			if sc.To == StateOpen {
 				connOpenSeen = true
 			}
 		case <-time.After(10 * time.Second):
@@ -348,10 +348,10 @@ func waitForChannelOpen(t *testing.T, chanStateChanged chan *StateChanged) {
 		select {
 		case sc := <-chanStateChanged:
 			t.Logf("Channel state changed: %s", sc)
-			if _, ok := sc.To.(*StateReconnecting); ok {
+			if sc.To == StateReconnecting {
 				chanReconnectingSeen = true
 			}
-			if _, ok := sc.To.(*StateOpen); ok {
+			if sc.To == StateOpen {
 				chanOpenSeen = true
 			}
 		case <-time.After(10 * time.Second):
@@ -379,13 +379,13 @@ func waitForChannelClose(t *testing.T, chanStateChanged chan *StateChanged, chan
 				return
 			}
 			t.Logf("Channel %d state changed: %s", chanID, sc)
-			if _, ok := sc.To.(*StateClosed); ok {
+			if sc.To == StateClosed {
 				chanClosedSeen = true
 			}
-			if _, ok := sc.To.(*StateReconnecting); ok {
+			if sc.To == StateReconnecting {
 				chanReconnectingSeen = true
 			}
-			if _, ok := sc.To.(*StateOpen); ok {
+			if sc.To == StateOpen {
 				chanOpenSeen = true
 			}
 		case <-loopDeadline:
@@ -808,12 +808,12 @@ func TestConnectionRecoveryCancelInterrupt(t *testing.T) {
 		select {
 		case sc := <-connStateCh:
 			t.Logf("Connection state changed: %s", sc)
-			if _, ok := sc.To.(*StateReconnecting); ok {
+			if sc.To == StateReconnecting {
 				connReconnectingSeen = true
 			}
 		case sc := <-chanStateCh:
 			t.Logf("Channel state changed: %s", sc)
-			if _, ok := sc.To.(*StateReconnecting); ok {
+			if sc.To == StateReconnecting {
 				chanReconnectingSeen = true
 			}
 		case <-timeout:
@@ -861,7 +861,7 @@ func TestConnectionRecoveryCancelInterrupt(t *testing.T) {
 				continue
 			}
 			t.Logf("Connection state changed post-close: %s", sc)
-			if _, ok := sc.To.(*StateClosed); ok {
+			if sc.To == StateClosed {
 				connClosedSeen = true
 			}
 		case sc, ok := <-chanStateCh:
@@ -870,7 +870,7 @@ func TestConnectionRecoveryCancelInterrupt(t *testing.T) {
 				continue
 			}
 			t.Logf("Channel state changed post-close: %s", sc)
-			if _, ok := sc.To.(*StateClosed); ok {
+			if sc.To == StateClosed {
 				chanClosedSeen = true
 			}
 		case <-timeout:

@@ -45,21 +45,20 @@ func main() {
 	go func(ch chan *amqp.StateChanged) {
 		for statusChanged := range ch {
 			log.Printf("[connection] Status changed: %v", statusChanged)
-			switch statusChanged.To.(type) {
-			case *amqp.StateOpen:
+			switch statusChanged.To {
+			case amqp.StateOpen:
 				signalBlock.L.Lock()
 				isReconnecting = false
 				signalBlock.Broadcast()
 				signalBlock.L.Unlock()
-			case *amqp.StateReconnecting:
+			case amqp.StateReconnecting:
 				log.Printf("[connection] Reconnecting to the AMQP server")
 				signalBlock.L.Lock()
 				isReconnecting = true
 				signalBlock.L.Unlock()
-			case *amqp.StateClosed:
-				stateClosed := statusChanged.To.(*amqp.StateClosed)
-				if stateClosed.GetError() != nil {
-					log.Printf("[connection] Connection closed with error: %v", stateClosed.GetError())
+			case amqp.StateClosed:
+				if statusChanged.Err != nil {
+					log.Printf("[connection] Connection closed with error: %v", statusChanged.Err)
 				} else {
 					log.Printf("[connection] Connection closed normally")
 				}

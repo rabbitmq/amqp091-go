@@ -135,7 +135,7 @@ type Connection struct {
 	closed atomic.Bool // Will be true if the connection is closed, false otherwise.
 
 	reconnecting sync.Mutex // Mutex for protecting reconnect/recovery operations to ensure serialization and prevent race conditions.
-	lifeCycle    *LifeCycle // The current state of the connection.
+	lifeCycle    *lifeCycle // The current state of the connection.
 
 	recoveryCancels []chan struct{} // listeners for connection recovery cancellation
 }
@@ -353,12 +353,12 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 		close:     make(chan struct{}),
 		deadlines: make(chan readDeadliner, 1),
 		Config:    config,
-		lifeCycle: NewLifeCycle(),
+		lifeCycle: newLifeCycle(),
 	}
 	go c.reader(conn)
 	err := c.open(config)
 	if err == nil {
-		c.lifeCycle.SetState(&StateOpen{})
+		c.lifeCycle.SetState(StateOpen, nil)
 	}
 	return c, err
 }
@@ -459,8 +459,8 @@ func (c *Connection) NotifyRecoveryCancel(receiver chan struct{}) chan struct{} 
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	state := c.lifeCycle.State().getState()
-	if state == stateClosing || state == stateClosed {
+	state := c.lifeCycle.State()
+	if state == StateClosing || state == StateClosed {
 		close(receiver)
 	} else {
 		c.recoveryCancels = append(c.recoveryCancels, receiver)
@@ -524,7 +524,7 @@ func (c *Connection) Close() error {
 		return ErrClosed
 	}
 
-	c.lifeCycle.SetState(&StateClosing{})
+	c.lifeCycle.SetState(StateClosing, nil)
 
 	var handshakeErr error
 	var initiated bool
@@ -817,7 +817,7 @@ func (c *Connection) shutdown(err *Error) {
 		if err != nil {
 			e = errors.New(err.Error())
 		}
-		c.lifeCycle.SetState(&StateClosed{error: e})
+		c.lifeCycle.SetState(StateClosed, e)
 	}
 }
 
@@ -1064,7 +1064,7 @@ func (c *Connection) openChannel() (*Channel, error) {
 		return nil, err
 	}
 
-	ch.lifeCycle.SetState(&StateOpen{})
+	ch.lifeCycle.SetState(StateOpen, nil)
 
 	if c.IsRecoveryEnabled() {
 		ch.watchChannel()
@@ -1424,7 +1424,7 @@ func (c *Connection) Reconnect() error {
 		return nil
 	}
 
-	c.lifeCycle.SetState(&StateReconnecting{})
+	c.lifeCycle.SetState(StateReconnecting, nil)
 
 	cancelCh := c.NotifyRecoveryCancel(make(chan struct{}))
 
@@ -1521,7 +1521,7 @@ func (c *Connection) Reconnect() error {
 		}
 
 		Logger.Printf("Connection recovery successful")
-		c.lifeCycle.SetState(&StateOpen{})
+		c.lifeCycle.SetState(StateOpen, nil)
 		return nil
 	}
 
@@ -1530,7 +1530,7 @@ func (c *Connection) Reconnect() error {
 		c.conn.Close()
 	}
 	c.closed.Store(true)
-	c.lifeCycle.SetState(&StateClosed{error: err})
+	c.lifeCycle.SetState(StateClosed, err)
 
 	return err
 }

@@ -5,87 +5,47 @@ import (
 	"sync"
 )
 
+// LifeCycleState defines the connection or channel state type.
+type LifeCycleState byte
+
 const (
-	stateOpen         = iota
-	stateReconnecting = iota
-	stateClosing      = iota
-	stateClosed       = iota
+	// StateOpen represents a connection or channel that is active and open.
+	StateOpen LifeCycleState = iota
+	// StateReconnecting represents a connection or channel that is actively undergoing automatic recovery.
+	StateReconnecting
+	// StateClosing represents a connection or channel that is in the process of closing down.
+	StateClosing
+	// StateClosed represents a connection or channel that is fully closed and shut down.
+	StateClosed
 )
 
-// ILifeCycleState defines the connection or channel state
-// see the iota constants for possible states: open, reconnecting, closing, closed
-type ILifeCycleState interface {
-	getState() int
-}
-
-type StateOpen struct {
-}
-
-func (o *StateOpen) getState() int {
-	return stateOpen
-}
-
-type StateReconnecting struct {
-}
-
-func (r *StateReconnecting) getState() int {
-	return stateReconnecting
-}
-
-type StateClosing struct {
-}
-
-func (c *StateClosing) getState() int {
-	return stateClosing
-}
-
-type StateClosed struct {
-	error error
-}
-
-func (c *StateClosed) GetError() error {
-	return c.error
-}
-
-func (c *StateClosed) getState() int {
-	return stateClosed
-}
-
-func statusToString(status ILifeCycleState) string {
-	switch status.getState() {
-	case stateOpen:
+func (s LifeCycleState) String() string {
+	switch s {
+	case StateOpen:
 		return "open"
-	case stateReconnecting:
+	case StateReconnecting:
 		return "reconnecting"
-	case stateClosing:
+	case StateClosing:
 		return "closing"
-	case stateClosed:
+	case StateClosed:
 		return "closed"
+	default:
+		return "unknown"
 	}
-	return "unknown"
-
 }
 
-// StateChanged defines the connection or channel life cycle.
-// See ILifeCycleState for more details about the possible states.
-// Every time the state changes,
-// a StateChanged struct is sent to the channel defined in the
-// NotifyStateChange method.
+// StateChanged defines the connection or channel life cycle transitions.
 type StateChanged struct {
-	From ILifeCycleState
-	To   ILifeCycleState
+	From LifeCycleState
+	To   LifeCycleState
+	Err  error // Stores the error when transitioning to StateClosed
 }
 
 func (s StateChanged) String() string {
-	switch s.To.(type) {
-	case *StateClosed:
-		if s.To.(*StateClosed).error == nil {
-			return fmt.Sprintf("From: %s, To: %s", statusToString(s.From), statusToString(s.To))
-		}
-		return fmt.Sprintf("From: %s, To: %s, Error: %s", statusToString(s.From), statusToString(s.To), s.To.(*StateClosed).error)
-
+	if s.Err != nil {
+		return fmt.Sprintf("From: %s, To: %s, Error: %v", s.From, s.To, s.Err)
 	}
-	return fmt.Sprintf("From: %s, To: %s", statusToString(s.From), statusToString(s.To))
+	return fmt.Sprintf("From: %s, To: %s", s.From, s.To)
 }
 
 type stateListener struct {
@@ -96,7 +56,7 @@ type stateListener struct {
 
 // enqueue appends a state change to the listener's bounded queue using a sliding window.
 // If the queue size exceeds maxQueueSize, the oldest state change is dropped.
-// This assumes the caller holds the LifeCycle mutex.
+// This assumes the caller holds the lifeCycle mutex.
 func (sl *stateListener) enqueue(sc *StateChanged) {
 	const maxQueueSize = 50
 	if len(sl.queue) < maxQueueSize {
@@ -106,7 +66,7 @@ func (sl *stateListener) enqueue(sc *StateChanged) {
 	}
 }
 
-// LifeCycle is the lifecycle of the connection or channel.
+// lifeCycle is the lifecycle of the connection or channel.
 //
 // The listener framework manages state change notifications for registered channels.
 // Key characteristics:
@@ -117,26 +77,26 @@ func (sl *stateListener) enqueue(sc *StateChanged) {
 //     at most one dedicated delivery goroutine per listener.
 //   - Memory usage is strictly bounded by a sliding-window queue per listener (maxQueueSize = 50).
 //   - Listener channels are cleanly closed as soon as the final StateClosed transition is sent.
-type LifeCycle struct {
-	state     ILifeCycleState  // The current state of the connection or channel.
+type lifeCycle struct {
+	state     LifeCycleState   // The current state of the connection or channel.
 	listeners []*stateListener // The registered state change listeners.
 	mutex     *sync.Mutex      // The mutex to protect the state changes.
 }
 
-func NewLifeCycle() *LifeCycle {
-	return &LifeCycle{
-		state: &StateClosed{},
+func newLifeCycle() *lifeCycle {
+	return &lifeCycle{
+		state: StateClosed,
 		mutex: &sync.Mutex{},
 	}
 }
 
-func (l *LifeCycle) State() ILifeCycleState {
+func (l *lifeCycle) State() LifeCycleState {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	return l.state
 }
 
-func (l *LifeCycle) SetState(value ILifeCycleState) {
+func (l *lifeCycle) SetState(value LifeCycleState, err error) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	if l.state == value {
@@ -149,6 +109,7 @@ func (l *LifeCycle) SetState(value ILifeCycleState) {
 	sc := &StateChanged{
 		From: oldState,
 		To:   value,
+		Err:  err,
 	}
 
 	for _, listener := range l.listeners {
@@ -160,7 +121,7 @@ func (l *LifeCycle) SetState(value ILifeCycleState) {
 	}
 }
 
-func (l *LifeCycle) deliverToListener(listener *stateListener) {
+func (l *lifeCycle) deliverToListener(listener *stateListener) {
 	for {
 		l.mutex.Lock()
 		if len(listener.queue) == 0 {
@@ -179,7 +140,7 @@ func (l *LifeCycle) deliverToListener(listener *stateListener) {
 		// We can safely close the channel now because:
 		// 1. No more states will be appended (StateClosed is final).
 		// 2. The StateClosed notification was just successfully sent.
-		if _, ok := sc.To.(*StateClosed); ok {
+		if sc.To == StateClosed {
 			l.mutex.Lock()
 			close(ch)
 			l.removeListener(listener)
@@ -189,7 +150,7 @@ func (l *LifeCycle) deliverToListener(listener *stateListener) {
 	}
 }
 
-func (l *LifeCycle) removeListener(listener *stateListener) {
+func (l *lifeCycle) removeListener(listener *stateListener) {
 	for i, lis := range l.listeners {
 		if lis == listener {
 			l.listeners = append(l.listeners[:i], l.listeners[i+1:]...)
@@ -198,7 +159,7 @@ func (l *LifeCycle) removeListener(listener *stateListener) {
 	}
 }
 
-func (l *LifeCycle) notifyStateChange(channel chan *StateChanged) {
+func (l *lifeCycle) notifyStateChange(channel chan *StateChanged) {
 	if channel == nil {
 		return
 	}
@@ -206,7 +167,7 @@ func (l *LifeCycle) notifyStateChange(channel chan *StateChanged) {
 	defer l.mutex.Unlock()
 
 	// If the connection/channel is already closed, close the channel immediately.
-	if _, ok := l.state.(*StateClosed); ok {
+	if l.state == StateClosed {
 		close(channel)
 		return
 	}

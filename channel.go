@@ -80,7 +80,7 @@ type Channel struct {
 	body    []byte
 
 	reconnecting sync.Mutex // Mutex for reconnecting channel.
-	lifeCycle    *LifeCycle // The current state of the channel.
+	lifeCycle    *lifeCycle // The current state of the channel.
 
 	recoveryCancels []chan struct{} // listeners for channel recovery cancellation
 }
@@ -96,7 +96,7 @@ func newChannel(c *Connection, id uint16) *Channel {
 		recv:       (*Channel).recvMethod,
 		errors:     make(chan *Error, 1),
 		close:      make(chan struct{}),
-		lifeCycle:  NewLifeCycle(),
+		lifeCycle:  newLifeCycle(),
 	}
 }
 
@@ -186,7 +186,7 @@ func (ch *Channel) shutdown(e *Error) {
 		if e != nil {
 			err = errors.New(e.Error())
 		}
-		ch.lifeCycle.SetState(&StateClosed{error: err})
+		ch.lifeCycle.SetState(StateClosed, err)
 	} else {
 		close(ch.errors)
 		close(ch.close)
@@ -521,7 +521,7 @@ func (ch *Channel) Close() error {
 		return nil
 	}
 
-	ch.lifeCycle.SetState(&StateClosing{})
+	ch.lifeCycle.SetState(StateClosing, nil)
 
 	defer ch.connection.closeChannel(ch, nil)
 	return ch.call(
@@ -576,8 +576,8 @@ func (ch *Channel) NotifyRecoveryCancel(receiver chan struct{}) chan struct{} {
 	ch.m.Lock()
 	defer ch.m.Unlock()
 
-	state := ch.lifeCycle.State().getState()
-	if state == stateClosing || state == stateClosed {
+	state := ch.lifeCycle.State()
+	if state == StateClosing || state == StateClosed {
 		close(receiver)
 	} else {
 		ch.recoveryCancels = append(ch.recoveryCancels, receiver)
@@ -2014,7 +2014,7 @@ func (ch *Channel) Reconnect() error {
 		return nil
 	}
 
-	ch.lifeCycle.SetState(&StateReconnecting{})
+	ch.lifeCycle.SetState(StateReconnecting, nil)
 
 	cancelCh := ch.NotifyRecoveryCancel(make(chan struct{}))
 
@@ -2067,13 +2067,13 @@ func (ch *Channel) Reconnect() error {
 
 		// If we reached here, recovery was 100% successful!
 		Logger.Printf("Channel %d recovery successful", ch.id)
-		ch.lifeCycle.SetState(&StateOpen{})
+		ch.lifeCycle.SetState(StateOpen, nil)
 		return nil
 	}
 
 	Logger.Printf("Channel %d recovery exhausted all %d retries", ch.id, ch.connection.MaxRetryCount())
 	ch.setClosed()
-	ch.lifeCycle.SetState(&StateClosed{error: err})
+	ch.lifeCycle.SetState(StateClosed, err)
 	return err
 }
 
