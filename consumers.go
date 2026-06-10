@@ -32,11 +32,11 @@ func commandNameBasedUniqueConsumerTag(commandName string) string {
 	return tagPrefix + tagInfix + tagSuffix
 }
 
-// ConsumerConfig stores the configuration parameters used when a consumer is registered.
+// consumerConfig stores the configuration parameters used when a consumer is registered.
 // This is required during automatic connection and channel recovery. When a network connection
 // drops and is restored, the library uses these stored parameters to automatically re-register
 // and resume all consumers on the recovered channels seamlessly, preserving the subscriber topology.
-type ConsumerConfig struct {
+type consumerConfig struct {
 	Queue     string
 	Consumer  string
 	AutoAck   bool
@@ -48,9 +48,9 @@ type ConsumerConfig struct {
 
 type consumerBuffers map[string]chan *Delivery
 
-// consumerConfigs maps unique consumer tags to their respective ConsumerConfig parameters,
+// consumerConfigs maps unique consumer tags to their respective consumerConfig parameters,
 // facilitating the automatic re-registration of all consumers during channel recovery.
-type consumerConfigs map[string]ConsumerConfig
+type consumerConfigs map[string]consumerConfig
 
 // Concurrent type that manages the consumerTag ->
 // ingress consumerBuffer mapping
@@ -129,7 +129,7 @@ func (subs *consumers) buffer(in chan *Delivery, out chan Delivery) {
 }
 
 // On key conflict, close the previous channel.
-func (subs *consumers) add(tag string, consumer chan Delivery, config ConsumerConfig) {
+func (subs *consumers) add(tag string, consumer chan Delivery, config consumerConfig) {
 	subs.Lock()
 	defer subs.Unlock()
 

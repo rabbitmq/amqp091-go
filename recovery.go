@@ -58,7 +58,7 @@ func (rc *ReconnectionConfig) Clone() *ReconnectionConfig {
 	}
 }
 
-// IConnectionRecovery is the interface for the connection recovery.
+// ConnectionRecovery is the interface for the connection recovery.
 //
 // The err parameter in OnConnectionClose and OnChannelClose provides the reason
 // why the connection or channel was closed. Under the hood, DefaultConnectionRecovery
@@ -67,7 +67,7 @@ func (rc *ReconnectionConfig) Clone() *ReconnectionConfig {
 // Connection.AddRecoverableErrorCodes, or use custom implementations of this interface to
 // perform more advanced logic, log errors to external monitoring systems (e.g., Prometheus),
 // or trigger alerts.
-type IConnectionRecovery interface {
+type ConnectionRecovery interface {
 	OnConnectionClose(conn *Connection, err *Error) // Called when the connection is closed.
 	OnChannelClose(ch *Channel, err *Error)         // Called when the channel is closed.
 }
@@ -75,7 +75,7 @@ type IConnectionRecovery interface {
 // Recovery is the configuration for the recovery.
 type Recovery struct {
 	ReconnectionConfig *ReconnectionConfig // The configuration for the reconnection.
-	ConnectionRecovery IConnectionRecovery // The implementation of the connection recovery.
+	ConnectionRecovery ConnectionRecovery  // The implementation of the connection recovery.
 }
 
 // DefaultConnectionRecovery is the default implementation of the connection recovery.

@@ -1205,7 +1205,7 @@ func (ch *Channel) Consume(queue, consumer string, autoAck, exclusive, noLocal, 
 
 	deliveries := make(chan Delivery)
 
-	config := ConsumerConfig{
+	config := consumerConfig{
 		Queue:     queue,
 		Consumer:  consumer,
 		AutoAck:   autoAck,
@@ -1318,7 +1318,7 @@ func (ch *Channel) ConsumeWithContext(ctx context.Context, queue, consumer strin
 
 	deliveries := make(chan Delivery)
 
-	config := ConsumerConfig{
+	config := consumerConfig{
 		Queue:     queue,
 		Consumer:  consumer,
 		AutoAck:   autoAck,
@@ -2095,7 +2095,7 @@ func (ch *Channel) setupChannel() error {
 
 	// Re-subscribe consumers
 	ch.consumers.Lock()
-	configs := make(map[string]ConsumerConfig, len(ch.consumers.configs))
+	configs := make(map[string]consumerConfig, len(ch.consumers.configs))
 	for tag, config := range ch.consumers.configs {
 		configs[tag] = config
 	}
