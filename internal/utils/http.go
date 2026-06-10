@@ -75,18 +75,18 @@ func baseCall(url, username, password string, method string) (string, error) {
 	}
 	req.SetBasicAuth(username, password)
 
-	resp, err3 := client.Do(req)
+	resp, err := client.Do(req)
 
-	if err3 != nil {
-		return "", err3
+	if err != nil {
+		return "", err
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 200 { // OK
-		bodyBytes, err2 := io.ReadAll(resp.Body)
-		if err2 != nil {
-			return "", err2
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", err
 		}
 		return string(bodyBytes), nil
 	}

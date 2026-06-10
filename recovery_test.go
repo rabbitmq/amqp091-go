@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rabbitmq/amqp091-go/test/utils"
+	"github.com/rabbitmq/amqp091-go/internal/utils"
 )
 
 // TestConnectionRecoveryPublish tests the connection recovery for publish.
