@@ -132,8 +132,12 @@ func (ch *Channel) shutdown(e *Error) {
 			case c <- e:
 			default:
 				// If blocked/full, send in a goroutine so we never deadlock the shutdown sequence
-				go func(listener chan *Error, err *Error) {
-					listener <- err
+				go func(c chan *Error, e *Error) {
+					select {
+					case c <- e:
+					case <-time.After(5 * time.Second):
+						// Give up to avoid leaking the goroutine permanently
+					}
 				}(c, e)
 			}
 		}
@@ -2127,6 +2131,6 @@ func (ch *Channel) resetState() {
 	ch.rpc = make(chan message)
 
 	if ch.confirms != nil {
-		ch.confirms.Reset()
+		ch.confirms.reset()
 	}
 }

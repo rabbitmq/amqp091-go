@@ -123,9 +123,9 @@ func (c *confirms) Close() error {
 	return nil
 }
 
-// Reset clears any pending deferred confirmations and resets the sequencer
+// reset clears any pending deferred confirmations and resets the sequencer
 // state for recovery, while keeping the listeners intact.
-func (c *confirms) Reset() {
+func (c *confirms) reset() {
 	c.m.Lock()
 	defer c.m.Unlock()
 

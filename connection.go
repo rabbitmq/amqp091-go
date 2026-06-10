@@ -766,8 +766,12 @@ func (c *Connection) shutdown(err *Error) {
 			case listener <- err:
 			default:
 				// If blocked/full, send in a goroutine so we never deadlock the shutdown sequence
-				go func(l chan *Error, e *Error) {
-					l <- e
+				go func(listener chan *Error, err *Error) {
+					select {
+					case listener <- err:
+					case <-time.After(5 * time.Second):
+						// Give up to avoid leaking the goroutine permanently
+					}
 				}(listener, err)
 			}
 		}
