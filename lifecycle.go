@@ -62,6 +62,7 @@ func (sl *stateListener) enqueue(sc *StateChanged) {
 	if len(sl.queue) < maxQueueSize {
 		sl.queue = append(sl.queue, sc)
 	} else {
+		sl.queue[0] = nil // Allow GC to reclaim the dropped element
 		sl.queue = append(sl.queue[1:], sc)
 	}
 }
@@ -130,6 +131,7 @@ func (l *lifeCycle) deliverToListener(listener *stateListener) {
 			return
 		}
 		sc := listener.queue[0]
+		listener.queue[0] = nil // Allow GC to reclaim the popped element
 		listener.queue = listener.queue[1:]
 		ch := listener.ch
 		l.mutex.Unlock()
@@ -153,7 +155,9 @@ func (l *lifeCycle) deliverToListener(listener *stateListener) {
 func (l *lifeCycle) removeListener(listener *stateListener) {
 	for i, lis := range l.listeners {
 		if lis == listener {
-			l.listeners = append(l.listeners[:i], l.listeners[i+1:]...)
+			copy(l.listeners[i:], l.listeners[i+1:])
+			l.listeners[len(l.listeners)-1] = nil // Allow GC to reclaim the listener
+			l.listeners = l.listeners[:len(l.listeners)-1]
 			break
 		}
 	}
