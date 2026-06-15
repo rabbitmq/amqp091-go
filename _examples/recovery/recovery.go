@@ -29,9 +29,11 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// Create a connection with DialRecovery(url, nil) , i.e. default recovery configuration
+	// Create a connection with default recovery configuration
 	log.Printf("Dialing %s", *url)
-	conn, err := amqp.DialRecovery(*url, nil)
+	conn, err := amqp.DialConfig(*url, amqp.Config{
+		Recovery: &amqp.Recovery{},
+	})
 	if err != nil {
 		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
 	}

@@ -7,7 +7,7 @@ package amqp091
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"sync"
@@ -184,7 +184,7 @@ func (ch *Channel) shutdown(e *Error) {
 
 		var err error
 		if e != nil {
-			err = errors.New(e.Error())
+			err = fmt.Errorf("%w", e) // preserve the original error type for assertions
 		}
 		ch.lifeCycle.SetState(StateClosed, err)
 	} else {

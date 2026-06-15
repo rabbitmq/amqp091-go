@@ -241,6 +241,10 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		return nil, err
 	}
 
+	if config.Locale == "" {
+		config.Locale = defaultLocale
+	}
+
 	if config.SASL == nil {
 		if uri.AuthMechanism != nil {
 			for _, identifier := range uri.AuthMechanism {
@@ -815,7 +819,7 @@ func (c *Connection) shutdown(err *Error) {
 
 		var e error
 		if err != nil {
-			e = errors.New(err.Error())
+			e = fmt.Errorf("%w", err) // preserve the original error type for assertions
 		}
 		c.lifeCycle.SetState(StateClosed, e)
 	}
