@@ -77,6 +77,12 @@ type Config struct {
 	Dial func(network, addr string) (net.Conn, error)
 
 	// Recovery configuration for automatic reconnection
+	// When a network failure occurs, the connection and all its channels will automatically
+	// attempt to reconnect based on the parameters specified in the Recovery configuration.
+	// If `recovery` is nil, a default recovery configuration is used.
+	// During the recovery process, applications can monitor state changes (such as reconnecting
+	// or closed) by registering a listener using `Connection.NotifyStateChange` and
+	// `Channel.NotifyStateChange`.
 	Recovery *Recovery
 }
 
@@ -202,28 +208,6 @@ func DialTLS_ExternalAuth(url string, amqps *tls.Config) (*Connection, error) {
 		TLSClientConfig: amqps,
 		SASL:            []Authentication{&ExternalAuth{}},
 	})
-}
-
-/*
-DialRecovery dials a connection with the given URL and recovery configuration.
-
-When a network failure occurs, the connection and all its channels will automatically
-attempt to reconnect based on the parameters specified in the Recovery configuration.
-If `recovery` is nil, a default recovery configuration is used.
-
-During the recovery process, applications can monitor state changes (such as reconnecting
-or closed) by registering a listener using `Connection.NotifyStateChange` and
-`Channel.NotifyStateChange`.
-*/
-func DialRecovery(url string, recovery *Recovery) (*Connection, error) {
-	if recovery == nil {
-		recovery = &Recovery{}
-	}
-	config := Config{
-		Locale:   defaultLocale,
-		Recovery: recovery,
-	}
-	return DialConfig(url, config)
 }
 
 // DialConfig accepts a string in the AMQP URI format and a configuration for
@@ -771,6 +755,9 @@ func (c *Connection) shutdown(err *Error) {
 			default:
 				// If blocked/full, send in a goroutine so we never deadlock the shutdown sequence
 				go func(listener chan *Error, err *Error) {
+					defer func() {
+						_ = recover() // Gracefully ignore panics if the channel is closed concurrently
+					}()
 					select {
 					case listener <- err:
 					case <-time.After(5 * time.Second):
@@ -789,7 +776,7 @@ func (c *Connection) shutdown(err *Error) {
 	// Shutdown handler goroutine can still receive the result.
 	close(c.errors)
 
-	if err == nil || !c.IsRecoveryEnabled() {
+	if err == nil || !c.IsRecoveryEnabled() || !c.isRecoverable(err) {
 		for _, listener := range c.closes {
 			close(listener)
 		}
@@ -812,7 +799,7 @@ func (c *Connection) shutdown(err *Error) {
 	// reader exit
 	close(c.close)
 
-	if err == nil || !c.IsRecoveryEnabled() {
+	if err == nil || !c.IsRecoveryEnabled() || !c.isRecoverable(err) {
 		c.channels = nil
 		c.allocator = nil
 		c.noNotify = true

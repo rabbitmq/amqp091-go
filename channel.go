@@ -133,6 +133,9 @@ func (ch *Channel) shutdown(e *Error) {
 			default:
 				// If blocked/full, send in a goroutine so we never deadlock the shutdown sequence
 				go func(c chan *Error, e *Error) {
+					defer func() {
+						_ = recover() // Gracefully ignore panics if the channel is closed concurrently
+					}()
 					select {
 					case c <- e:
 					case <-time.After(5 * time.Second):
