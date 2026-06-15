@@ -473,9 +473,9 @@ func (c *Connection) NotifyRecoveryCancel(receiver chan struct{}) chan struct{} 
 	return receiver
 }
 
-// CloseRecovery stops any active connection recovery process by notifying
+// closeRecovery stops any active connection recovery process by notifying
 // and closing all recovery cancellation listeners.
-func (c *Connection) CloseRecovery() {
+func (c *Connection) closeRecovery() {
 	c.m.Lock()
 	defer c.m.Unlock()
 
@@ -522,7 +522,7 @@ including the underlying io, Channels, Notify listeners and Channel consumers
 will also be closed.
 */
 func (c *Connection) Close() error {
-	c.CloseRecovery() // Stop any active recovery process
+	c.closeRecovery() // Stop any active recovery process
 
 	if c.IsClosed() {
 		return ErrClosed
@@ -570,7 +570,7 @@ func (c *Connection) Close() error {
 // including the underlying io, Channels, Notify listeners and Channel consumers
 // will also be closed.
 func (c *Connection) CloseDeadline(deadline time.Time) error {
-	c.CloseRecovery() // Stop any active recovery process
+	c.closeRecovery() // Stop any active recovery process
 
 	if c.IsClosed() {
 		return ErrClosed

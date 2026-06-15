@@ -515,7 +515,7 @@ code set to '200'.
 It is safe to call this method multiple times.
 */
 func (ch *Channel) Close() error {
-	ch.CloseRecovery() // Stop any active recovery process
+	ch.closeRecovery() // Stop any active recovery process
 
 	if ch.IsClosed() {
 		return nil
@@ -586,9 +586,9 @@ func (ch *Channel) NotifyRecoveryCancel(receiver chan struct{}) chan struct{} {
 	return receiver
 }
 
-// CloseRecovery stops any active channel recovery process by notifying
+// closeRecovery stops any active channel recovery process by notifying
 // and closing all recovery cancellation listeners.
-func (ch *Channel) CloseRecovery() {
+func (ch *Channel) closeRecovery() {
 	ch.m.Lock()
 	defer ch.m.Unlock()
 
