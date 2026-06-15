@@ -21,28 +21,28 @@ make tests
 make tests-docker    # spins up RabbitMQ in Docker, runs, then tears down
 
 # Run a specific test
-go test -race -v -tags integration -run TestConnectionCloseOK
+go test -race -v -tags integration -run TestIntegrationOpenClose
 
 # Start / stop Dockerized RabbitMQ manually
 make rabbitmq-server
 make stop-rabbitmq-server
 ```
 
-Integration tests use the `integration` build tag. Without it (or without a running broker), only unit tests run. The env var `RABBITMQ_RABBITMQCTL_PATH=DOCKER:<container>` enables management-API-dependent tests.
+Integration tests use the `integration` build tag. Without it (or without a running broker), only unit tests run. The env var `RABBITMQ_RABBITMQCTL_PATH=DOCKER:<container>` (or path to a local `rabbitmqctl` executable) enables administrative/broker control tests.
 
 ## Architecture
 
-All core code is in the root package. `internal/utils` contains HTTP helpers for the RabbitMQ Management API and is used only in integration tests.
+All core code is in the root package (excluding examples under `_examples/` and generator files under `spec/`).
 
 ### Layers
 
 ```
 Caller
   └─ Connection (connection.go)     TCP socket, AMQP handshake, heartbeat, frame mux
+       ├─ read.go / write.go        frame (de)serialization
        └─ Channel (channel.go)      AMQP channel — all protocol methods
             ├─ confirms.go          publisher confirm tracking
-            ├─ consumers.go         consumer tag → delivery channel dispatch
-            └─ read.go / write.go   frame (de)serialization
+            └─ consumers.go         consumer tag → delivery channel dispatch
 ```
 
 `spec091.go` is auto-generated from the AMQP 0.9.1 spec XML. Do not hand-edit it.
