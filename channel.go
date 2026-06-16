@@ -540,6 +540,9 @@ func (ch *Channel) IsClosed() bool {
 }
 
 // NotifyStateChange registers a listener for state changes.
+//
+// It is necessary to continuously consume from the channel passed to NotifyStateChange
+// to avoid blocking internal state dispatch routines and leaking goroutines.
 func (ch *Channel) NotifyStateChange(c chan *StateChanged) {
 	ch.lifeCycle.notifyStateChange(c)
 }

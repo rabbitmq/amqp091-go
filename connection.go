@@ -76,10 +76,18 @@ type Config struct {
 	// used during TLS and AMQP handshaking.
 	Dial func(network, addr string) (net.Conn, error)
 
-	// Recovery configuration for automatic reconnection
+	// Recovery configuration for automatic reconnection.
+	//
+	// Experimental: This is an experimental feature and may be subject to API or
+	// behavioral changes in future releases.
+	//
 	// When a network failure occurs, the connection and all its channels will automatically
 	// attempt to reconnect based on the parameters specified in the Recovery configuration.
-	// If `recovery` is nil, a default recovery configuration is used.
+	//
+	// If Recovery is nil, automatic reconnection is disabled.
+	// If Recovery.ReconnectionConfig is nil, a default reconnection configuration (DefaultReconnectionConfig) is used.
+	// If Recovery.ConnectionRecovery is nil, a default connection recovery implementation (DefaultConnectionRecovery) is used.
+	//
 	// During the recovery process, applications can monitor state changes (such as reconnecting
 	// or closed) by registering a listener using `Connection.NotifyStateChange` and
 	// `Channel.NotifyStateChange`.
@@ -405,6 +413,9 @@ func (c *Connection) ConnectionState() tls.ConnectionState {
 }
 
 // NotifyStateChange registers a listener for state changes.
+//
+// It is necessary to continuously consume from the channel passed to NotifyStateChange
+// to avoid blocking internal state dispatch routines and leaking goroutines.
 func (c *Connection) NotifyStateChange(ch chan *StateChanged) {
 	c.lifeCycle.notifyStateChange(ch)
 }
