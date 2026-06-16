@@ -39,9 +39,10 @@ jobs:
         go-version: ['oldstable', 'stable']
     services:
       rabbitmq:
-        image: rabbitmq
+        image: rabbitmq:4-management
         ports:
           - 5672:5672
+          - 15672:15672
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
