@@ -8,7 +8,6 @@ package amqp091
 import (
 	"context"
 	"sync"
-	"time"
 )
 
 // confirms resequences and notifies one or multiple publisher confirmation listeners
@@ -62,12 +61,7 @@ func (c *confirms) unpublish() {
 func (c *confirms) confirm(confirmation Confirmation) {
 	delete(c.sequencer, c.expecting)
 	c.expecting++
-	for _, l := range c.listeners {
-		select {
-		case l <- confirmation:
-		case <-time.After(5 * time.Second):
-		}
-	}
+	notifyAll(c.listeners, confirmation)
 }
 
 // resequence confirms any out of order delivered confirmations
