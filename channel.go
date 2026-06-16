@@ -367,7 +367,10 @@ func (ch *Channel) dispatch(msg message) {
 	case *channelFlow:
 		ch.notifyM.RLock()
 		for _, c := range ch.flows {
-			c <- m.Active
+			select {
+			case c <- m.Active:
+			case <-time.After(5 * time.Second):
+			}
 		}
 		ch.notifyM.RUnlock()
 		if err := ch.send(&channelFlowOk{Active: m.Active}); err != nil {
@@ -377,7 +380,10 @@ func (ch *Channel) dispatch(msg message) {
 	case *basicCancel:
 		ch.notifyM.RLock()
 		for _, c := range ch.cancels {
-			c <- m.ConsumerTag
+			select {
+			case c <- m.ConsumerTag:
+			case <-time.After(5 * time.Second):
+			}
 		}
 		ch.notifyM.RUnlock()
 		ch.consumers.cancel(m.ConsumerTag)
@@ -386,7 +392,10 @@ func (ch *Channel) dispatch(msg message) {
 		ret := newReturn(*m)
 		ch.notifyM.RLock()
 		for _, c := range ch.returns {
-			c <- *ret
+			select {
+			case c <- *ret:
+			case <-time.After(5 * time.Second):
+			}
 		}
 		ch.notifyM.RUnlock()
 
