@@ -111,7 +111,7 @@ func readLongstr(r io.Reader) (v string, err error) {
 
 	// slices can't be longer than max int32 value
 	if length > (^uint32(0) >> 1) {
-		return
+		return "", ErrSyntax
 	}
 
 	bytes := make([]byte, length)
