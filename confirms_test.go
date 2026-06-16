@@ -306,3 +306,27 @@ func TestDeferredConfirmationsConcurrency(t *testing.T) {
 		t.Fatal("expected to receive true for concurrent confirmations, received false")
 	}
 }
+
+func TestConfirmDispatchDropsNotificationOnFullListener(t *testing.T) {
+	t.Parallel()
+
+	c := newConfirms()
+	listener := make(chan Confirmation, 1)
+	listener <- Confirmation{0, false} // pre-fill to capacity
+	c.Listen(listener)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.confirm(Confirmation{1, true})
+	}()
+
+	select {
+	case <-done:
+		if len(listener) != 1 {
+			t.Fatalf("expected listener to retain 1 item (notification dropped), got %d", len(listener))
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("confirm blocked on full listener for more than 6 seconds")
+	}
+}

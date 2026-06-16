@@ -845,13 +845,9 @@ func (c *Connection) dispatch0(f frame) {
 			}
 			c.shutdown(newError(m.ReplyCode, m.ReplyText))
 		case *connectionBlocked:
-			for _, c := range c.blocks {
-				c <- Blocking{Active: true, Reason: m.Reason}
-			}
+			notifyAll(c.blocks, Blocking{Active: true, Reason: m.Reason})
 		case *connectionUnblocked:
-			for _, c := range c.blocks {
-				c <- Blocking{Active: false}
-			}
+			notifyAll(c.blocks, Blocking{Active: false})
 		default:
 			select {
 			case <-c.close:
