@@ -306,3 +306,24 @@ func TestDeferredConfirmationsConcurrency(t *testing.T) {
 		t.Fatal("expected to receive true for concurrent confirmations, received false")
 	}
 }
+
+func TestConfirmDispatchDoesNotBlockOnFullListener(t *testing.T) {
+	c := newConfirms()
+
+	// Pre-fill the listener to capacity so the next send would block without the fix.
+	listener := make(chan Confirmation, 1)
+	listener <- Confirmation{DeliveryTag: 0, Ack: true}
+	c.listeners = append(c.listeners, listener)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.confirm(Confirmation{DeliveryTag: 1, Ack: true})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("confirms.confirm() blocked on full listener channel — reader goroutine would stall")
+	}
+}

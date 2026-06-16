@@ -392,3 +392,41 @@ func rabbitmqctl(t *testing.T, args ...string) error {
 
 	return cmd.Run()
 }
+
+func TestConnectionBlockedDispatchDoesNotBlockOnFullListener(t *testing.T) {
+	blockCh := make(chan Blocking, 1)
+	blockCh <- Blocking{Active: true, Reason: "existing"} // pre-fill to capacity
+
+	conn := &Connection{blocks: []chan Blocking{blockCh}}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn.dispatch0(&methodFrame{Method: &connectionBlocked{Reason: "memory"}})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("connectionBlocked dispatch blocked on full notification channel — reader goroutine would stall")
+	}
+}
+
+func TestConnectionUnblockedDispatchDoesNotBlockOnFullListener(t *testing.T) {
+	blockCh := make(chan Blocking, 1)
+	blockCh <- Blocking{Active: false} // pre-fill to capacity
+
+	conn := &Connection{blocks: []chan Blocking{blockCh}}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn.dispatch0(&methodFrame{Method: &connectionUnblocked{}})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("connectionUnblocked dispatch blocked on full notification channel — reader goroutine would stall")
+	}
+}

@@ -62,7 +62,14 @@ func (c *confirms) confirm(confirmation Confirmation) {
 	delete(c.sequencer, c.expecting)
 	c.expecting++
 	for _, l := range c.listeners {
-		l <- confirmation
+		select {
+		case l <- confirmation:
+		default:
+			go func(l chan Confirmation, c Confirmation) {
+				defer func() { recover() }()
+				l <- c
+			}(l, confirmation)
+		}
 	}
 }
 

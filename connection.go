@@ -846,11 +846,27 @@ func (c *Connection) dispatch0(f frame) {
 			c.shutdown(newError(m.ReplyCode, m.ReplyText))
 		case *connectionBlocked:
 			for _, c := range c.blocks {
-				c <- Blocking{Active: true, Reason: m.Reason}
+				b := Blocking{Active: true, Reason: m.Reason}
+				select {
+				case c <- b:
+				default:
+					go func(c chan Blocking, b Blocking) {
+						defer func() { recover() }()
+						c <- b
+					}(c, b)
+				}
 			}
 		case *connectionUnblocked:
 			for _, c := range c.blocks {
-				c <- Blocking{Active: false}
+				b := Blocking{Active: false}
+				select {
+				case c <- b:
+				default:
+					go func(c chan Blocking, b Blocking) {
+						defer func() { recover() }()
+						c <- b
+					}(c, b)
+				}
 			}
 		default:
 			select {
