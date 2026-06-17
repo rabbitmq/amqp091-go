@@ -23,6 +23,38 @@ import (
 //	octet   short         long         size octets       octet
 const frameHeaderSize = 1 + 2 + 4 + 1
 
+// notifyTimeout bounds how long a notification send may block the reader
+// goroutine when a listener's channel is full.
+const notifyTimeout = 5 * time.Second
+
+// notifyAll broadcasts v to every listener, abandoning any individual send
+// that blocks for longer than notifyTimeout so a slow or full listener can
+// never wedge the reader goroutine. A single timer is reused across the whole
+// broadcast: this avoids allocating—and, on Go < 1.23, leaking for the full
+// timeout—a timer per send, which matters on hot paths such as publisher
+// confirms. No timer is allocated when there are no listeners.
+func notifyAll[T any](listeners []chan T, v T) {
+	if len(listeners) == 0 {
+		return
+	}
+	t := time.NewTimer(notifyTimeout)
+	defer t.Stop()
+	for _, c := range listeners {
+		if !t.Stop() {
+			// Drain the channel if the timer already fired so Reset is safe.
+			select {
+			case <-t.C:
+			default:
+			}
+		}
+		t.Reset(notifyTimeout)
+		select {
+		case c <- v:
+		case <-t.C:
+		}
+	}
+}
+
 /*
 Channel represents an AMQP channel. Used as a context for valid message
 exchange.  Errors on methods with this Channel as a receiver means this channel
@@ -366,9 +398,7 @@ func (ch *Channel) dispatch(msg message) {
 
 	case *channelFlow:
 		ch.notifyM.RLock()
-		for _, c := range ch.flows {
-			c <- m.Active
-		}
+		notifyAll(ch.flows, m.Active)
 		ch.notifyM.RUnlock()
 		if err := ch.send(&channelFlowOk{Active: m.Active}); err != nil {
 			Logger.Printf("error sending channelFlowOk, channel id: %d error: %+v", ch.id, err)
@@ -376,18 +406,14 @@ func (ch *Channel) dispatch(msg message) {
 
 	case *basicCancel:
 		ch.notifyM.RLock()
-		for _, c := range ch.cancels {
-			c <- m.ConsumerTag
-		}
+		notifyAll(ch.cancels, m.ConsumerTag)
 		ch.notifyM.RUnlock()
 		ch.consumers.cancel(m.ConsumerTag)
 
 	case *basicReturn:
 		ret := newReturn(*m)
 		ch.notifyM.RLock()
-		for _, c := range ch.returns {
-			c <- *ret
-		}
+		notifyAll(ch.returns, *ret)
 		ch.notifyM.RUnlock()
 
 	case *basicAck:
