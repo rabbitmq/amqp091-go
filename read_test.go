@@ -111,6 +111,47 @@ func TestReadFieldByteArrayNegativeLength(t *testing.T) {
 	}
 }
 
+func TestReadLongstrOversizeLengthReturnsError(t *testing.T) {
+	testCases := []struct {
+		name    string
+		encoded []byte
+	}{
+		{
+			// 0x80000000 = max_int32 + 1 — first value past the accepted range.
+			name:    "max-int32-plus-one",
+			encoded: []byte{0x80, 0x00, 0x00, 0x00},
+		},
+		{
+			// 0xFFFFFFFF = max uint32 — largest possible declared length.
+			name:    "max-uint32",
+			encoded: []byte{0xFF, 0xFF, 0xFF, 0xFF},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := readLongstr(bytes.NewReader(tc.encoded))
+			if err == nil {
+				t.Fatal("expected error for oversized longstr length, got nil")
+			}
+		})
+	}
+}
+
+func TestReadTableOversizeOuterBlobReturnsError(t *testing.T) {
+	// Wire layout: [uint32: 0x80000000] [bytes that represent the "table blob"].
+	// The uint32 is the declared size of the table blob, which exceeds max_int32.
+	// These bytes should never be reached as valid frame data after the fix.
+	var buf bytes.Buffer
+	buf.Write([]byte{0x80, 0x00, 0x00, 0x00}) // declared size = max_int32 + 1
+	buf.WriteString("sentinel frame data")    // bytes that must not be misread
+
+	_, err := readTable(&buf)
+	if err == nil {
+		t.Fatal("readTable with oversized outer blob must return error, not silent empty table")
+	}
+}
+
 func TestWriteFieldUnsignedTypes(t *testing.T) {
 	testCases := []struct {
 		name     string
