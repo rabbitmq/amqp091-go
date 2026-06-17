@@ -519,7 +519,11 @@ func (ch *Channel) recvContent(f frame) {
 
 	case *bodyFrame:
 		if cap(ch.body) == 0 {
-			ch.body = make([]byte, 0, ch.header.Size)
+			headerSize := ch.header.Size
+			if fs := uint64(ch.connection.Config.FrameSize); fs > 0 && headerSize > fs {
+				headerSize = fs
+			}
+			ch.body = make([]byte, 0, headerSize)
 		}
 		ch.body = append(ch.body, frame.Body...)
 

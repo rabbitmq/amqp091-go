@@ -86,3 +86,60 @@ func TestBasicReturnDispatchDropsNotificationOnFullListener(t *testing.T) {
 		t.Fatal("basicReturn dispatch blocked on full listener for more than 6 seconds")
 	}
 }
+
+func TestRecvContentBodyPreallocationIsCappedToFrameSize(t *testing.T) {
+	testCases := []struct {
+		name       string
+		headerSize uint64
+		frameSize  int
+		wantMaxCap int
+	}{
+		{
+			// A server advertising a 1 MiB body into a connection negotiated
+			// at 128 KiB must not pre-allocate more than FrameSize bytes.
+			name:       "header size larger than FrameSize is capped",
+			headerSize: 1 << 20, // 1 MiB declared body
+			frameSize:  131072,  // 128 KiB negotiated FrameSize
+			wantMaxCap: 131072,
+		},
+		{
+			name:       "header size equal to FrameSize is not inflated",
+			headerSize: 131072,
+			frameSize:  131072,
+			wantMaxCap: 131072,
+		},
+		{
+			// When the declared body fits within FrameSize, use the exact
+			// declared size as the pre-allocation hint.
+			name:       "header size smaller than FrameSize uses header size",
+			headerSize: 1024,
+			frameSize:  131072,
+			wantMaxCap: 1024,
+		},
+		{
+			// FrameSize == 0 means "unlimited" per Config docs; fall back to
+			// the declared header size.
+			name:       "FrameSize zero uses header size",
+			headerSize: 1024,
+			frameSize:  0,
+			wantMaxCap: 1024,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := &Channel{
+				connection: &Connection{Config: Config{FrameSize: tc.frameSize}},
+				header:     &headerFrame{Size: tc.headerSize},
+			}
+
+			// Deliver a small body chunk that does not complete the message so
+			// dispatch is not triggered; we only want to inspect the cap.
+			ch.recvContent(&bodyFrame{Body: []byte("hello")})
+
+			if cap(ch.body) > tc.wantMaxCap {
+				t.Fatalf("body buffer cap = %d, want <= %d", cap(ch.body), tc.wantMaxCap)
+			}
+		})
+	}
+}
