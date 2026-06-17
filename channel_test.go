@@ -143,3 +143,22 @@ func TestRecvContentBodyPreallocationIsCappedToFrameSize(t *testing.T) {
 		})
 	}
 }
+
+func TestQosNegativeReturnsError(t *testing.T) {
+	ch := &Channel{}
+	if err := ch.validateQos(-1, 0); err == nil {
+		t.Fatal("expected error for negative prefetchCount")
+	}
+	if err := ch.validateQos(0, -1); err == nil {
+		t.Fatal("expected error for negative prefetchSize")
+	}
+	if err := ch.validateQos(-1, -1); err == nil {
+		t.Fatal("expected error for negative prefetchCount and prefetchSize")
+	}
+	if err := ch.validateQos(0, 0); err != nil {
+		t.Fatalf("unexpected error for zero values: %v", err)
+	}
+	if err := ch.validateQos(10, 100); err != nil {
+		t.Fatalf("unexpected error for positive values: %v", err)
+	}
+}
