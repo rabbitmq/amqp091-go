@@ -255,6 +255,9 @@ func readField(r io.Reader) (v any, err error) {
 		if err = binary.Read(r, binary.BigEndian, &len); err != nil {
 			return nil, err
 		}
+		if len < 0 {
+			return nil, ErrSyntax
+		}
 
 		value := make([]byte, len)
 		if _, err = io.ReadFull(r, value); err != nil {

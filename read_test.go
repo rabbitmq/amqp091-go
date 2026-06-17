@@ -77,6 +77,40 @@ func TestReadFieldUnsignedTypes(t *testing.T) {
 	}
 }
 
+func TestReadFieldByteArrayNegativeLength(t *testing.T) {
+	testCases := []struct {
+		name    string
+		encoded []byte
+	}{
+		{
+			name: "negative-one",
+			// 'x' type tag + int32(-1) big-endian = 0xFFFFFFFF
+			encoded: []byte{'x', 0xFF, 0xFF, 0xFF, 0xFF},
+		},
+		{
+			name: "min-int32",
+			// 'x' type tag + int32(math.MinInt32) big-endian = 0x80000000
+			encoded: []byte{'x', 0x80, 0x00, 0x00, 0x00},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Catch any panic so a failure reports as a test error, not a crash.
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("readField panicked with negative byte-array length: %v", r)
+				}
+			}()
+
+			_, err := readField(bytes.NewReader(tc.encoded))
+			if err == nil {
+				t.Fatal("expected error for negative byte-array length, got nil")
+			}
+		})
+	}
+}
+
 func TestWriteFieldUnsignedTypes(t *testing.T) {
 	testCases := []struct {
 		name     string
