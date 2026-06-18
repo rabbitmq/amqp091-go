@@ -820,6 +820,11 @@ greater as described by benchmarks on RabbitMQ.
 http://www.rabbitmq.com/blog/2012/04/25/rabbitmq-performance-measurements-part-2/
 */
 func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
+	// TODO: Change prefetchCount and prefetchSize types from int to uint16 and uint32 respectively.
+	// This will be a breaking change and should be done in a future major release.
+	if err := ch.validateQos(prefetchCount, prefetchSize); err != nil {
+		return err
+	}
 	return ch.call(
 		&basicQos{
 			PrefetchCount: uint16(prefetchCount),
@@ -828,6 +833,13 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 		},
 		&basicQosOk{},
 	)
+}
+
+func (ch *Channel) validateQos(prefetchCount, prefetchSize int) error {
+	if prefetchCount < 0 || prefetchSize < 0 {
+		return fmt.Errorf("amqp: Qos values must be non-negative (got prefetchCount=%d, prefetchSize=%d)", prefetchCount, prefetchSize)
+	}
+	return nil
 }
 
 /*
