@@ -7,6 +7,7 @@ package amqp091
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -425,7 +426,7 @@ func TestURI_ParseUriToString(t *testing.T) {
 		{
 			name: "TLS with URI parameters",
 			uri:  "amqps://some-host.com/foobar?certfile=/foo/%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82/cert.pem&keyfile=/foo/%E4%BD%A0%E5%A5%BD/key.pem&cacertfile=C:%5Ccerts%5Cca.pem&server_name_indication=example.com",
-			want: "amqps://some-host.com/foobar?certfile=/foo/привет/cert.pem&keyfile=/foo/你好/key.pem&cacertfile=C:\\certs\\ca.pem&server_name_indication=example.com",
+			want: "amqps://some-host.com/foobar?cacertfile=C%3A%5Ccerts%5Cca.pem&certfile=%2Ffoo%2F%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82%2Fcert.pem&keyfile=%2Ffoo%2F%E4%BD%A0%E5%A5%BD%2Fkey.pem&server_name_indication=example.com",
 		},
 		{name: "only server name indication", uri: "amqps://foo.bar?server_name_indication=example.com", want: "amqps://foo.bar/?server_name_indication=example.com"},
 	}
@@ -439,5 +440,26 @@ func TestURI_ParseUriToString(t *testing.T) {
 				t.Errorf("String() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestURIStringEncodesSpecialCharsInPaths(t *testing.T) {
+	u := URI{
+		Scheme:     "amqps",
+		Host:       "localhost",
+		Port:       5671,
+		CertFile:   "/tmp/cert=foo&keyfile=/evil",
+		KeyFile:    "/tmp/key.pem",
+		CACertFile: "/tmp/ca.pem",
+	}
+	s := u.String()
+	// Verify the '&' and '=' inside CertFile are percent-encoded
+	if strings.Contains(s, "certfile=/tmp/cert=foo&keyfile=/evil&") {
+		t.Fatal("URI.String() failed to encode special characters in CertFile")
+	}
+	// Round-trip must produce identical URI
+	u2, err := ParseURI(s)
+	if err != nil || u2.CertFile != u.CertFile {
+		t.Fatalf("round-trip failed: %v / %+v", err, u2)
 	}
 }
