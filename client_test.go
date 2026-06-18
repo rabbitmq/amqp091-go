@@ -29,10 +29,8 @@ type server struct {
 }
 
 var (
-	defaultLogin        = "guest"
-	defaultPassword     = "guest"
-	defaultPlainAuth    = &PlainAuth{defaultLogin, defaultPassword}
-	defaultAMQPlainAuth = &AMQPlainAuth{defaultLogin, defaultPassword}
+	defaultLogin    = "guest"
+	defaultPassword = "guest"
 )
 
 func defaultConfigWithAuth(auth Authentication) Config {
@@ -44,11 +42,13 @@ func defaultConfigWithAuth(auth Authentication) Config {
 }
 
 func defaultConfig() Config {
-	return defaultConfigWithAuth(defaultPlainAuth)
+	// Use new instance of PlainAuth as password is zeroed out after successful open-ok
+	return defaultConfigWithAuth(&PlainAuth{Username: defaultLogin, Password: defaultPassword})
 }
 
 func amqplainConfig() Config {
-	return defaultConfigWithAuth(defaultAMQPlainAuth)
+	// Use new instance of AMQPlainAuth as password is zeroed out after successful open-ok
+	return defaultConfigWithAuth(&AMQPlainAuth{Username: defaultLogin, Password: defaultPassword})
 }
 
 func newServer(t *testing.T, serverIO, clientIO io.ReadWriteCloser) *server {

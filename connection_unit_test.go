@@ -5,6 +5,8 @@
 package amqp091
 
 import (
+	"errors"
+	"net"
 	"testing"
 	"time"
 )
@@ -56,5 +58,93 @@ func TestConnectionUnblockedDispatchDropsNotificationOnFullListener(t *testing.T
 		}
 	case <-time.After(6 * time.Second):
 		t.Fatal("connectionUnblocked dispatch blocked on full listener for more than 6 seconds")
+	}
+}
+
+func TestConnectionOpenCompleteZerosSASLCredentials(t *testing.T) {
+	pa := &PlainAuth{Username: "user", Password: "secretpassword"}
+	apa := &AMQPlainAuth{Username: "user", Password: "secretpassword"}
+
+	c := &Connection{
+		Config: Config{
+			SASL: []Authentication{pa, apa},
+		},
+	}
+
+	err := c.openComplete()
+	if err != nil {
+		t.Fatalf("unexpected error from openComplete: %v", err)
+	}
+
+	if pa.Password != "" {
+		t.Errorf("expected PlainAuth password to be zeroed out, got %q", pa.Password)
+	}
+
+	if apa.Password != "" {
+		t.Errorf("expected AMQPlainAuth password to be zeroed out, got %q", apa.Password)
+	}
+}
+
+func TestConfigSetSASL(t *testing.T) {
+	uri, err := ParseURI("amqp://guest:secret@localhost:5672/")
+	if err != nil {
+		t.Fatalf("failed to parse URI: %v", err)
+	}
+
+	config := Config{}
+	err = config.setSASL(uri)
+	if err != nil {
+		t.Fatalf("unexpected error from setSASL: %v", err)
+	}
+
+	if len(config.SASL) != 1 {
+		t.Fatalf("expected 1 SASL mechanism, got %d", len(config.SASL))
+	}
+
+	pa, ok := config.SASL[0].(*PlainAuth)
+	if !ok {
+		t.Fatalf("expected PlainAuth, got %T", config.SASL[0])
+	}
+
+	if pa.Username != "guest" || pa.Password != "secret" {
+		t.Errorf("expected guest:secret, got %s:%s", pa.Username, pa.Password)
+	}
+}
+
+func TestReconnectRestoresSASLCredentials(t *testing.T) {
+	pa := &PlainAuth{Username: "user", Password: ""} // zeroed out
+	c := &Connection{
+		url:       "amqp://user:mysecretpassword@localhost:5672/",
+		lifeCycle: newLifeCycle(),
+		Config: Config{
+			SASL: []Authentication{pa},
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount:         1,
+					RetryInterval:         1 * time.Millisecond,
+					RecoverableErrorCodes: []int{320}, // some recoverable code
+				},
+			},
+			Dial: func(network, addr string) (net.Conn, error) {
+				return nil, errors.New("mock dial error")
+			},
+		},
+	}
+	c.closed.Store(true)
+
+	// Trigger Reconnect. It will fail due to the mock dialer, but should restore SASL first
+	_ = c.Reconnect()
+
+	if len(c.Config.SASL) != 1 {
+		t.Fatalf("expected 1 SASL mechanism after Reconnect, got %d", len(c.Config.SASL))
+	}
+
+	restoredPa, ok := c.Config.SASL[0].(*PlainAuth)
+	if !ok {
+		t.Fatalf("expected PlainAuth after Reconnect, got %T", c.Config.SASL[0])
+	}
+
+	if restoredPa.Username != "user" || restoredPa.Password != "mysecretpassword" {
+		t.Errorf("expected restored credentials to be user:mysecretpassword, got %s:%s", restoredPa.Username, restoredPa.Password)
 	}
 }

@@ -1,6 +1,10 @@
 package amqp091
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestPlainAuth(t *testing.T) {
 	auth := &PlainAuth{
@@ -27,5 +31,21 @@ func TestExternalAuth(t *testing.T) {
 
 	if auth.Response() != "\000*\000*" {
 		t.Errorf("Expected \000*\000*, got %s", auth.Response())
+	}
+}
+
+func TestPlainAuthStringRedactsPassword(t *testing.T) {
+	auth := PlainAuth{Username: "admin", Password: "s3cr3t"}
+	s := fmt.Sprintf("%+v", auth)
+	if strings.Contains(s, "s3cr3t") {
+		t.Fatal("PlainAuth default formatting exposes password")
+	}
+}
+
+func TestAMQPlainAuthStringRedactsPassword(t *testing.T) {
+	auth := AMQPlainAuth{Username: "admin", Password: "s3cr3t"}
+	s := fmt.Sprintf("%+v", auth)
+	if strings.Contains(s, "s3cr3t") {
+		t.Fatal("AMQPlainAuth default formatting exposes password")
 	}
 }

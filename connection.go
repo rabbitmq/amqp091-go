@@ -105,6 +105,29 @@ func NewConnectionProperties() Table {
 	}
 }
 
+// setSASL populates the SASL configuration from URI if it's not already set.
+func (config *Config) setSASL(uri URI) error {
+	if config.SASL == nil {
+		if uri.AuthMechanism != nil {
+			for _, identifier := range uri.AuthMechanism {
+				switch strings.ToUpper(identifier) {
+				case "PLAIN":
+					config.SASL = append(config.SASL, uri.PlainAuth())
+				case "AMQPLAIN":
+					config.SASL = append(config.SASL, uri.AMQPlainAuth())
+				case "EXTERNAL":
+					config.SASL = append(config.SASL, &ExternalAuth{})
+				default:
+					return fmt.Errorf("unsupported auth_mechanism: %v", identifier)
+				}
+			}
+		} else {
+			config.SASL = []Authentication{uri.PlainAuth()}
+		}
+	}
+	return nil
+}
+
 // Connection manages the serialization and deserialization of frames from IO
 // and dispatches the frames to the appropriate channel.  All RPC methods and
 // asynchronous Publishing, Delivery, Ack, Nack and Return messages are
@@ -237,23 +260,8 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		config.Locale = defaultLocale
 	}
 
-	if config.SASL == nil {
-		if uri.AuthMechanism != nil {
-			for _, identifier := range uri.AuthMechanism {
-				switch strings.ToUpper(identifier) {
-				case "PLAIN":
-					config.SASL = append(config.SASL, uri.PlainAuth())
-				case "AMQPLAIN":
-					config.SASL = append(config.SASL, uri.AMQPlainAuth())
-				case "EXTERNAL":
-					config.SASL = append(config.SASL, &ExternalAuth{})
-				default:
-					return nil, fmt.Errorf("unsupported auth_mechanism: %v", identifier)
-				}
-			}
-		} else {
-			config.SASL = []Authentication{uri.PlainAuth()}
-		}
+	if err := config.setSASL(uri); err != nil {
+		return nil, err
 	}
 
 	if config.Vhost == "" {
@@ -1279,6 +1287,15 @@ func (c *Connection) openComplete() error {
 		_ = deadliner.SetDeadline(time.Time{})
 	}
 
+	// Zero out credentials after successful open-ok
+	for i := range c.Config.SASL {
+		if pa, ok := c.Config.SASL[i].(*PlainAuth); ok {
+			pa.Password = ""
+		} else if apa, ok := c.Config.SASL[i].(*AMQPlainAuth); ok {
+			apa.Password = ""
+		}
+	}
+
 	return nil
 }
 
@@ -1453,6 +1470,14 @@ func (c *Connection) Reconnect() error {
 			Logger.Printf("Connection recovery failed to parse URI: %v", err)
 			return err
 		}
+
+		// Reset SASL to recover from zeroed out credentials
+		c.Config.SASL = nil
+		if err = c.Config.setSASL(uri); err != nil {
+			Logger.Printf("Connection recovery failed to set SASL: %v", err)
+			return err
+		}
+
 		addr := net.JoinHostPort(uri.Host, strconv.FormatInt(int64(uri.Port), 10))
 
 		conn, err = dialer("tcp", addr)
