@@ -218,6 +218,9 @@ func Dial(url string) (*Connection, error) {
 // seconds and sets the initial read deadline to 30 seconds.
 //
 // DialTLS uses the provided tls.Config when encountering an amqps:// scheme.
+// Note: If you provide a custom tls.Config, you should explicitly set a secure
+// MinVersion (such as tls.VersionTLS12 or tls.VersionTLS13) as the library
+// does not override it.
 func DialTLS(url string, amqps *tls.Config) (*Connection, error) {
 	return DialConfig(url, Config{
 		TLSClientConfig: amqps,
@@ -234,6 +237,9 @@ func DialTLS(url string, amqps *tls.Config) (*Connection, error) {
 //
 // DialTLS_ExternalAuth uses the provided tls.Config when encountering an
 // amqps:// scheme.
+// Note: If you provide a custom tls.Config, you should explicitly set a secure
+// MinVersion (such as tls.VersionTLS12 or tls.VersionTLS13) as the library
+// does not override it.
 func DialTLS_ExternalAuth(url string, amqps *tls.Config) (*Connection, error) {
 	return DialConfig(url, Config{
 		TLSClientConfig: amqps,
@@ -1323,6 +1329,7 @@ func tlsConfigFromURI(uri URI) (*tls.Config, error) {
 		return &tls.Config{
 			RootCAs:    certPool,
 			ServerName: uri.ServerName,
+			MinVersion: tls.VersionTLS12,
 		}, nil
 	}
 
@@ -1335,6 +1342,7 @@ func tlsConfigFromURI(uri URI) (*tls.Config, error) {
 		Certificates: []tls.Certificate{certificate},
 		RootCAs:      certPool,
 		ServerName:   uri.ServerName,
+		MinVersion:   tls.VersionTLS12,
 	}, nil
 }
 

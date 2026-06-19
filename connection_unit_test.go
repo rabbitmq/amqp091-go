@@ -5,8 +5,11 @@
 package amqp091
 
 import (
+	"crypto/tls"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -201,5 +204,75 @@ func TestNegotiationEnforcesFrameMinSize(t *testing.T) {
 				t.Errorf("negotiateFrameSize(%d, %d) = %d; want %d", tc.clientFrameSize, tc.serverFrameMax, got, tc.expectedFrameMin)
 			}
 		})
+	}
+}
+
+func TestTLSConfigFromURIEnforcesMinVersion(t *testing.T) {
+	cfg, err := tlsConfigFromURI(URI{
+		ServerName: "localhost",
+	})
+	if err != nil {
+		t.Fatalf("failed to create TLS config from URI: %v", err)
+	}
+
+	if cfg == nil {
+		t.Fatal("expected tls.Config, got nil")
+	}
+
+	if cfg.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("expected MinVersion TLS 1.2 (%d), got %d", tls.VersionTLS12, cfg.MinVersion)
+	}
+}
+
+func TestTLSConfigFromURIWithCACertAndClientCerts(t *testing.T) {
+	tempDir := t.TempDir()
+
+	caPath := filepath.Join(tempDir, "ca.pem")
+	certPath := filepath.Join(tempDir, "client.pem")
+	keyPath := filepath.Join(tempDir, "client-key.pem")
+
+	if err := os.WriteFile(caPath, []byte(caCert), 0600); err != nil {
+		t.Fatalf("failed to write CA cert: %v", err)
+	}
+	defer func() { _ = os.Remove(caPath) }()
+
+	if err := os.WriteFile(certPath, []byte(clientCert), 0600); err != nil {
+		t.Fatalf("failed to write client cert: %v", err)
+	}
+	defer func() { _ = os.Remove(certPath) }()
+
+	if err := os.WriteFile(keyPath, []byte(clientKey), 0600); err != nil {
+		t.Fatalf("failed to write client key: %v", err)
+	}
+	defer func() { _ = os.Remove(keyPath) }()
+
+	cfg, err := tlsConfigFromURI(URI{
+		CACertFile: caPath,
+		CertFile:   certPath,
+		KeyFile:    keyPath,
+		ServerName: "localhost",
+	})
+	if err != nil {
+		t.Fatalf("failed to create TLS config from URI with CA and client certs: %v", err)
+	}
+
+	if cfg == nil {
+		t.Fatal("expected tls.Config, got nil")
+	}
+
+	if cfg.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("expected MinVersion TLS 1.2 (%d), got %d", tls.VersionTLS12, cfg.MinVersion)
+	}
+
+	if len(cfg.Certificates) != 1 {
+		t.Fatalf("expected 1 certificate, got %d", len(cfg.Certificates))
+	}
+
+	if cfg.RootCAs == nil {
+		t.Fatal("expected RootCAs to be set, got nil")
+	}
+
+	if cfg.ServerName != "localhost" {
+		t.Fatalf("expected ServerName localhost, got %q", cfg.ServerName)
 	}
 }
