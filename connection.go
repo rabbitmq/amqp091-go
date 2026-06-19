@@ -1233,10 +1233,10 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 
 	c.m.Unlock()
 
-	// Frame size includes headers and end byte (len(payload)+8), even if
-	// this is less than FrameMinSize, use what the server sends because the
-	// alternative is to stop the handshake here.
-	c.Config.FrameSize = pick(config.FrameSize, int(tune.FrameMax))
+	// Frame size includes headers and end byte (len(payload)+8). Enforce the spec
+	// minimum floor of frameMinSize (4096 bytes) to prevent malicious servers
+	// from forcing extreme fragmentation and CPU overhead.
+	c.Config.FrameSize = negotiateFrameSize(config.FrameSize, int(tune.FrameMax))
 
 	// Save this off for resetDeadline()
 	c.Config.Heartbeat = time.Second * time.Duration(pick(
@@ -1379,6 +1379,14 @@ func pick(client, server int) int {
 		return max(client, server)
 	}
 	return min(client, server)
+}
+
+func negotiateFrameSize(client, server int) int {
+	size := pick(client, server)
+	if size > 0 && size < frameMinSize {
+		return frameMinSize
+	}
+	return size
 }
 
 // cleanup releases registered resources and performs final teardown of the connection.

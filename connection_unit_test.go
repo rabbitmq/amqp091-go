@@ -148,3 +148,58 @@ func TestReconnectRestoresSASLCredentials(t *testing.T) {
 		t.Errorf("expected restored credentials to be user:mysecretpassword, got %s:%s", restoredPa.Username, restoredPa.Password)
 	}
 }
+
+func TestNegotiationEnforcesFrameMinSize(t *testing.T) {
+	tests := []struct {
+		name             string
+		clientFrameSize  int
+		serverFrameMax   int
+		expectedFrameMin int
+	}{
+		{
+			name:             "client unlimited, server below min",
+			clientFrameSize:  0,
+			serverFrameMax:   1,
+			expectedFrameMin: frameMinSize,
+		},
+		{
+			name:             "client below min, server unlimited",
+			clientFrameSize:  2048,
+			serverFrameMax:   0,
+			expectedFrameMin: frameMinSize,
+		},
+		{
+			name:             "client unlimited, server unlimited",
+			clientFrameSize:  0,
+			serverFrameMax:   0,
+			expectedFrameMin: 0,
+		},
+		{
+			name:             "client and server above min (client smaller)",
+			clientFrameSize:  8192,
+			serverFrameMax:   16384,
+			expectedFrameMin: 8192,
+		},
+		{
+			name:             "client and server above min (server smaller)",
+			clientFrameSize:  16384,
+			serverFrameMax:   8192,
+			expectedFrameMin: 8192,
+		},
+		{
+			name:             "client and server below min",
+			clientFrameSize:  1,
+			serverFrameMax:   1,
+			expectedFrameMin: frameMinSize,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := negotiateFrameSize(tc.clientFrameSize, tc.serverFrameMax)
+			if got != tc.expectedFrameMin {
+				t.Errorf("negotiateFrameSize(%d, %d) = %d; want %d", tc.clientFrameSize, tc.serverFrameMax, got, tc.expectedFrameMin)
+			}
+		})
+	}
+}
