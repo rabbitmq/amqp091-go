@@ -130,7 +130,7 @@ func ExampleChannel_Confirm_bridge() {
 		log.Fatalf("channel.open source: %s", err)
 	}
 
-	if err := chs.ExchangeDeclare("log", "topic", true, false, false, false, nil); err != nil {
+	if err := chs.ExchangeDeclare("log", amqp.Topic, true, false, false, false, nil); err != nil {
 		log.Fatalf("exchange.declare destination: %s", err)
 	}
 
@@ -159,7 +159,7 @@ func ExampleChannel_Confirm_bridge() {
 		log.Fatalf("channel.open destination: %s", err)
 	}
 
-	if err := chd.ExchangeDeclare("log", "topic", true, false, false, false, nil); err != nil {
+	if err := chd.ExchangeDeclare("log", amqp.Topic, true, false, false, false, nil); err != nil {
 		log.Fatalf("exchange.declare destination: %s", err)
 	}
 
@@ -239,7 +239,7 @@ func ExampleChannel_Consume() {
 	// are the same.  This is part of AMQP being a programmable messaging model.
 	//
 	// See the Channel.Publish example for the complimentary declare.
-	err = c.ExchangeDeclare("logs", "topic", true, false, false, false, nil)
+	err = c.ExchangeDeclare("logs", amqp.Topic, true, false, false, false, nil)
 	if err != nil {
 		log.Fatalf("exchange.declare: %s", err)
 	}
@@ -365,7 +365,7 @@ func ExampleChannel_PublishWithContext() {
 	// are the same.  This is part of AMQP being a programmable messaging model.
 	//
 	// See the Channel.Consume example for the complimentary declare.
-	err = c.ExchangeDeclare("logs", "topic", true, false, false, false, nil)
+	err = c.ExchangeDeclare("logs", amqp.Topic, true, false, false, false, nil)
 	if err != nil {
 		log.Fatalf("exchange.declare: %v", err)
 	}
