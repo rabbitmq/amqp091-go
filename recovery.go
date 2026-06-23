@@ -72,10 +72,16 @@ type ConnectionRecovery interface {
 	OnChannelClose(ch *Channel, err *Error)         // Called when the channel is closed.
 }
 
+// TopologyRecovery is the interface for the topology recovery.
+type TopologyRecovery interface {
+	RecoverTopology(ch *Channel) error
+}
+
 // Recovery is the configuration for the recovery.
 type Recovery struct {
 	ReconnectionConfig *ReconnectionConfig // The configuration for the reconnection.
 	ConnectionRecovery ConnectionRecovery  // The implementation of the connection recovery.
+	TopologyRecovery   TopologyRecovery    // The implementation of the topology recovery.
 }
 
 // DefaultConnectionRecovery is the default implementation of the connection recovery.
@@ -139,4 +145,11 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 		Logger.Printf("Channel %d recovery failed: %v.", ch.id, err)
 		ch.cleanup()
 	}
+}
+
+// DefaultTopologyRecovery is the default implementation of the topology recovery.
+type DefaultTopologyRecovery struct{}
+
+func (d *DefaultTopologyRecovery) RecoverTopology(ch *Channel) error {
+	return ch.RecoverTopology()
 }
