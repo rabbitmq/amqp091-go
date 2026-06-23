@@ -76,17 +76,19 @@ type Config struct {
 	// used during TLS and AMQP handshaking.
 	Dial func(network, addr string) (net.Conn, error)
 
-	// Recovery configuration for automatic reconnection.
+	// Recovery configuration for automatic reconnection and topology recovery.
 	//
 	// Experimental: This is an experimental feature and may be subject to API or
 	// behavioral changes in future releases.
 	//
 	// When a network failure occurs, the connection and all its channels will automatically
-	// attempt to reconnect based on the parameters specified in the Recovery configuration.
+	// attempt to reconnect, and their topology (including queues, exchanges, bindings, and active consumers)
+	// will be recovered based on the parameters specified in the Recovery configuration.
 	//
-	// If Recovery is nil, automatic reconnection is disabled.
+	// If Recovery is nil, automatic reconnection and topology recovery are disabled.
 	// If Recovery.ReconnectionConfig is nil, a default reconnection configuration (DefaultReconnectionConfig) is used.
 	// If Recovery.ConnectionRecovery is nil, a default connection recovery implementation (DefaultConnectionRecovery) is used.
+	// If Recovery.TopologyRecovery is nil, a default topology recovery implementation (DefaultTopologyRecovery) is used.
 	//
 	// During the recovery process, applications can monitor state changes (such as reconnecting
 	// or closed) by registering a listener using `Connection.NotifyStateChange` and
@@ -335,6 +337,9 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		}
 		if config.Recovery.ConnectionRecovery == nil {
 			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{}
+		}
+		if config.Recovery.TopologyRecovery == nil {
+			config.Recovery.TopologyRecovery = &DefaultTopologyRecovery{}
 		}
 	}
 
@@ -1431,7 +1436,7 @@ func (c *Connection) watchConnection() {
 		for err := range errCh {
 			if err != nil {
 				Logger.Printf("Connection closed unexpectedly: %v", err)
-				if c.Config.Recovery != nil && c.Config.Recovery.ConnectionRecovery != nil {
+				if c.IsConnectionRecoveryEnabled() {
 					c.Config.Recovery.ConnectionRecovery.OnConnectionClose(c, err)
 				}
 			}
@@ -1604,6 +1609,22 @@ func (c *Connection) IsRecoveryEnabled() bool {
 		c.Config.Recovery.ReconnectionConfig != nil &&
 		c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0 &&
 		len(c.GetRecoverableErrorCodes()) > 0
+}
+
+// IsTopologyRecoveryEnabled checks if the topology recovery is enabled.
+func (c *Connection) IsTopologyRecoveryEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.IsRecoveryEnabled() && c.Config.Recovery.TopologyRecovery != nil
+}
+
+// IsConnectionRecoveryEnabled checks if the connection recovery is enabled.
+func (c *Connection) IsConnectionRecoveryEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.IsRecoveryEnabled() && c.Config.Recovery.ConnectionRecovery != nil
 }
 
 // isRecoverable returns true if the given error is recoverable based on RecoverableErrorCodes.
