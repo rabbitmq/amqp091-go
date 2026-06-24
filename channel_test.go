@@ -191,7 +191,13 @@ func compareExchangeBinding(eb1, eb2 ExchangeBindingConfig) bool {
 }
 
 func TestRecordAndRemoveQueue(t *testing.T) {
-	ch := &Channel{}
+	ch := &Channel{
+		consumers: makeConsumers(),
+	}
+	defer ch.consumers.close()
+
+	ch.consumers.add("ctag1", make(chan Delivery), consumerConfig{Queue: testQueue1})
+	ch.consumers.add("ctag2", make(chan Delivery), consumerConfig{Queue: testQueue2})
 
 	qc1 := QueueConfig{ActualName: testQueue1, Durable: true}
 	qc2 := QueueConfig{ActualName: testQueue2, AutoDelete: true}
@@ -224,6 +230,18 @@ func TestRecordAndRemoveQueue(t *testing.T) {
 	}
 
 	ch.removeQueue(testQueue1)
+
+	ch.consumers.Lock()
+	_, found1 := ch.consumers.configs["ctag1"]
+	_, found2 := ch.consumers.configs["ctag2"]
+	ch.consumers.Unlock()
+
+	if found1 {
+		t.Error("Expected consumer for removed queue testQueue1 to be cancelled/removed")
+	}
+	if !found2 {
+		t.Error("Expected consumer for remaining queue testQueue2 to still exist")
+	}
 
 	config = ch.TopologyConfiguration()
 	if _, ok := config.Queues[testQueue1]; ok {
@@ -425,5 +443,39 @@ func TestRecordAndRemoveExchangeBinding(t *testing.T) {
 	config = ch.TopologyConfiguration()
 	if len(config.ExchangeBindings) != 3 {
 		t.Fatalf("expected 3 exchange bindings after non-existent unbind, got %d", len(config.ExchangeBindings))
+	}
+}
+
+func TestRecordBindingDeduplication(t *testing.T) {
+	ch := &Channel{}
+
+	b1 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1}
+	b2 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1} // duplicate
+	b3 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: Table{"foo": "bar"}}
+	b4 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: Table{"foo": "bar"}} // duplicate of b3
+
+	ch.recordBinding(b1)
+	ch.recordBinding(b2)
+	ch.recordBinding(b3)
+	ch.recordBinding(b4)
+
+	config := ch.TopologyConfiguration()
+	if len(config.Bindings) != 2 {
+		t.Fatalf("expected 2 unique bindings, got %d", len(config.Bindings))
+	}
+
+	eb1 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1}
+	eb2 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1} // duplicate
+	eb3 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: Table{"foo": "bar"}}
+	eb4 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: Table{"foo": "bar"}} // duplicate of eb3
+
+	ch.recordExchangeBinding(eb1)
+	ch.recordExchangeBinding(eb2)
+	ch.recordExchangeBinding(eb3)
+	ch.recordExchangeBinding(eb4)
+
+	config = ch.TopologyConfiguration()
+	if len(config.ExchangeBindings) != 2 {
+		t.Fatalf("expected 2 unique exchange bindings, got %d", len(config.ExchangeBindings))
 	}
 }

@@ -878,3 +878,409 @@ func TestConnectionRecoveryCancelInterrupt(t *testing.T) {
 		}
 	}
 }
+
+// TestConnectionRecoveryExclusiveQueue tests recovery of a transient exclusive queue with server generated name,
+// an auto-delete exchange, and its binding and consumer, confirming server queue name change handles properly.
+func TestConnectionRecoveryExclusiveQueue(t *testing.T) {
+	connectionName := "test-connection-recovery-exclusive-queue"
+
+	// 1. DialConfig with default recovery configuration
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	// 2. Create a channel
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	// Create exchange non-durable auto-delete
+	exchangeName := "test_recovery_exclusive_exch"
+	err = ch.ExchangeDeclare(
+		exchangeName, // name
+		"direct",     // type
+		false,        // durable
+		true,         // auto-delete
+		false,        // internal
+		false,        // no-wait
+		nil,          // arguments
+	)
+	if err != nil {
+		t.Fatalf("ExchangeDeclare failed: %v", err)
+	}
+	defer func() {
+		_ = ch.ExchangeDelete(exchangeName, false, false)
+	}()
+
+	// Create transient exclusive queue with server generated name
+	queue, err := ch.QueueDeclare(
+		"",    // name (empty for server generated)
+		false, // durable (transient)
+		false, // auto-delete
+		true,  // exclusive
+		false, // no-wait
+		nil,   // arguments
+	)
+	if err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+
+	preRecoveryQueueName := queue.Name
+	if preRecoveryQueueName == "" {
+		t.Fatalf("Expected non-empty server generated queue name")
+	}
+
+	// Bind queue to exchange
+	routingKey := "test-routing-key"
+	err = ch.QueueBind(
+		preRecoveryQueueName, // queue
+		routingKey,           // routing key
+		exchangeName,         // exchange
+		false,                // no-wait
+		nil,                  // arguments
+	)
+	if err != nil {
+		t.Fatalf("QueueBind failed: %v", err)
+	}
+
+	// 3. Create a consumer and start consuming the message, create publisher to publish the message
+	msgs, err := ch.Consume(
+		preRecoveryQueueName,
+		"test-recovery-exclusive-consumer", // consumer tag
+		false,                              // auto-ack
+		false,                              // exclusive
+		false,                              // no-local
+		false,                              // no-wait
+		nil,                                // args
+	)
+	if err != nil {
+		t.Fatalf("Consume failed: %v", err)
+	}
+
+	// Publish message
+	err = ch.PublishWithContext(
+		context.Background(),
+		exchangeName, // exchange
+		routingKey,   // routing key
+		false,
+		false,
+		Publishing{
+			ContentType: "text/plain",
+			Body:        []byte("hello pre-recovery"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+
+	// Read message from consumer to verify consuming works pre-recovery
+	select {
+	case msg, ok := <-msgs:
+		if !ok {
+			t.Fatalf("Consume channel closed prematurely")
+		}
+		if string(msg.Body) != "hello pre-recovery" {
+			t.Fatalf("Expected message 'hello pre-recovery', got: %s", string(msg.Body))
+		}
+		t.Logf("Received message pre-recovery: %s. Acking.", string(msg.Body))
+		err = msg.Ack(false)
+		if err != nil {
+			t.Fatalf("Ack failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for message pre-recovery")
+	}
+
+	// 4. Record the current topology using channel.TopologyConfiguration
+	preRecoveryTopology := ch.TopologyConfiguration()
+
+	// Verify old queue name was indeed recorded in pre-recovery topology
+	if _, found := preRecoveryTopology.Queues[preRecoveryQueueName]; !found {
+		t.Fatalf("Expected old queue name %q to be present in pre-recovery topology, but it was not", preRecoveryQueueName)
+	}
+
+	// Verify exchange was indeed recorded in pre-recovery topology
+	if _, found := preRecoveryTopology.Exchanges[exchangeName]; !found {
+		t.Fatalf("Expected exchange %q to be present in pre-recovery topology, but it was not", exchangeName)
+	}
+
+	// 5. Register NotifyStateChange listener
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+
+	chanStateChanged := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(chanStateChanged)
+
+	// 6. Drop the connection
+	dropConnection(t, connectionName)
+
+	// 7. Wait for connection and channel open
+	waitForConnectionOpen(t, stateChanged)
+	waitForChannelOpen(t, chanStateChanged)
+
+	// 8. Verify topology is recovered by comparing with channel.TopologyConfiguration (Note, server queue name changed is confirmed)
+	// and actual queue declare passive and exchange declare passive
+	postRecoveryTopology := ch.TopologyConfiguration()
+
+	// Verify length of queues in topology
+	if len(postRecoveryTopology.Queues) != 1 {
+		t.Fatalf("Expected 1 queue in post-recovery topology, got %d", len(postRecoveryTopology.Queues))
+	}
+
+	// The old queue name should not be a key in the post-recovery topology queues
+	if _, found := postRecoveryTopology.Queues[preRecoveryQueueName]; found {
+		t.Fatalf("Expected old queue name %q to be removed from post-recovery topology queues, but it was found", preRecoveryQueueName)
+	}
+
+	// Get the new queue name from the map keys
+	var postRecoveryQueueName string
+	for name, qConfig := range postRecoveryTopology.Queues {
+		postRecoveryQueueName = name
+		if qConfig.DeclaredName != "" {
+			t.Fatalf("Expected DeclaredName of recovered queue to be empty, got %q", qConfig.DeclaredName)
+		}
+		if qConfig.ActualName != postRecoveryQueueName {
+			t.Fatalf("Expected ActualName of recovered queue to be %q, got %q", postRecoveryQueueName, qConfig.ActualName)
+		}
+	}
+
+	if postRecoveryQueueName == "" {
+		t.Fatalf("Expected recovered queue name to be non-empty")
+	}
+
+	// Confirm server queue name changed
+	if postRecoveryQueueName == preRecoveryQueueName {
+		t.Fatalf("Expected server generated queue name to change after recovery, but it remained %q", preRecoveryQueueName)
+	}
+	t.Logf("Confirmed server-generated queue name changed from %q to %q", preRecoveryQueueName, postRecoveryQueueName)
+
+	// Verify bindings updated with new queue name.
+	// We verify that we have exactly 1 binding, and it refers to the new queue name.
+	if len(postRecoveryTopology.Bindings) != 1 {
+		t.Fatalf("Expected exactly 1 binding in post-recovery topology, got %d", len(postRecoveryTopology.Bindings))
+	}
+	for _, recoveredBinding := range postRecoveryTopology.Bindings {
+		if recoveredBinding.Queue != postRecoveryQueueName {
+			t.Fatalf("Expected recovered binding to be for new queue name %q, got %q", postRecoveryQueueName, recoveredBinding.Queue)
+		}
+		if recoveredBinding.Exchange != exchangeName {
+			t.Fatalf("Expected recovered binding to use exchange %q, got %q", exchangeName, recoveredBinding.Exchange)
+		}
+	}
+
+	// Verify using actual queue declare passive
+	_, err = ch.QueueDeclarePassive(
+		postRecoveryQueueName,
+		false, // durable
+		false, // autoDelete
+		true,  // exclusive
+		false, // noWait
+		nil,   // args
+	)
+	if err != nil {
+		t.Fatalf("QueueDeclarePassive failed for recovered queue %q: %v", postRecoveryQueueName, err)
+	}
+
+	// Verify using actual exchange declare passive
+	err = ch.ExchangeDeclarePassive(
+		exchangeName,
+		"direct",
+		false, // durable
+		true,  // autoDelete
+		false, // internal
+		false, // noWait
+		nil,   // args
+	)
+	if err != nil {
+		t.Fatalf("ExchangeDeclarePassive failed for recovered exchange %q: %v", exchangeName, err)
+	}
+
+	// 9. Verify the consumer continues receive the messages after topology recovery
+	// Publish a post-recovery message
+	err = ch.PublishWithContext(
+		context.Background(),
+		exchangeName, // exchange
+		routingKey,   // routing key
+		false,
+		false,
+		Publishing{
+			ContentType: "text/plain",
+			Body:        []byte("hello post-recovery"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Publish failed post-recovery: %v", err)
+	}
+
+	// Read from consumer channel
+	select {
+	case msg, ok := <-msgs:
+		if !ok {
+			t.Fatalf("Consume channel closed after recovery")
+		}
+		if string(msg.Body) != "hello post-recovery" {
+			t.Fatalf("Expected message 'hello post-recovery', got: %s", string(msg.Body))
+		}
+		t.Logf("Received message post-recovery: %s. Acking.", string(msg.Body))
+		err = msg.Ack(false)
+		if err != nil {
+			t.Fatalf("Ack failed post-recovery: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Timeout waiting for post-recovery message")
+	}
+}
+
+// TestConnectionRecoveryDeletedQueueSkip tests that when a queue is deleted,
+// its tracked topology and consumers are successfully removed so that subsequent
+// recovery attempts do not try to recover the deleted queue or its consumer,
+// allowing the remaining queue's consumer to recover and function correctly.
+func TestConnectionRecoveryDeletedQueueSkip(t *testing.T) {
+	connectionName := "test-connection-recovery-deleted-queue-skip"
+
+	// 1. Create connection with default recovery
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	// 2. Create channel
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	exchangeName := "test_recovery_deleted_q_exch"
+	err = ch.ExchangeDeclare(
+		exchangeName,
+		"direct",
+		false, // durable
+		true,  // auto-delete
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ExchangeDeclare failed: %v", err)
+	}
+	defer func() {
+		_ = ch.ExchangeDelete(exchangeName, false, false)
+	}()
+
+	// Declare Queue 1 and Queue 2 as transient (non-durable) and exclusive
+	q1Name := "test_recovery_deleted_q1_transient"
+	_, err = ch.QueueDeclare(q1Name, false, false, true, false, nil)
+	if err != nil {
+		t.Fatalf("QueueDeclare q1 failed: %v", err)
+	}
+
+	q2Name := "test_recovery_deleted_q2_transient"
+	_, err = ch.QueueDeclare(q2Name, false, false, true, false, nil)
+	if err != nil {
+		t.Fatalf("QueueDeclare q2 failed: %v", err)
+	}
+
+	// Bind both queues
+	err = ch.QueueBind(q1Name, "key1", exchangeName, false, nil)
+	if err != nil {
+		t.Fatalf("QueueBind q1 failed: %v", err)
+	}
+	err = ch.QueueBind(q2Name, "key2", exchangeName, false, nil)
+	if err != nil {
+		t.Fatalf("QueueBind q2 failed: %v", err)
+	}
+
+	// 4. Consume from both queues
+	msgs1, err := ch.Consume(q1Name, "consumer-q1", false, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume q1 failed: %v", err)
+	}
+
+	msgs2, err := ch.Consume(q2Name, "consumer-q2", false, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume q2 failed: %v", err)
+	}
+
+	// 5. Delete one queue (q1Name)
+	_, err = ch.QueueDelete(q1Name, false, false, false)
+	if err != nil {
+		t.Fatalf("QueueDelete q1 failed: %v", err)
+	}
+
+	// Ensure the consumer channel for q1 is closed due to deletion
+	select {
+	case _, ok := <-msgs1:
+		if ok {
+			t.Fatalf("Expected msg channel for deleted queue to be closed, but received a message or it remains open")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for deleted queue's consumer channel to close")
+	}
+
+	// 6. Register state change channels to wait for recovery
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+
+	chanStateChanged := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(chanStateChanged)
+
+	// Drop Connection
+	dropConnection(t, connectionName)
+
+	// 7. Wait for recovery
+	waitForConnectionOpen(t, stateChanged)
+	waitForChannelOpen(t, chanStateChanged)
+
+	// 8. Make sure we can keep consuming from remaining queue (q2Name)
+	// Publish to remaining queue
+	err = ch.PublishWithContext(
+		context.Background(),
+		exchangeName,
+		"key2",
+		false,
+		false,
+		Publishing{
+			ContentType: "text/plain",
+			Body:        []byte("hello post-recovery-q2"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Publish to q2 failed post-recovery: %v", err)
+	}
+
+	// Consume and verify from q2
+	select {
+	case msg, ok := <-msgs2:
+		if !ok {
+			t.Fatalf("Consume channel for remaining queue (q2) closed after recovery")
+		}
+		if string(msg.Body) != "hello post-recovery-q2" {
+			t.Fatalf("Expected message 'hello post-recovery-q2', got: %s", string(msg.Body))
+		}
+		t.Logf("Received message from q2 post-recovery: %s. Acking.", string(msg.Body))
+		err = msg.Ack(false)
+		if err != nil {
+			t.Fatalf("Ack failed on q2 post-recovery: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Timeout waiting for message on remaining queue (q2) post-recovery")
+	}
+}

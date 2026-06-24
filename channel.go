@@ -2399,7 +2399,6 @@ func (ch *Channel) recordQueue(qc QueueConfig) {
 
 func (ch *Channel) removeQueue(name string) {
 	ch.topologyM.Lock()
-	defer ch.topologyM.Unlock()
 	delete(ch.topologyConfiguration.Queues, name)
 
 	// Clean up related bindings in-place (0 allocations)
@@ -2416,11 +2415,23 @@ func (ch *Channel) removeQueue(name string) {
 		}
 		ch.topologyConfiguration.Bindings = active
 	}
+	ch.topologyM.Unlock()
+
+	if ch.consumers != nil {
+		ch.consumers.cancelByQueue(name)
+	}
 }
 
 func (ch *Channel) recordBinding(bc BindingConfig) {
 	ch.topologyM.Lock()
 	defer ch.topologyM.Unlock()
+
+	for _, b := range ch.topologyConfiguration.Bindings {
+		if b.Queue == bc.Queue && b.Exchange == bc.Exchange && b.Key == bc.Key && reflect.DeepEqual(b.Args, bc.Args) {
+			return
+		}
+	}
+
 	ch.topologyConfiguration.Bindings = append(ch.topologyConfiguration.Bindings, bc)
 }
 
@@ -2443,6 +2454,13 @@ func (ch *Channel) removeBinding(bc BindingConfig) {
 func (ch *Channel) recordExchangeBinding(ebc ExchangeBindingConfig) {
 	ch.topologyM.Lock()
 	defer ch.topologyM.Unlock()
+
+	for _, eb := range ch.topologyConfiguration.ExchangeBindings {
+		if eb.Source == ebc.Source && eb.Destination == ebc.Destination && eb.Key == ebc.Key && reflect.DeepEqual(eb.Args, ebc.Args) {
+			return
+		}
+	}
+
 	ch.topologyConfiguration.ExchangeBindings = append(ch.topologyConfiguration.ExchangeBindings, ebc)
 }
 
