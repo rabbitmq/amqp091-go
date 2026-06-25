@@ -1284,3 +1284,160 @@ func TestConnectionRecoveryDeletedQueueSkip(t *testing.T) {
 		t.Fatalf("Timeout waiting for message on remaining queue (q2) post-recovery")
 	}
 }
+
+// TestConnectionRecoveryTopologyOnlyTransient verifies that with TopologyRecoveryMode
+// set to TopologyRecoveryOnlyTransient, only connection-scoped (transient) entities are
+// recovered. An auto-delete exchange, an exclusive queue, their binding and consumer are
+// restored and keep working, while a durable queue is NOT re-declared by the client.
+//
+// To observe that the durable queue is skipped, it is deleted out-of-band via a separate
+// non-recovering connection before the drop. The test channel still tracks it, so under
+// TopologyRecoveryAllEnabled it would be re-declared; under OnlyTransient it must remain
+// absent.
+func TestConnectionRecoveryTopologyOnlyTransient(t *testing.T) {
+	connectionName := "test-connection-recovery-only-transient"
+
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			TopologyRecoveryMode: TopologyRecoveryOnlyTransient,
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	// --- Durable topology (must NOT be recovered by the client) ---
+	// The durable queue is bound to a durable exchange so that neither the queue nor
+	// the binding qualifies as transient.
+	durableExchange := "test_only_transient_durable_ex"
+	if err := ch.ExchangeDeclare(durableExchange, "direct", true, false, false, false, nil); err != nil {
+		t.Fatalf("durable ExchangeDeclare failed: %v", err)
+	}
+	defer func() {
+		if !conn.IsClosed() {
+			_ = ch.ExchangeDelete(durableExchange, false, false)
+		}
+	}()
+
+	durableQueue := "test_only_transient_durable_q"
+	if _, err := ch.QueueDeclare(durableQueue, true, false, false, false, nil); err != nil {
+		t.Fatalf("durable QueueDeclare failed: %v", err)
+	}
+	if err := ch.QueueBind(durableQueue, "durable-key", durableExchange, false, nil); err != nil {
+		t.Fatalf("durable QueueBind failed: %v", err)
+	}
+
+	// --- Transient topology (must be recovered) ---
+	transientExchange := "test_only_transient_ex"
+	if err := ch.ExchangeDeclare(transientExchange, "direct", false, true, false, false, nil); err != nil {
+		t.Fatalf("transient ExchangeDeclare failed: %v", err)
+	}
+
+	transientQueue := "test_only_transient_q"
+	if _, err := ch.QueueDeclare(transientQueue, false, false, true, false, nil); err != nil { // exclusive
+		t.Fatalf("transient QueueDeclare failed: %v", err)
+	}
+	transientKey := "transient-key"
+	if err := ch.QueueBind(transientQueue, transientKey, transientExchange, false, nil); err != nil {
+		t.Fatalf("transient QueueBind failed: %v", err)
+	}
+
+	msgs, err := ch.Consume(transientQueue, "only-transient-consumer", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume failed: %v", err)
+	}
+
+	// Sanity: routing through the transient topology works pre-recovery.
+	if err := ch.PublishWithContext(context.Background(), transientExchange, transientKey, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("pre-recovery")}); err != nil {
+		t.Fatalf("pre-recovery publish failed: %v", err)
+	}
+	select {
+	case d, ok := <-msgs:
+		if !ok {
+			t.Fatalf("Consume channel closed prematurely")
+		}
+		if string(d.Body) != "pre-recovery" {
+			t.Fatalf("Expected 'pre-recovery', got %q", string(d.Body))
+		}
+		t.Logf("Received message pre-recovery: %s", string(d.Body))
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for pre-recovery message")
+	}
+
+	// Delete the durable queue out-of-band on a separate non-recovering connection.
+	// The test channel still tracks it, so its recovery behavior is observable.
+	adminConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("admin DialConfig failed: %v", err)
+	}
+	adminCh, err := adminConn.Channel()
+	if err != nil {
+		t.Fatalf("admin Channel failed: %v", err)
+	}
+	if _, err := adminCh.QueueDelete(durableQueue, false, false, false); err != nil {
+		t.Fatalf("admin QueueDelete failed: %v", err)
+	}
+	_ = adminCh.Close()
+	_ = adminConn.Close()
+
+	// Register state listeners and drop the connection.
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+	chanStateChanged := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(chanStateChanged)
+
+	dropConnection(t, connectionName)
+
+	waitForConnectionOpen(t, stateChanged)
+	waitForChannelOpen(t, chanStateChanged)
+
+	// --- Assertion 1: the transient queue, binding and consumer were recovered ---
+	if err := ch.PublishWithContext(context.Background(), transientExchange, transientKey, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("post-recovery")}); err != nil {
+		t.Fatalf("post-recovery publish failed: %v", err)
+	}
+	select {
+	case d, ok := <-msgs:
+		if !ok {
+			t.Fatalf("Consume channel closed after recovery")
+		}
+		if string(d.Body) != "post-recovery" {
+			t.Fatalf("Expected 'post-recovery', got %q", string(d.Body))
+		}
+		t.Logf("Transient queue recovered; received post-recovery message: %s", string(d.Body))
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Timeout waiting for post-recovery message on recovered transient queue")
+	}
+
+	// --- Assertion 2: the durable queue was NOT re-declared during recovery ---
+	// A failed passive declare closes the channel, so use a throwaway channel.
+	checkCh, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("verification Channel failed: %v", err)
+	}
+	defer checkCh.Close()
+	_, err = checkCh.QueueDeclarePassive(durableQueue, true, false, false, false, nil)
+	if err == nil {
+		t.Fatalf("Expected durable queue %q to be absent after OnlyTransient recovery, but it exists", durableQueue)
+	}
+	amqpErr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("Expected *Error from passive declare, got %T: %v", err, err)
+	}
+	if amqpErr.Code != NotFound {
+		t.Fatalf("Expected NotFound (404) for skipped durable queue, got code %d", amqpErr.Code)
+	}
+	t.Logf("Confirmed durable queue %q was not re-declared during OnlyTransient recovery", durableQueue)
+}
