@@ -161,8 +161,6 @@ func (subs *consumers) cancel(tag string) (found bool) {
 }
 
 // cancelByQueue untracks and terminates all consumers registered on the given queue.
-// To avoid deadlocks, consumer tags are gathered under the lock first, then
-// cancelled after releasing the lock, since cancel() also acquires the lock.
 func (subs *consumers) cancelByQueue(queue string) {
 	subs.Lock()
 	var tags []string

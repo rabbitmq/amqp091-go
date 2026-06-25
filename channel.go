@@ -2295,7 +2295,7 @@ func (ch *Channel) setupChannel() error {
 		}
 	}
 
-	// Recover Topology (Exchanges, Queues, Bindings) here
+	// Recover Topology (Exchanges, Queues, Bindings, ExchangeBindings and Consumers)
 	if ch.connection.IsTopologyRecoveryEnabled() {
 		if err = ch.connection.Config.Recovery.TopologyRecovery.RecoverTopology(ch); err != nil {
 			Logger.Printf("Channel %d recovery topology error: %v", ch.id, err)
@@ -2303,29 +2303,6 @@ func (ch *Channel) setupChannel() error {
 		}
 	}
 
-	// Re-subscribe consumers
-	ch.consumers.Lock()
-	configs := make(map[string]consumerConfig, len(ch.consumers.configs))
-	for tag, config := range ch.consumers.configs {
-		configs[tag] = config
-	}
-	ch.consumers.Unlock()
-	for tag, config := range configs {
-		req := &basicConsume{
-			Queue:       config.Queue,
-			ConsumerTag: tag,
-			NoLocal:     config.NoLocal,
-			NoAck:       config.AutoAck,
-			Exclusive:   config.Exclusive,
-			NoWait:      config.NoWait,
-			Arguments:   config.Args,
-		}
-		res := &basicConsumeOk{}
-		if err = ch.call(req, res); err != nil {
-			Logger.Printf("Channel %d recovery consume error for tag %s: %v", ch.id, tag, err)
-			return err
-		}
-	}
 	return nil
 }
 
@@ -2524,8 +2501,62 @@ func (ch *Channel) TopologyConfiguration() TopologyConfiguration {
 	}
 }
 
+// filterTransientTopology returns only the connection-scoped (transient) subset of
+// the given topology, used by TopologyRecoveryOnlyTransient.
+//
+// An exchange is transient when it is auto-delete; a queue is transient when it is
+// exclusive and/or auto-delete (server-named queues are exclusive+auto-delete and
+// are therefore included). A queue-to-exchange binding is recovered when either its
+// queue or its exchange is transient: re-declaring a transient queue drops all of
+// its bindings, including those to durable exchanges, so such bindings must be
+// recreated. An exchange-to-exchange binding is recovered when its source or
+// destination exchange is transient. Durable, non-auto-delete entities (and bindings
+// purely between them) are dropped because the broker retains them across a network
+// interruption.
+func filterTransientTopology(
+	exchanges map[string]ExchangeConfig,
+	queues map[string]QueueConfig,
+	bindings []BindingConfig,
+	exchangeBindings []ExchangeBindingConfig,
+) (map[string]ExchangeConfig, map[string]QueueConfig, []BindingConfig, []ExchangeBindingConfig) {
+	transientExchanges := make(map[string]bool)
+	filteredExchanges := make(map[string]ExchangeConfig)
+	for name, ec := range exchanges {
+		if ec.AutoDelete {
+			transientExchanges[name] = true
+			filteredExchanges[name] = ec
+		}
+	}
+
+	transientQueues := make(map[string]bool)
+	filteredQueues := make(map[string]QueueConfig)
+	for name, qc := range queues {
+		if qc.Exclusive || qc.AutoDelete {
+			transientQueues[name] = true
+			filteredQueues[name] = qc
+		}
+	}
+
+	filteredBindings := make([]BindingConfig, 0, len(bindings))
+	for _, b := range bindings {
+		if transientQueues[b.Queue] || transientExchanges[b.Exchange] {
+			filteredBindings = append(filteredBindings, b)
+		}
+	}
+
+	filteredExchangeBindings := make([]ExchangeBindingConfig, 0, len(exchangeBindings))
+	for _, eb := range exchangeBindings {
+		if transientExchanges[eb.Source] || transientExchanges[eb.Destination] {
+			filteredExchangeBindings = append(filteredExchangeBindings, eb)
+		}
+	}
+
+	return filteredExchanges, filteredQueues, filteredBindings, filteredExchangeBindings
+}
+
 // RecoverTopology redeclares all tracked exchanges, queues, queue-to-exchange bindings,
 // and exchange-to-exchange bindings on the broker after a connection/channel recovery.
+// It also re-subscribes all active consumers.
 //
 // To prevent blocking channel operations during network RPC calls, it clones the
 // topology configuration under a lock and executes declaration methods unlocked.
@@ -2535,6 +2566,10 @@ func (ch *Channel) TopologyConfiguration() TopologyConfiguration {
 // the change, updates its local mapping, and automatically propagates the new queue
 // name to all corresponding queue-to-exchange bindings and active consumer configurations.
 func (ch *Channel) RecoverTopology() error {
+	if ch.connection.topologyRecoveryMode() == TopologyRecoveryDisabled {
+		return nil
+	}
+
 	ch.topologyM.Lock()
 	// Copy collections to make calls without holding the lock
 	exchangesMap := cloneMap(ch.topologyConfiguration.Exchanges)
@@ -2542,6 +2577,11 @@ func (ch *Channel) RecoverTopology() error {
 	bindings := cloneSlice(ch.topologyConfiguration.Bindings)
 	exchangeBindings := cloneSlice(ch.topologyConfiguration.ExchangeBindings)
 	ch.topologyM.Unlock()
+
+	if ch.connection.topologyRecoveryMode() == TopologyRecoveryOnlyTransient {
+		exchangesMap, queuesMap, bindings, exchangeBindings = filterTransientTopology(
+			exchangesMap, queuesMap, bindings, exchangeBindings)
+	}
 
 	// 1. Recover exchanges
 	for _, ec := range exchangesMap {
@@ -2575,13 +2615,18 @@ func (ch *Channel) RecoverTopology() error {
 	// Update bindings and consumer configs if names were updated
 	if len(nameReplacements) > 0 {
 		ch.topologyM.Lock()
-		for i, b := range ch.topologyConfiguration.Bindings {
-			if newName, found := nameReplacements[b.Queue]; found {
+		for i := range ch.topologyConfiguration.Bindings {
+			if newName, found := nameReplacements[ch.topologyConfiguration.Bindings[i].Queue]; found {
 				ch.topologyConfiguration.Bindings[i].Queue = newName
-				bindings[i].Queue = newName
 			}
 		}
 		ch.topologyM.Unlock()
+
+		for i := range bindings {
+			if newName, found := nameReplacements[bindings[i].Queue]; found {
+				bindings[i].Queue = newName
+			}
+		}
 
 		ch.consumers.Lock()
 		for tag, config := range ch.consumers.configs {
@@ -2606,6 +2651,29 @@ func (ch *Channel) RecoverTopology() error {
 		err := ch.ExchangeBind(eb.Destination, eb.Key, eb.Source, eb.NoWait, eb.Args)
 		if err != nil {
 			return fmt.Errorf("failed to recover exchange binding from %s to %s: %w", eb.Source, eb.Destination, err)
+		}
+	}
+
+	// 5. Re-subscribe consumers
+	ch.consumers.Lock()
+	configs := make(map[string]consumerConfig, len(ch.consumers.configs))
+	for tag, config := range ch.consumers.configs {
+		configs[tag] = config
+	}
+	ch.consumers.Unlock()
+	for tag, config := range configs {
+		req := &basicConsume{
+			Queue:       config.Queue,
+			ConsumerTag: tag,
+			NoLocal:     config.NoLocal,
+			NoAck:       config.AutoAck,
+			Exclusive:   config.Exclusive,
+			NoWait:      config.NoWait,
+			Arguments:   config.Args,
+		}
+		res := &basicConsumeOk{}
+		if err := ch.call(req, res); err != nil {
+			return fmt.Errorf("failed to recover consumer for tag %s on queue %s: %w", tag, config.Queue, err)
 		}
 	}
 
