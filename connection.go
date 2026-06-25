@@ -338,7 +338,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		if config.Recovery.ConnectionRecovery == nil {
 			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{}
 		}
-		if config.Recovery.TopologyRecovery == nil {
+		if config.Recovery.TopologyRecovery == nil && config.Recovery.TopologyRecoveryMode != TopologyRecoveryDisabled {
 			config.Recovery.TopologyRecovery = &DefaultTopologyRecovery{}
 		}
 	}
@@ -1612,11 +1612,27 @@ func (c *Connection) IsRecoveryEnabled() bool {
 }
 
 // IsTopologyRecoveryEnabled checks if the topology recovery is enabled.
+//
+// Topology recovery is disabled when recovery is off, when no TopologyRecovery
+// implementation is configured, or when the configured TopologyRecoveryMode is
+// TopologyRecoveryDisabled. This single check gates both entity recovery and
+// consumer re-subscription.
 func (c *Connection) IsTopologyRecoveryEnabled() bool {
 	if c == nil {
 		return false
 	}
-	return c.IsRecoveryEnabled() && c.Config.Recovery.TopologyRecovery != nil
+	return c.IsRecoveryEnabled() &&
+		c.Config.Recovery.TopologyRecovery != nil &&
+		c.Config.Recovery.TopologyRecoveryMode != TopologyRecoveryDisabled
+}
+
+// topologyRecoveryMode returns the configured topology recovery mode, defaulting
+// to TopologyRecoveryOnlyTransient when recovery is not configured.
+func (c *Connection) topologyRecoveryMode() TopologyRecoveryMode {
+	if c == nil || c.Config.Recovery == nil {
+		return TopologyRecoveryOnlyTransient
+	}
+	return c.Config.Recovery.TopologyRecoveryMode
 }
 
 // IsConnectionRecoveryEnabled checks if the connection recovery is enabled.

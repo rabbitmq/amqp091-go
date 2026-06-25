@@ -73,15 +73,60 @@ type ConnectionRecovery interface {
 }
 
 // TopologyRecovery is the interface for the topology recovery.
+//
+// The default implementation is DefaultTopologyRecovery, which redeclares tracked
+// exchanges, queues, and bindings, as well as re-subscribing active consumers.
+//
+// Custom implementations of this interface can be provided to:
+//   - Instrument recovery with logging, tracing, or external metrics.
+//   - Load and declare topology dynamically from an external config or registry.
+//   - Rate-limit or stagger declarations to avoid overloading the broker after a reconnect.
+//   - Perform pre-recovery checks or customized failover/fallback routines.
 type TopologyRecovery interface {
 	RecoverTopology(ch *Channel) error
 }
+
+// TopologyRecoveryMode controls which topology entities are recovered after a
+// connection or channel is re-established. The modes are mutually exclusive.
+type TopologyRecoveryMode byte
+
+const (
+	// TopologyRecoveryOnlyTransient recovers only connection-scoped (transient)
+	// entities: queues declared as exclusive and/or auto-delete (which includes
+	// server-named queues), auto-delete exchanges, and any bindings that reference
+	// one of those transient entities. Active consumers are still re-subscribed,
+	// because consumer subscriptions are always lost on reconnect regardless of
+	// queue durability.
+	//
+	// Durable, non-auto-delete exchanges and queues (and bindings between them) are
+	// skipped because the broker retains them across a network interruption. Use
+	// this mode when durable topology is managed declaratively or out-of-band and
+	// only the connection-scoped entities need to be restored by the client.
+	//
+	// This is the default (the zero value of TopologyRecoveryMode), preserving the
+	// behavior of recovering only transient topology when the field is left unset.
+	TopologyRecoveryOnlyTransient TopologyRecoveryMode = iota
+
+	// TopologyRecoveryAllEnabled recovers all tracked topology: exchanges, queues,
+	// bindings, exchange-to-exchange bindings, and active consumers.
+	TopologyRecoveryAllEnabled
+
+	// TopologyRecoveryDisabled disables topology recovery completely. Neither
+	// entities nor consumers are recovered. Connection and channel recovery still
+	// occur if otherwise enabled.
+	TopologyRecoveryDisabled
+)
 
 // Recovery is the configuration for the recovery.
 type Recovery struct {
 	ReconnectionConfig *ReconnectionConfig // The configuration for the reconnection.
 	ConnectionRecovery ConnectionRecovery  // The implementation of the connection recovery.
 	TopologyRecovery   TopologyRecovery    // The implementation of the topology recovery.
+
+	// TopologyRecoveryMode controls which topology entities are recovered. The zero
+	// value (TopologyRecoveryOnlyTransient) recovers only transient tracked topology.
+	// Setting it to TopologyRecoveryDisabled disables topology and consumer recovery entirely.
+	TopologyRecoveryMode TopologyRecoveryMode
 }
 
 // DefaultConnectionRecovery is the default implementation of the connection recovery.
