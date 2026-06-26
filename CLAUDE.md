@@ -40,6 +40,7 @@ All core code is in the root package (excluding examples under `_examples/` and 
 Caller
   └─ Connection (connection.go)     TCP socket, AMQP handshake, heartbeat, frame mux
        ├─ read.go / write.go        frame (de)serialization
+       ├─ recovery.go               connection/channel recovery (reconnection)
        └─ Channel (channel.go)      AMQP channel — all protocol methods
             ├─ confirms.go          publisher confirm tracking
             └─ consumers.go         consumer tag → delivery channel dispatch
@@ -82,16 +83,22 @@ Body can span multiple `frameBody` frames; `Channel` accumulates them before dis
 
 ### Notify channels
 
-All `Notify*` methods (`NotifyClose`, `NotifyBlocked`, `NotifyFlow`, `NotifyReturn`, `NotifyCancel`, `NotifyConfirm`, `NotifyPublish`) follow the same contract:
+All `Notify*` methods (`NotifyClose`, `NotifyBlocked`, `NotifyFlow`, `NotifyReturn`, `NotifyCancel`, `NotifyConfirm`, `NotifyPublish`, `NotifyStateChange`, `NotifyRecoveryCancel`) follow the same contract:
 
 - The caller provides a channel (buffered recommended).
-- The library writes to it and **closes it** when the entity shuts down.
-- Multiple registrations result in a broadcast — all listeners receive every event.
-- Reading from a closed listener channel signals shutdown.
+- The library writes to it (or closes it for signal-only notifications) and **closes it** when the entity shuts down, is closed, or the event occurs.
+- Multiple registrations result in a broadcast — all listeners receive every event or signal.
+- Reading from a closed listener channel signals shutdown or cancellation.
 
-### No automatic reconnection
+### Connection Recovery / Reconnection
 
-By design, the library does **not** reconnect automatically. Applications detect closure via `NotifyClose` and re-establish connections and declare topology themselves. The `_examples/client/client.go` demonstrates a reconnecting wrapper pattern.
+The library supports automatic connection and channel recovery (reconnection) when a network failure occurs.
+
+- **Enabling Recovery**: Automatic recovery is enabled by providing a non-nil `Recovery` configuration in `Config` when calling `DialConfig`. If `Recovery` is nil (the default), automatic recovery is disabled.
+- **Configuration**: `Config.Recovery` contains `ReconnectionConfig` (defines `MaxRetryCount`, `RetryInterval`, and `RecoverableErrorCodes`) and `ConnectionRecovery` (an interface for the recovery implementation). If these are nil but `Recovery` is non-nil, `DefaultReconnectionConfig` and `DefaultConnectionRecovery` are used.
+- **State Monitoring**: Applications can monitor recovery state transitions (e.g., from `StateActive` to `StateReconnecting` to `StateClosed`) by registering with `Connection.NotifyStateChange` or `Channel.NotifyStateChange`.
+- **Cancellation**: Recovery can be canceled or aborted (e.g., when `Close()` is called during active reconnection). Applications can listen to this via `Connection.NotifyRecoveryCancel` or `Channel.NotifyRecoveryCancel`.
+- **Examples**: `_examples/recovery/recovery.go` demonstrates the automatic recovery pattern, while `_examples/client/client.go` demonstrates a manual reconnecting wrapper pattern.
 
 ## Key conventions
 
