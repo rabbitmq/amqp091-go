@@ -191,8 +191,12 @@ func compareExchangeBinding(eb1, eb2 ExchangeBindingConfig) bool {
 }
 
 func TestRecordAndRemoveQueue(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
 	ch := &Channel{
-		consumers: makeConsumers(),
+		connection: conn,
+		consumers:  makeConsumers(),
 	}
 	defer ch.consumers.close()
 
@@ -265,7 +269,12 @@ func TestRecordAndRemoveQueue(t *testing.T) {
 }
 
 func TestRecordAndRemoveExchange(t *testing.T) {
-	ch := &Channel{}
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+	ch := &Channel{
+		connection: conn,
+	}
 
 	ec1 := ExchangeConfig{Name: testExchange1, Kind: testExchangeKindDirect}
 	ec2 := ExchangeConfig{Name: testExchange2, Kind: testExchangeKindTopic}
@@ -335,7 +344,12 @@ func TestRecordAndRemoveExchange(t *testing.T) {
 }
 
 func TestRecordAndRemoveBinding(t *testing.T) {
-	ch := &Channel{}
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+	ch := &Channel{
+		connection: conn,
+	}
 
 	b1 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1}
 	b2 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey2}
@@ -378,7 +392,8 @@ func TestRecordAndRemoveBinding(t *testing.T) {
 
 	// For in-place compaction check, we must inspect the unexported channel's
 	// internal slice since TopologyConfiguration() returns a clone.
-	underlyingSlice := ch.topologyConfiguration.Bindings[:cap(ch.topologyConfiguration.Bindings)]
+	config = ch.TopologyConfiguration()
+	underlyingSlice := config.Bindings[:cap(config.Bindings)]
 	if underlyingSlice[3].Queue != "" {
 		t.Error("expected compacted slots in the underlying slice to be zero-valued")
 	}
@@ -391,7 +406,12 @@ func TestRecordAndRemoveBinding(t *testing.T) {
 }
 
 func TestRecordAndRemoveExchangeBinding(t *testing.T) {
-	ch := &Channel{}
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+	ch := &Channel{
+		connection: conn,
+	}
 
 	eb1 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1}
 	eb2 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey2}
@@ -434,7 +454,8 @@ func TestRecordAndRemoveExchangeBinding(t *testing.T) {
 
 	// For in-place compaction check, we must inspect the unexported channel's
 	// internal slice since TopologyConfiguration() returns a clone.
-	underlyingSlice := ch.topologyConfiguration.ExchangeBindings[:cap(ch.topologyConfiguration.ExchangeBindings)]
+	config = ch.TopologyConfiguration()
+	underlyingSlice := config.ExchangeBindings[:cap(config.ExchangeBindings)]
 	if underlyingSlice[3].Source != "" {
 		t.Error("expected compacted slots in the underlying slice to be zero-valued")
 	}
@@ -447,7 +468,12 @@ func TestRecordAndRemoveExchangeBinding(t *testing.T) {
 }
 
 func TestRecordBindingDeduplication(t *testing.T) {
-	ch := &Channel{}
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+	ch := &Channel{
+		connection: conn,
+	}
 
 	b1 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1}
 	b2 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1} // duplicate
