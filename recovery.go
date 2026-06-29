@@ -83,7 +83,7 @@ type ConnectionRecovery interface {
 //   - Rate-limit or stagger declarations to avoid overloading the broker after a reconnect.
 //   - Perform pre-recovery checks or customized failover/fallback routines.
 type TopologyRecovery interface {
-	RecoverTopology(ch *Channel) error
+	RecoverTopology(conn *Connection, channels []*Channel) error
 }
 
 // TopologyRecoveryMode controls which topology entities are recovered after a
@@ -195,6 +195,6 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 // DefaultTopologyRecovery is the default implementation of the topology recovery.
 type DefaultTopologyRecovery struct{}
 
-func (d *DefaultTopologyRecovery) RecoverTopology(ch *Channel) error {
-	return ch.RecoverTopology()
+func (d *DefaultTopologyRecovery) RecoverTopology(conn *Connection, channels []*Channel) error {
+	return conn.recoverConnectionTopology(channels)
 }
