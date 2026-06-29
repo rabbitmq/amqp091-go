@@ -1211,7 +1211,7 @@ func (ch *Channel) QueueUnbind(name, key, exchange string, args Table) error {
 		&queueUnbindOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.connection.removeBinding(ch.id, BindingConfig{
+		ch.connection.removeBinding(BindingConfig{
 			Queue:    name,
 			Key:      key,
 			Exchange: exchange,
@@ -1272,7 +1272,7 @@ func (ch *Channel) QueueDelete(name string, ifUnused, ifEmpty, noWait bool) (int
 
 	err := ch.call(req, res)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.connection.removeQueue(ch.id, name)
+		ch.connection.removeQueue(name)
 		ch.consumers.cancelByQueue(name)
 	}
 
@@ -1640,7 +1640,7 @@ func (ch *Channel) ExchangeDelete(name string, ifUnused, noWait bool) error {
 		&exchangeDeleteOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.connection.removeExchange(ch.id, name)
+		ch.connection.removeExchange(name)
 	}
 	return err
 }
@@ -1733,7 +1733,7 @@ func (ch *Channel) ExchangeUnbind(destination, key, source string, noWait bool, 
 		&exchangeUnbindOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.connection.removeExchangeBinding(ch.id, ExchangeBindingConfig{
+		ch.connection.removeExchangeBinding(ExchangeBindingConfig{
 			Destination: destination,
 			Key:         key,
 			Source:      source,

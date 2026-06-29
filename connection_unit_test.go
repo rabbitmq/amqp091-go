@@ -347,7 +347,7 @@ func TestRecordAndRemoveQueue(t *testing.T) {
 		t.Fatalf("expected 3 bindings, got %d", len(config.Bindings))
 	}
 
-	conn.removeQueue(ch.id, testQueue1)
+	conn.removeQueue(testQueue1)
 	ch.consumers.cancelByQueue(testQueue1)
 
 	ch.consumers.Lock()
@@ -379,7 +379,7 @@ func TestRecordAndRemoveQueue(t *testing.T) {
 
 	// Verify that removing a queue from a connection with nil topology is a safe no-op.
 	connEmpty := &Connection{}
-	connEmpty.removeQueue(0, "any")
+	connEmpty.removeQueue("any")
 }
 
 func TestRecordAndRemoveExchange(t *testing.T) {
@@ -422,7 +422,7 @@ func TestRecordAndRemoveExchange(t *testing.T) {
 	conn.recordExchangeBinding(0, eb3)
 	conn.recordExchangeBinding(0, eb4)
 
-	conn.removeExchange(0, testExchange1)
+	conn.removeExchange(testExchange1)
 
 	config = conn.getTopologyConfiguration(0, false)
 	if _, ok := config.Exchanges[testExchange1]; ok {
@@ -450,7 +450,7 @@ func TestRecordAndRemoveExchange(t *testing.T) {
 
 	// Verify that removing an exchange from a connection with nil topology is a safe no-op.
 	connEmpty := &Connection{}
-	connEmpty.removeExchange(0, "any")
+	connEmpty.removeExchange("any")
 }
 
 func TestRecordAndRemoveBinding(t *testing.T) {
@@ -473,7 +473,7 @@ func TestRecordAndRemoveBinding(t *testing.T) {
 		t.Fatalf("expected 4 bindings, got %d", len(config.Bindings))
 	}
 
-	conn.removeBinding(0, b1)
+	conn.removeBinding(b1)
 
 	config = conn.getTopologyConfiguration(0, false)
 	if len(config.Bindings) != 3 {
@@ -503,7 +503,7 @@ func TestRecordAndRemoveBinding(t *testing.T) {
 		t.Error("expected compacted slots in the underlying slice to be zero-valued")
 	}
 
-	conn.removeBinding(0, BindingConfig{Queue: "non-existent", Exchange: "non-existent", Key: "non-existent"})
+	conn.removeBinding(BindingConfig{Queue: "non-existent", Exchange: "non-existent", Key: "non-existent"})
 	config = conn.getTopologyConfiguration(0, false)
 	if len(config.Bindings) != 3 {
 		t.Fatalf("expected 3 bindings after non-existent unbind, got %d", len(config.Bindings))
@@ -530,7 +530,7 @@ func TestRecordAndRemoveExchangeBinding(t *testing.T) {
 		t.Fatalf("expected 4 exchange bindings, got %d", len(config.ExchangeBindings))
 	}
 
-	conn.removeExchangeBinding(0, eb1)
+	conn.removeExchangeBinding(eb1)
 
 	config = conn.getTopologyConfiguration(0, false)
 	if len(config.ExchangeBindings) != 3 {
@@ -560,7 +560,7 @@ func TestRecordAndRemoveExchangeBinding(t *testing.T) {
 		t.Error("expected compacted slots in the underlying slice to be zero-valued")
 	}
 
-	conn.removeExchangeBinding(0, ExchangeBindingConfig{Source: "non-existent", Destination: "non-existent", Key: "non-existent"})
+	conn.removeExchangeBinding(ExchangeBindingConfig{Source: "non-existent", Destination: "non-existent", Key: "non-existent"})
 	config = conn.getTopologyConfiguration(0, false)
 	if len(config.ExchangeBindings) != 3 {
 		t.Fatalf("expected 3 exchange bindings after non-existent unbind, got %d", len(config.ExchangeBindings))

@@ -1766,7 +1766,7 @@ func (c *Connection) recordExchange(channelID uint16, ec ExchangeConfig) {
 	c.channelTopology(channelID).Exchanges[ec.Name] = ec
 }
 
-func (c *Connection) removeExchange(channelID uint16, name string) {
+func (c *Connection) removeExchange(name string) {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
 
@@ -1813,7 +1813,7 @@ func (c *Connection) recordQueue(channelID uint16, qc QueueConfig) {
 	c.channelTopology(channelID).Queues[qc.ActualName] = qc
 }
 
-func (c *Connection) removeQueue(channelID uint16, name string) {
+func (c *Connection) removeQueue(name string) {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
 
@@ -1853,21 +1853,10 @@ func (c *Connection) recordBinding(channelID uint16, bc BindingConfig) {
 		}
 	}
 
-	// Grow slice capacity if needed to allow safe test assertions on capacity/compaction
-	if len(config.Bindings) == cap(config.Bindings) {
-		newCap := cap(config.Bindings) * 2
-		if newCap == 0 {
-			newCap = 4
-		}
-		newSlice := make([]BindingConfig, len(config.Bindings), newCap)
-		copy(newSlice, config.Bindings)
-		config.Bindings = newSlice
-	}
-
 	config.Bindings = append(config.Bindings, bc)
 }
 
-func (c *Connection) removeBinding(channelID uint16, bc BindingConfig) {
+func (c *Connection) removeBinding(bc BindingConfig) {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
 
@@ -1902,21 +1891,10 @@ func (c *Connection) recordExchangeBinding(channelID uint16, ebc ExchangeBinding
 		}
 	}
 
-	// Grow slice capacity if needed to allow safe test assertions on capacity/compaction
-	if len(config.ExchangeBindings) == cap(config.ExchangeBindings) {
-		newCap := cap(config.ExchangeBindings) * 2
-		if newCap == 0 {
-			newCap = 4
-		}
-		newSlice := make([]ExchangeBindingConfig, len(config.ExchangeBindings), newCap)
-		copy(newSlice, config.ExchangeBindings)
-		config.ExchangeBindings = newSlice
-	}
-
 	config.ExchangeBindings = append(config.ExchangeBindings, ebc)
 }
 
-func (c *Connection) removeExchangeBinding(channelID uint16, ebc ExchangeBindingConfig) {
+func (c *Connection) removeExchangeBinding(ebc ExchangeBindingConfig) {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
 
