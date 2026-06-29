@@ -1441,3 +1441,182 @@ func TestConnectionRecoveryTopologyOnlyTransient(t *testing.T) {
 	}
 	t.Logf("Confirmed durable queue %q was not re-declared during OnlyTransient recovery", durableQueue)
 }
+
+// TestConnectionRecoveryMultiChannelTopology tests recovery when topology is split across two channels:
+// channel 1 declares a transient exchange and server-named exclusive queue, while channel 2
+// creates the binding and consumer. After connection recovery both channels and the full
+// topology (exchange → binding → queue → consumer) must be functional.
+func TestConnectionRecoveryMultiChannelTopology(t *testing.T) {
+	connectionName := "test-connection-recovery-multi-channel-topology"
+
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	// --- Step 1: Channel 1 declares transient exchange and server-named exclusive queue ---
+	ch1, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 1 creation failed: %v", err)
+	}
+	defer ch1.Close()
+
+	exchangeName := "test_multi_chan_topology_ex"
+	if err := ch1.ExchangeDeclare(
+		exchangeName,
+		"direct",
+		false, // durable
+		true,  // auto-delete
+		false, // internal
+		false, // no-wait
+		nil,
+	); err != nil {
+		t.Fatalf("ExchangeDeclare on ch1 failed: %v", err)
+	}
+	defer func() {
+		_ = ch1.ExchangeDelete(exchangeName, false, false)
+	}()
+
+	queue, err := ch1.QueueDeclare(
+		"",    // server-generated name
+		false, // durable
+		false, // auto-delete
+		true,  // exclusive
+		false, // no-wait
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("QueueDeclare on ch1 failed: %v", err)
+	}
+	preRecoveryQueueName := queue.Name
+	t.Logf("Server-generated queue name pre-recovery: %q", preRecoveryQueueName)
+
+	// --- Step 2: Channel 2 declares the binding ---
+	ch2, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 2 creation failed: %v", err)
+	}
+	defer ch2.Close()
+
+	routingKey := "multi-chan-key"
+	if err := ch2.QueueBind(
+		preRecoveryQueueName,
+		routingKey,
+		exchangeName,
+		false,
+		nil,
+	); err != nil {
+		t.Fatalf("QueueBind on ch2 failed: %v", err)
+	}
+
+	// --- Step 3: Start consumer on channel 2 ---
+	msgs, err := ch2.Consume(
+		preRecoveryQueueName,
+		"multi-chan-consumer",
+		true,  // auto-ack
+		false, // exclusive
+		false, // no-local
+		false, // no-wait
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Consume on ch2 failed: %v", err)
+	}
+
+	// --- Step 4: Publish message using channel 1 ---
+	if err := ch1.PublishWithContext(
+		context.Background(),
+		exchangeName,
+		routingKey,
+		false,
+		false,
+		Publishing{
+			ContentType: "text/plain",
+			Body:        []byte("pre-recovery message"),
+		},
+	); err != nil {
+		t.Fatalf("Publish on ch1 pre-recovery failed: %v", err)
+	}
+
+	// --- Step 5: Confirm the message is received ---
+	select {
+	case msg, ok := <-msgs:
+		if !ok {
+			t.Fatalf("Consumer channel closed prematurely")
+		}
+		if string(msg.Body) != "pre-recovery message" {
+			t.Fatalf("Expected 'pre-recovery message', got %q", string(msg.Body))
+		}
+		t.Logf("Received pre-recovery message: %s", string(msg.Body))
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for pre-recovery message")
+	}
+
+	// --- Step 6: Register state change listeners ---
+	connStateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(connStateChanged)
+
+	ch1StateChanged := make(chan *StateChanged, 10)
+	ch1.NotifyStateChange(ch1StateChanged)
+
+	ch2StateChanged := make(chan *StateChanged, 10)
+	ch2.NotifyStateChange(ch2StateChanged)
+
+	// Drop the connection
+	dropConnection(t, connectionName)
+
+	// --- Step 7: Wait for connection and both channels to recover ---
+	waitForConnectionOpen(t, connStateChanged)
+	waitForChannelOpen(t, ch1StateChanged)
+	waitForChannelOpen(t, ch2StateChanged)
+
+	// Confirm the server-generated queue name was updated after recovery (it will differ).
+	postRecoveryTopology := ch2.TopologyConfiguration()
+	if len(postRecoveryTopology.Queues) != 1 {
+		t.Fatalf("Expected 1 queue in ch2 post-recovery topology, got %d", len(postRecoveryTopology.Queues))
+	}
+	var postRecoveryQueueName string
+	for name := range postRecoveryTopology.Queues {
+		postRecoveryQueueName = name
+	}
+	if postRecoveryQueueName == preRecoveryQueueName {
+		t.Logf("Note: server-generated queue name did not change (%q); this can happen when the broker reuses the name", postRecoveryQueueName)
+	} else {
+		t.Logf("Server-generated queue name changed from %q to %q after recovery", preRecoveryQueueName, postRecoveryQueueName)
+	}
+
+	// --- Step 8: Confirm messages continue to be received after recovery ---
+	if err := ch1.PublishWithContext(
+		context.Background(),
+		exchangeName,
+		routingKey,
+		false,
+		false,
+		Publishing{
+			ContentType: "text/plain",
+			Body:        []byte("post-recovery message"),
+		},
+	); err != nil {
+		t.Fatalf("Publish on ch1 post-recovery failed: %v", err)
+	}
+
+	select {
+	case msg, ok := <-msgs:
+		if !ok {
+			t.Fatalf("Consumer channel closed after recovery")
+		}
+		if string(msg.Body) != "post-recovery message" {
+			t.Fatalf("Expected 'post-recovery message', got %q", string(msg.Body))
+		}
+		t.Logf("Received post-recovery message: %s", string(msg.Body))
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Timeout waiting for post-recovery message")
+	}
+}
