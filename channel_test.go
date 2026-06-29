@@ -162,4 +162,3 @@ func TestQosNegativeReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error for positive values: %v", err)
 	}
 }
-

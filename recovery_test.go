@@ -1620,3 +1620,425 @@ func TestConnectionRecoveryMultiChannelTopology(t *testing.T) {
 		t.Fatalf("Timeout waiting for post-recovery message")
 	}
 }
+
+// TestConnectionRecoveryTopologyAllEnabled tests that TopologyRecoveryAllEnabled recovers all
+// tracked topology across channels, including durable entities and transient entities.
+//
+// Topology layout:
+//   - ch1 declares a durable non-auto-delete exchange and a durable non-exclusive queue.
+//     ch2 creates the binding and consumer for those durable entities.
+//   - ch2 declares a transient (auto-delete) exchange and an exclusive queue.
+//     ch1 creates the binding and consumer for those transient entities.
+//
+// After the connection is dropped, the broker deletes the transient entities. AllEnabled
+// recovery re-declares all entities and re-subscribes all consumers, so both delivery
+// channels continue to work post-recovery.
+func TestConnectionRecoveryTopologyAllEnabled(t *testing.T) {
+	connectionName := "test-connection-recovery-topology-all-enabled"
+
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			TopologyRecoveryMode: TopologyRecoveryAllEnabled,
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch1, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 1 creation failed: %v", err)
+	}
+	defer ch1.Close()
+
+	ch2, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 2 creation failed: %v", err)
+	}
+	defer ch2.Close()
+
+	// ch1: durable exchange + durable queue (non-auto-delete, non-exclusive)
+	durableExchange := "test_all_enabled_durable_ex"
+	if err := ch1.ExchangeDeclare(durableExchange, "direct", true, false, false, false, nil); err != nil {
+		t.Fatalf("durable ExchangeDeclare on ch1 failed: %v", err)
+	}
+	defer func() {
+		if !conn.IsClosed() {
+			_ = ch1.ExchangeDelete(durableExchange, false, false)
+		}
+	}()
+
+	durableQueue := "test_all_enabled_durable_q"
+	if _, err := ch1.QueueDeclare(durableQueue, true, false, false, false, nil); err != nil {
+		t.Fatalf("durable QueueDeclare on ch1 failed: %v", err)
+	}
+	defer func() {
+		if !conn.IsClosed() {
+			_, _ = ch1.QueueDelete(durableQueue, false, false, false)
+		}
+	}()
+
+	// ch2 creates binding and consumer for the durable entities
+	durableKey := "all-enabled-durable-key"
+	if err := ch2.QueueBind(durableQueue, durableKey, durableExchange, false, nil); err != nil {
+		t.Fatalf("durable QueueBind on ch2 failed: %v", err)
+	}
+	msgsFromDurable, err := ch2.Consume(durableQueue, "consumer-all-enabled-durable", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume from durable queue on ch2 failed: %v", err)
+	}
+
+	// ch2: transient (auto-delete) exchange + exclusive queue
+	transientExchange := "test_all_enabled_transient_ex"
+	if err := ch2.ExchangeDeclare(transientExchange, "direct", false, true, false, false, nil); err != nil {
+		t.Fatalf("transient ExchangeDeclare on ch2 failed: %v", err)
+	}
+
+	transientQueue := "test_all_enabled_transient_q"
+	if _, err := ch2.QueueDeclare(transientQueue, false, false, true, false, nil); err != nil {
+		t.Fatalf("transient QueueDeclare on ch2 failed: %v", err)
+	}
+
+	// ch1 creates binding and consumer for the transient entities
+	transientKey := "all-enabled-transient-key"
+	if err := ch1.QueueBind(transientQueue, transientKey, transientExchange, false, nil); err != nil {
+		t.Fatalf("transient QueueBind on ch1 failed: %v", err)
+	}
+	msgsFromTransient, err := ch1.Consume(transientQueue, "consumer-all-enabled-transient", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume from transient queue on ch1 failed: %v", err)
+	}
+
+	// Pre-recovery: publish to both exchanges and verify delivery
+	if err := ch1.PublishWithContext(context.Background(), durableExchange, durableKey, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("pre-recovery-durable")}); err != nil {
+		t.Fatalf("pre-recovery publish to durable exchange failed: %v", err)
+	}
+	if err := ch2.PublishWithContext(context.Background(), transientExchange, transientKey, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("pre-recovery-transient")}); err != nil {
+		t.Fatalf("pre-recovery publish to transient exchange failed: %v", err)
+	}
+
+	select {
+	case msg, ok := <-msgsFromDurable:
+		if !ok {
+			t.Fatalf("durable consumer channel closed prematurely")
+		}
+		if string(msg.Body) != "pre-recovery-durable" {
+			t.Fatalf("Expected 'pre-recovery-durable', got %q", string(msg.Body))
+		}
+		t.Logf("Received pre-recovery message from durable queue: %s", string(msg.Body))
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for pre-recovery message from durable queue")
+	}
+
+	select {
+	case msg, ok := <-msgsFromTransient:
+		if !ok {
+			t.Fatalf("transient consumer channel closed prematurely")
+		}
+		if string(msg.Body) != "pre-recovery-transient" {
+			t.Fatalf("Expected 'pre-recovery-transient', got %q", string(msg.Body))
+		}
+		t.Logf("Received pre-recovery message from transient queue: %s", string(msg.Body))
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for pre-recovery message from transient queue")
+	}
+
+	// Register state change listeners
+	connStateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(connStateChanged)
+
+	ch1StateChanged := make(chan *StateChanged, 10)
+	ch1.NotifyStateChange(ch1StateChanged)
+
+	ch2StateChanged := make(chan *StateChanged, 10)
+	ch2.NotifyStateChange(ch2StateChanged)
+
+	dropConnection(t, connectionName)
+
+	waitForConnectionOpen(t, connStateChanged)
+	waitForChannelOpen(t, ch1StateChanged)
+	waitForChannelOpen(t, ch2StateChanged)
+
+	// Post-recovery: publish and verify both consumers still receive messages.
+	// The durable entities survived the broker drop; AllEnabled re-subscribes the consumer.
+	// The transient entities were deleted by the broker on drop; AllEnabled re-declares them.
+	if err := ch1.PublishWithContext(context.Background(), durableExchange, durableKey, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("post-recovery-durable")}); err != nil {
+		t.Fatalf("post-recovery publish to durable exchange failed: %v", err)
+	}
+	if err := ch2.PublishWithContext(context.Background(), transientExchange, transientKey, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("post-recovery-transient")}); err != nil {
+		t.Fatalf("post-recovery publish to transient exchange failed: %v", err)
+	}
+
+	select {
+	case msg, ok := <-msgsFromDurable:
+		if !ok {
+			t.Fatalf("durable consumer channel closed after recovery")
+		}
+		if string(msg.Body) != "post-recovery-durable" {
+			t.Fatalf("Expected 'post-recovery-durable', got %q", string(msg.Body))
+		}
+		t.Logf("Received post-recovery message from durable queue: %s", string(msg.Body))
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Timeout waiting for post-recovery message from durable queue")
+	}
+
+	select {
+	case msg, ok := <-msgsFromTransient:
+		if !ok {
+			t.Fatalf("transient consumer channel closed after recovery")
+		}
+		if string(msg.Body) != "post-recovery-transient" {
+			t.Fatalf("Expected 'post-recovery-transient', got %q", string(msg.Body))
+		}
+		t.Logf("Received post-recovery message from transient queue: %s", string(msg.Body))
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Timeout waiting for post-recovery message from transient queue")
+	}
+}
+
+// TestConnectionRecoveryTopologyDisabled tests that TopologyRecoveryDisabled skips all
+// topology and consumer recovery after connection and channel reconnect.
+//
+// Topology layout:
+//   - ch1 declares a durable non-auto-delete exchange and a durable non-exclusive queue.
+//     ch2 creates the binding and consumer for those durable entities.
+//   - ch2 declares a transient (auto-delete) exchange and an exclusive queue.
+//     ch1 creates the binding and consumer for those transient entities.
+//
+// After the connection is dropped and recovers:
+//   - Transient entities are gone (broker deleted them when the connection dropped).
+//   - Durable entities are still present (broker retained them).
+//   - Neither entity type is re-declared by the client, and consumers are not re-subscribed.
+//
+// Verification uses a fresh non-recovering connection to confirm the durable exchange
+// and queue remain functional after recovery.
+func TestConnectionRecoveryTopologyDisabled(t *testing.T) {
+	connectionName := "test-connection-recovery-topology-disabled"
+
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			TopologyRecoveryMode: TopologyRecoveryDisabled,
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch1, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 1 creation failed: %v", err)
+	}
+	defer ch1.Close()
+
+	ch2, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel 2 creation failed: %v", err)
+	}
+	defer ch2.Close()
+
+	// ch1: durable exchange + durable queue (non-auto-delete, non-exclusive)
+	durableExchange := "test_disabled_durable_ex"
+	if err := ch1.ExchangeDeclare(durableExchange, "direct", true, false, false, false, nil); err != nil {
+		t.Fatalf("durable ExchangeDeclare on ch1 failed: %v", err)
+	}
+	defer func() {
+		if !conn.IsClosed() {
+			_ = ch1.ExchangeDelete(durableExchange, false, false)
+		}
+	}()
+
+	durableQueue := "test_disabled_durable_q"
+	if _, err := ch1.QueueDeclare(durableQueue, true, false, false, false, nil); err != nil {
+		t.Fatalf("durable QueueDeclare on ch1 failed: %v", err)
+	}
+	defer func() {
+		if !conn.IsClosed() {
+			_, _ = ch1.QueueDelete(durableQueue, false, false, false)
+		}
+	}()
+
+	// ch2 creates binding and consumer for the durable entities
+	durableKey := "disabled-durable-key"
+	if err := ch2.QueueBind(durableQueue, durableKey, durableExchange, false, nil); err != nil {
+		t.Fatalf("durable QueueBind on ch2 failed: %v", err)
+	}
+	msgsFromDurable, err := ch2.Consume(durableQueue, "consumer-disabled-durable", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume from durable queue on ch2 failed: %v", err)
+	}
+
+	// ch2: transient (auto-delete) exchange + exclusive queue
+	transientExchange := "test_disabled_transient_ex"
+	if err := ch2.ExchangeDeclare(transientExchange, "direct", false, true, false, false, nil); err != nil {
+		t.Fatalf("transient ExchangeDeclare on ch2 failed: %v", err)
+	}
+
+	transientQueue := "test_disabled_transient_q"
+	if _, err := ch2.QueueDeclare(transientQueue, false, false, true, false, nil); err != nil {
+		t.Fatalf("transient QueueDeclare on ch2 failed: %v", err)
+	}
+
+	// ch1 creates binding and consumer for the transient entities
+	transientKey := "disabled-transient-key"
+	if err := ch1.QueueBind(transientQueue, transientKey, transientExchange, false, nil); err != nil {
+		t.Fatalf("transient QueueBind on ch1 failed: %v", err)
+	}
+	msgsFromTransient, err := ch1.Consume(transientQueue, "consumer-disabled-transient", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume from transient queue on ch1 failed: %v", err)
+	}
+
+	// Pre-recovery: publish to both exchanges and verify delivery
+	if err := ch1.PublishWithContext(context.Background(), durableExchange, durableKey, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("pre-recovery-durable")}); err != nil {
+		t.Fatalf("pre-recovery publish to durable exchange failed: %v", err)
+	}
+	if err := ch2.PublishWithContext(context.Background(), transientExchange, transientKey, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("pre-recovery-transient")}); err != nil {
+		t.Fatalf("pre-recovery publish to transient exchange failed: %v", err)
+	}
+
+	select {
+	case msg, ok := <-msgsFromDurable:
+		if !ok {
+			t.Fatalf("durable consumer channel closed prematurely")
+		}
+		if string(msg.Body) != "pre-recovery-durable" {
+			t.Fatalf("Expected 'pre-recovery-durable', got %q", string(msg.Body))
+		}
+		t.Logf("Received pre-recovery message from durable queue: %s", string(msg.Body))
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for pre-recovery message from durable queue")
+	}
+
+	select {
+	case msg, ok := <-msgsFromTransient:
+		if !ok {
+			t.Fatalf("transient consumer channel closed prematurely")
+		}
+		if string(msg.Body) != "pre-recovery-transient" {
+			t.Fatalf("Expected 'pre-recovery-transient', got %q", string(msg.Body))
+		}
+		t.Logf("Received pre-recovery message from transient queue: %s", string(msg.Body))
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for pre-recovery message from transient queue")
+	}
+
+	// Register state change listeners
+	connStateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(connStateChanged)
+
+	ch1StateChanged := make(chan *StateChanged, 10)
+	ch1.NotifyStateChange(ch1StateChanged)
+
+	ch2StateChanged := make(chan *StateChanged, 10)
+	ch2.NotifyStateChange(ch2StateChanged)
+
+	dropConnection(t, connectionName)
+
+	// Connection and channels recover (reconnect) even though topology recovery is disabled.
+	waitForConnectionOpen(t, connStateChanged)
+	waitForChannelOpen(t, ch1StateChanged)
+	waitForChannelOpen(t, ch2StateChanged)
+
+	// Verify transient entities are gone (broker deleted them on connection drop).
+	// A failed passive declare closes the channel, so use a throwaway channel for each check.
+	checkTransientExCh, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("verification Channel for transient exchange check failed: %v", err)
+	}
+	defer checkTransientExCh.Close()
+	err = checkTransientExCh.ExchangeDeclarePassive(transientExchange, "direct", false, true, false, false, nil)
+	if err == nil {
+		t.Fatalf("Expected transient exchange %q to be absent after TopologyRecoveryDisabled, but it exists", transientExchange)
+	}
+	amqpErr, ok := err.(*Error)
+	if !ok || amqpErr.Code != NotFound {
+		t.Fatalf("Expected NotFound (404) for absent transient exchange, got: %v", err)
+	}
+	t.Logf("Confirmed transient exchange %q is absent after TopologyRecoveryDisabled", transientExchange)
+
+	checkTransientQCh, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("verification Channel for transient queue check failed: %v", err)
+	}
+	defer checkTransientQCh.Close()
+	_, err = checkTransientQCh.QueueDeclarePassive(transientQueue, false, false, true, false, nil)
+	if err == nil {
+		t.Fatalf("Expected transient queue %q to be absent after TopologyRecoveryDisabled, but it exists", transientQueue)
+	}
+	amqpErr, ok = err.(*Error)
+	if !ok || amqpErr.Code != NotFound {
+		t.Fatalf("Expected NotFound (404) for absent transient queue, got: %v", err)
+	}
+	t.Logf("Confirmed transient queue %q is absent after TopologyRecoveryDisabled", transientQueue)
+
+	// Verify durable entities are still present (broker retained them).
+	checkDurableCh, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("verification Channel for durable entities check failed: %v", err)
+	}
+	defer checkDurableCh.Close()
+
+	err = checkDurableCh.ExchangeDeclarePassive(durableExchange, "direct", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Expected durable exchange %q to be present after TopologyRecoveryDisabled, but got: %v", durableExchange, err)
+	}
+	t.Logf("Confirmed durable exchange %q is still present after TopologyRecoveryDisabled", durableExchange)
+
+	_, err = checkDurableCh.QueueDeclarePassive(durableQueue, true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Expected durable queue %q to be present after TopologyRecoveryDisabled, but got: %v", durableQueue, err)
+	}
+	t.Logf("Confirmed durable queue %q is still present after TopologyRecoveryDisabled", durableQueue)
+
+	// Verify durable topology is functional via a fresh non-recovering connection.
+	freshConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("fresh DialConfig failed: %v", err)
+	}
+	defer freshConn.Close()
+
+	freshCh, err := freshConn.Channel()
+	if err != nil {
+		t.Fatalf("fresh Channel failed: %v", err)
+	}
+	defer freshCh.Close()
+
+	freshMsgs, err := freshCh.Consume(durableQueue, "consumer-disabled-fresh", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("fresh Consume on durable queue failed: %v", err)
+	}
+
+	if err := freshCh.PublishWithContext(context.Background(), durableExchange, durableKey, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("post-recovery-durable")}); err != nil {
+		t.Fatalf("fresh publish to durable exchange failed: %v", err)
+	}
+
+	select {
+	case msg, ok := <-freshMsgs:
+		if !ok {
+			t.Fatalf("fresh consumer channel closed prematurely")
+		}
+		if string(msg.Body) != "post-recovery-durable" {
+			t.Fatalf("Expected 'post-recovery-durable', got %q", string(msg.Body))
+		}
+		t.Logf("Received post-recovery message from durable queue via fresh connection: %s", string(msg.Body))
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Timeout waiting for post-recovery message via fresh connection")
+	}
+}
