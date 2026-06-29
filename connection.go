@@ -1774,39 +1774,36 @@ func (c *Connection) removeExchange(channelID uint16, name string) {
 		return
 	}
 
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		return
-	}
+	for _, config := range c.topologyConfiguration {
+		delete(config.Exchanges, name)
 
-	delete(config.Exchanges, name)
-
-	// Clean up related bindings in-place (0 allocations)
-	if config.Bindings != nil {
-		oldBindings := config.Bindings
-		active := config.Bindings[:0]
-		for _, b := range oldBindings {
-			if b.Exchange != name {
-				active = append(active, b)
+		// Clean up related bindings in-place (0 allocations)
+		if config.Bindings != nil {
+			oldBindings := config.Bindings
+			active := config.Bindings[:0]
+			for _, b := range oldBindings {
+				if b.Exchange != name {
+					active = append(active, b)
+				}
 			}
-		}
-		for i := len(active); i < len(oldBindings); i++ {
-			oldBindings[i] = BindingConfig{}
-		}
-		config.Bindings = active
-	}
-	if config.ExchangeBindings != nil {
-		oldExchangeBindings := config.ExchangeBindings
-		active := config.ExchangeBindings[:0]
-		for _, eb := range oldExchangeBindings {
-			if eb.Destination != name && eb.Source != name {
-				active = append(active, eb)
+			for i := len(active); i < len(oldBindings); i++ {
+				oldBindings[i] = BindingConfig{}
 			}
+			config.Bindings = active
 		}
-		for i := len(active); i < len(oldExchangeBindings); i++ {
-			oldExchangeBindings[i] = ExchangeBindingConfig{}
+		if config.ExchangeBindings != nil {
+			oldExchangeBindings := config.ExchangeBindings
+			active := config.ExchangeBindings[:0]
+			for _, eb := range oldExchangeBindings {
+				if eb.Destination != name && eb.Source != name {
+					active = append(active, eb)
+				}
+			}
+			for i := len(active); i < len(oldExchangeBindings); i++ {
+				oldExchangeBindings[i] = ExchangeBindingConfig{}
+			}
+			config.ExchangeBindings = active
 		}
-		config.ExchangeBindings = active
 	}
 }
 
@@ -1824,26 +1821,23 @@ func (c *Connection) removeQueue(channelID uint16, name string) {
 		return
 	}
 
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		return
-	}
+	for _, config := range c.topologyConfiguration {
+		delete(config.Queues, name)
 
-	delete(config.Queues, name)
-
-	// Clean up related bindings in-place (0 allocations)
-	if config.Bindings != nil {
-		oldBindings := config.Bindings
-		active := config.Bindings[:0]
-		for _, b := range oldBindings {
-			if b.Queue != name {
-				active = append(active, b)
+		// Clean up related bindings in-place (0 allocations)
+		if config.Bindings != nil {
+			oldBindings := config.Bindings
+			active := config.Bindings[:0]
+			for _, b := range oldBindings {
+				if b.Queue != name {
+					active = append(active, b)
+				}
 			}
+			for i := len(active); i < len(oldBindings); i++ {
+				oldBindings[i] = BindingConfig{}
+			}
+			config.Bindings = active
 		}
-		for i := len(active); i < len(oldBindings); i++ {
-			oldBindings[i] = BindingConfig{}
-		}
-		config.Bindings = active
 	}
 }
 
@@ -1881,22 +1875,19 @@ func (c *Connection) removeBinding(channelID uint16, bc BindingConfig) {
 		return
 	}
 
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		return
-	}
-
-	oldBindings := config.Bindings
-	active := config.Bindings[:0]
-	for _, b := range oldBindings {
-		if b.Queue != bc.Queue || b.Key != bc.Key || b.Exchange != bc.Exchange {
-			active = append(active, b)
+	for _, config := range c.topologyConfiguration {
+		oldBindings := config.Bindings
+		active := config.Bindings[:0]
+		for _, b := range oldBindings {
+			if b.Queue != bc.Queue || b.Key != bc.Key || b.Exchange != bc.Exchange {
+				active = append(active, b)
+			}
 		}
+		for i := len(active); i < len(oldBindings); i++ {
+			oldBindings[i] = BindingConfig{}
+		}
+		config.Bindings = active
 	}
-	for i := len(active); i < len(oldBindings); i++ {
-		oldBindings[i] = BindingConfig{}
-	}
-	config.Bindings = active
 }
 
 func (c *Connection) recordExchangeBinding(channelID uint16, ebc ExchangeBindingConfig) {
@@ -1933,22 +1924,19 @@ func (c *Connection) removeExchangeBinding(channelID uint16, ebc ExchangeBinding
 		return
 	}
 
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		return
-	}
-
-	oldExchangeBindings := config.ExchangeBindings
-	active := config.ExchangeBindings[:0]
-	for _, eb := range oldExchangeBindings {
-		if eb.Destination != ebc.Destination || eb.Key != ebc.Key || eb.Source != ebc.Source {
-			active = append(active, eb)
+	for _, config := range c.topologyConfiguration {
+		oldExchangeBindings := config.ExchangeBindings
+		active := config.ExchangeBindings[:0]
+		for _, eb := range oldExchangeBindings {
+			if eb.Destination != ebc.Destination || eb.Key != ebc.Key || eb.Source != ebc.Source {
+				active = append(active, eb)
+			}
 		}
+		for i := len(active); i < len(oldExchangeBindings); i++ {
+			oldExchangeBindings[i] = ExchangeBindingConfig{}
+		}
+		config.ExchangeBindings = active
 	}
-	for i := len(active); i < len(oldExchangeBindings); i++ {
-		oldExchangeBindings[i] = ExchangeBindingConfig{}
-	}
-	config.ExchangeBindings = active
 }
 
 func (c *Connection) recordQos(channelID uint16, qos QosConfig) {
@@ -1966,7 +1954,13 @@ func (c *Connection) removeChannelTopology(channelID uint16) {
 	}
 }
 
-func (c *Connection) getTopologyConfiguration(channelID uint16) TopologyConfiguration {
+// getTopologyConfiguration returns a snapshot of topology for the given channel.
+// When global is false, only entities tracked on channelID are returned (channel-local view).
+// When global is true, entities from all channels are merged into a single connection-level
+// view — because AMQP topology (exchanges, queues, bindings) is scoped to the TCP connection,
+// not individual channels, the merged view is what must be recovered after a reconnect.
+// QoS is always channel-scoped and reflects only channelID's configuration in both modes.
+func (c *Connection) getTopologyConfiguration(channelID uint16, global bool) TopologyConfiguration {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
 
@@ -1974,13 +1968,9 @@ func (c *Connection) getTopologyConfiguration(channelID uint16) TopologyConfigur
 		return *newTopologyConfiguration()
 	}
 
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		return *newTopologyConfiguration()
-	}
-
+	// QoS is genuinely per-channel; always use the configuration for channelID.
 	var qos *QosConfig
-	if config.Qos != nil {
+	if config, ok := c.topologyConfiguration[channelID]; ok && config.Qos != nil {
 		qos = &QosConfig{
 			PrefetchCount: config.Qos.PrefetchCount,
 			PrefetchSize:  config.Qos.PrefetchSize,
@@ -1988,12 +1978,62 @@ func (c *Connection) getTopologyConfiguration(channelID uint16) TopologyConfigur
 		}
 	}
 
+	if !global {
+		config, ok := c.topologyConfiguration[channelID]
+		if !ok {
+			return *newTopologyConfiguration()
+		}
+		return TopologyConfiguration{
+			Qos:              qos,
+			Exchanges:        cloneMap(config.Exchanges),
+			Queues:           cloneMap(config.Queues),
+			Bindings:         cloneSlice(config.Bindings),
+			ExchangeBindings: cloneSlice(config.ExchangeBindings),
+		}
+	}
+
+	// Merge entities from ALL channels into a single connection-level view.
+	mergedExchanges := make(map[string]ExchangeConfig)
+	mergedQueues := make(map[string]QueueConfig)
+
+	// Bindings are stored as slices, so we need explicit dedup during merge.
+	// Keying by (Queue, Exchange, Key) matches the same tuple used by removeBinding.
+	type bindingKey struct{ Queue, Exchange, Key string }
+	type exBindingKey struct{ Source, Destination, Key string }
+	seenBindings := make(map[bindingKey]bool)
+	seenExchangeBindings := make(map[exBindingKey]bool)
+	var mergedBindings []BindingConfig
+	var mergedExchangeBindings []ExchangeBindingConfig
+
+	for _, config := range c.topologyConfiguration {
+		for name, ec := range config.Exchanges {
+			mergedExchanges[name] = ec
+		}
+		for name, qc := range config.Queues {
+			mergedQueues[name] = qc
+		}
+		for _, b := range config.Bindings {
+			k := bindingKey{b.Queue, b.Exchange, b.Key}
+			if !seenBindings[k] {
+				seenBindings[k] = true
+				mergedBindings = append(mergedBindings, b)
+			}
+		}
+		for _, eb := range config.ExchangeBindings {
+			k := exBindingKey{eb.Source, eb.Destination, eb.Key}
+			if !seenExchangeBindings[k] {
+				seenExchangeBindings[k] = true
+				mergedExchangeBindings = append(mergedExchangeBindings, eb)
+			}
+		}
+	}
+
 	return TopologyConfiguration{
 		Qos:              qos,
-		Exchanges:        cloneMap(config.Exchanges),
-		Queues:           cloneMap(config.Queues),
-		Bindings:         cloneSlice(config.Bindings),
-		ExchangeBindings: cloneSlice(config.ExchangeBindings),
+		Exchanges:        mergedExchanges,
+		Queues:           mergedQueues,
+		Bindings:         mergedBindings,
+		ExchangeBindings: mergedExchangeBindings,
 	}
 }
 
@@ -2044,9 +2084,27 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
 
 	// Filter transient topology if TopologyRecoveryOnlyTransient mode is set
 	if c.topologyRecoveryMode() == TopologyRecoveryOnlyTransient {
+		// Build global transient sets by scanning all channels so that cross-channel
+		// bindings (e.g. a binding on ch2 referencing a transient queue declared on ch1)
+		// are correctly retained.
+		globalTransientQueues := make(map[string]bool)
+		globalTransientExchanges := make(map[string]bool)
+		for _, config := range topologyMap {
+			for name, qc := range config.Queues {
+				if qc.Exclusive || qc.AutoDelete {
+					globalTransientQueues[name] = true
+				}
+			}
+			for name, ec := range config.Exchanges {
+				if ec.AutoDelete {
+					globalTransientExchanges[name] = true
+				}
+			}
+		}
 		for chID, config := range topologyMap {
 			exchanges, queues, bindings, exchangeBindings := filterTransientTopology(
-				config.Exchanges, config.Queues, config.Bindings, config.ExchangeBindings)
+				config.Exchanges, config.Queues, config.Bindings, config.ExchangeBindings,
+				globalTransientQueues, globalTransientExchanges)
 			config.Exchanges = exchanges
 			config.Queues = queues
 			config.Bindings = bindings

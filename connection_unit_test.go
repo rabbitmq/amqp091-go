@@ -323,7 +323,7 @@ func TestRecordAndRemoveQueue(t *testing.T) {
 	conn.recordQueue(ch.id, qc1)
 	conn.recordQueue(ch.id, qc2)
 
-	config := conn.getTopologyConfiguration(ch.id)
+	config := conn.getTopologyConfiguration(ch.id, false)
 	if len(config.Queues) != 2 {
 		t.Fatalf("expected 2 queues, got %d", len(config.Queues))
 	}
@@ -342,7 +342,7 @@ func TestRecordAndRemoveQueue(t *testing.T) {
 	conn.recordBinding(ch.id, b2)
 	conn.recordBinding(ch.id, b3)
 
-	config = conn.getTopologyConfiguration(ch.id)
+	config = conn.getTopologyConfiguration(ch.id, false)
 	if len(config.Bindings) != 3 {
 		t.Fatalf("expected 3 bindings, got %d", len(config.Bindings))
 	}
@@ -362,7 +362,7 @@ func TestRecordAndRemoveQueue(t *testing.T) {
 		t.Error("Expected consumer for remaining queue testQueue2 to still exist")
 	}
 
-	config = conn.getTopologyConfiguration(ch.id)
+	config = conn.getTopologyConfiguration(ch.id, false)
 	if _, ok := config.Queues[testQueue1]; ok {
 		t.Errorf("%s should be deleted from Queues", testQueue1)
 	}
@@ -393,7 +393,7 @@ func TestRecordAndRemoveExchange(t *testing.T) {
 	conn.recordExchange(0, ec1)
 	conn.recordExchange(0, ec2)
 
-	config := conn.getTopologyConfiguration(0)
+	config := conn.getTopologyConfiguration(0, false)
 	if len(config.Exchanges) != 2 {
 		t.Fatalf("expected 2 exchanges, got %d", len(config.Exchanges))
 	}
@@ -424,7 +424,7 @@ func TestRecordAndRemoveExchange(t *testing.T) {
 
 	conn.removeExchange(0, testExchange1)
 
-	config = conn.getTopologyConfiguration(0)
+	config = conn.getTopologyConfiguration(0, false)
 	if _, ok := config.Exchanges[testExchange1]; ok {
 		t.Errorf("%s should be deleted from Exchanges", testExchange1)
 	}
@@ -468,14 +468,14 @@ func TestRecordAndRemoveBinding(t *testing.T) {
 	conn.recordBinding(0, b3)
 	conn.recordBinding(0, b4)
 
-	config := conn.getTopologyConfiguration(0)
+	config := conn.getTopologyConfiguration(0, false)
 	if len(config.Bindings) != 4 {
 		t.Fatalf("expected 4 bindings, got %d", len(config.Bindings))
 	}
 
 	conn.removeBinding(0, b1)
 
-	config = conn.getTopologyConfiguration(0)
+	config = conn.getTopologyConfiguration(0, false)
 	if len(config.Bindings) != 3 {
 		t.Fatalf("expected 3 remaining bindings, got %d", len(config.Bindings))
 	}
@@ -504,7 +504,7 @@ func TestRecordAndRemoveBinding(t *testing.T) {
 	}
 
 	conn.removeBinding(0, BindingConfig{Queue: "non-existent", Exchange: "non-existent", Key: "non-existent"})
-	config = conn.getTopologyConfiguration(0)
+	config = conn.getTopologyConfiguration(0, false)
 	if len(config.Bindings) != 3 {
 		t.Fatalf("expected 3 bindings after non-existent unbind, got %d", len(config.Bindings))
 	}
@@ -525,14 +525,14 @@ func TestRecordAndRemoveExchangeBinding(t *testing.T) {
 	conn.recordExchangeBinding(0, eb3)
 	conn.recordExchangeBinding(0, eb4)
 
-	config := conn.getTopologyConfiguration(0)
+	config := conn.getTopologyConfiguration(0, false)
 	if len(config.ExchangeBindings) != 4 {
 		t.Fatalf("expected 4 exchange bindings, got %d", len(config.ExchangeBindings))
 	}
 
 	conn.removeExchangeBinding(0, eb1)
 
-	config = conn.getTopologyConfiguration(0)
+	config = conn.getTopologyConfiguration(0, false)
 	if len(config.ExchangeBindings) != 3 {
 		t.Fatalf("expected 3 remaining exchange bindings, got %d", len(config.ExchangeBindings))
 	}
@@ -561,7 +561,7 @@ func TestRecordAndRemoveExchangeBinding(t *testing.T) {
 	}
 
 	conn.removeExchangeBinding(0, ExchangeBindingConfig{Source: "non-existent", Destination: "non-existent", Key: "non-existent"})
-	config = conn.getTopologyConfiguration(0)
+	config = conn.getTopologyConfiguration(0, false)
 	if len(config.ExchangeBindings) != 3 {
 		t.Fatalf("expected 3 exchange bindings after non-existent unbind, got %d", len(config.ExchangeBindings))
 	}
@@ -582,7 +582,7 @@ func TestRecordBindingDeduplication(t *testing.T) {
 	conn.recordBinding(0, b3)
 	conn.recordBinding(0, b4)
 
-	config := conn.getTopologyConfiguration(0)
+	config := conn.getTopologyConfiguration(0, false)
 	if len(config.Bindings) != 2 {
 		t.Fatalf("expected 2 unique bindings, got %d", len(config.Bindings))
 	}
@@ -597,7 +597,7 @@ func TestRecordBindingDeduplication(t *testing.T) {
 	conn.recordExchangeBinding(0, eb3)
 	conn.recordExchangeBinding(0, eb4)
 
-	config = conn.getTopologyConfiguration(0)
+	config = conn.getTopologyConfiguration(0, false)
 	if len(config.ExchangeBindings) != 2 {
 		t.Fatalf("expected 2 unique exchange bindings, got %d", len(config.ExchangeBindings))
 	}

@@ -2288,7 +2288,7 @@ func (ch *Channel) setupChannelBasic() error {
 	var err error
 
 	// Reset QoS if it was configured
-	config := ch.connection.getTopologyConfiguration(ch.id)
+	config := ch.connection.getTopologyConfiguration(ch.id, false)
 	if config.Qos != nil {
 		if err = ch.Qos(int(config.Qos.PrefetchCount), int(config.Qos.PrefetchSize), config.Qos.Global); err != nil {
 			Logger.Printf("Channel %d recovery QoS error: %v", ch.id, err)
@@ -2323,13 +2323,18 @@ func (ch *Channel) resetState() {
 	}
 }
 
-// TopologyConfiguration returns a cloned, read-only copy of the channel's tracked topology.
-// Modifying the returned configuration will not affect the channel's internal state.
-func (ch *Channel) TopologyConfiguration() TopologyConfiguration {
+// TopologyConfiguration returns a cloned, read-only snapshot of topology tracked for recovery.
+// When global is false, only entities declared on this channel are returned.
+// When global is true, entities from all channels on the connection are merged into a single
+// view — because AMQP topology (exchanges, queues, bindings) is scoped to the TCP connection,
+// the merged view reflects the complete set of entities that must be recovered after a reconnect.
+// QoS settings are channel-scoped and always reflect only this channel's configuration.
+// Modifying the returned value does not affect the channel's internal state.
+func (ch *Channel) TopologyConfiguration(global bool) TopologyConfiguration {
 	if ch.connection == nil {
 		return *newTopologyConfiguration()
 	}
-	return ch.connection.getTopologyConfiguration(ch.id)
+	return ch.connection.getTopologyConfiguration(ch.id, global)
 }
 
 // filterTransientTopology returns only the connection-scoped (transient) subset of
@@ -2349,35 +2354,33 @@ func filterTransientTopology(
 	queues map[string]QueueConfig,
 	bindings []BindingConfig,
 	exchangeBindings []ExchangeBindingConfig,
+	globalTransientQueues map[string]bool,
+	globalTransientExchanges map[string]bool,
 ) (map[string]ExchangeConfig, map[string]QueueConfig, []BindingConfig, []ExchangeBindingConfig) {
-	transientExchanges := make(map[string]bool)
 	filteredExchanges := make(map[string]ExchangeConfig)
 	for name, ec := range exchanges {
 		if ec.AutoDelete {
-			transientExchanges[name] = true
 			filteredExchanges[name] = ec
 		}
 	}
 
-	transientQueues := make(map[string]bool)
 	filteredQueues := make(map[string]QueueConfig)
 	for name, qc := range queues {
 		if qc.Exclusive || qc.AutoDelete {
-			transientQueues[name] = true
 			filteredQueues[name] = qc
 		}
 	}
 
 	filteredBindings := make([]BindingConfig, 0, len(bindings))
 	for _, b := range bindings {
-		if transientQueues[b.Queue] || transientExchanges[b.Exchange] {
+		if globalTransientQueues[b.Queue] || globalTransientExchanges[b.Exchange] {
 			filteredBindings = append(filteredBindings, b)
 		}
 	}
 
 	filteredExchangeBindings := make([]ExchangeBindingConfig, 0, len(exchangeBindings))
 	for _, eb := range exchangeBindings {
-		if transientExchanges[eb.Source] || transientExchanges[eb.Destination] {
+		if globalTransientExchanges[eb.Source] || globalTransientExchanges[eb.Destination] {
 			filteredExchangeBindings = append(filteredExchangeBindings, eb)
 		}
 	}
@@ -2401,15 +2404,28 @@ func (ch *Channel) RecoverTopology() error {
 		return nil
 	}
 
-	config := ch.connection.getTopologyConfiguration(ch.id)
+	config := ch.connection.getTopologyConfiguration(ch.id, false)
 	exchangesMap := config.Exchanges
 	queuesMap := config.Queues
 	bindings := config.Bindings
 	exchangeBindings := config.ExchangeBindings
 
 	if ch.connection.topologyRecoveryMode() == TopologyRecoveryOnlyTransient {
+		localTransientQueues := make(map[string]bool)
+		for name, qc := range queuesMap {
+			if qc.Exclusive || qc.AutoDelete {
+				localTransientQueues[name] = true
+			}
+		}
+		localTransientExchanges := make(map[string]bool)
+		for name, ec := range exchangesMap {
+			if ec.AutoDelete {
+				localTransientExchanges[name] = true
+			}
+		}
 		exchangesMap, queuesMap, bindings, exchangeBindings = filterTransientTopology(
-			exchangesMap, queuesMap, bindings, exchangeBindings)
+			exchangesMap, queuesMap, bindings, exchangeBindings,
+			localTransientQueues, localTransientExchanges)
 	}
 
 	// 1. Recover exchanges

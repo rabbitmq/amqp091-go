@@ -1002,7 +1002,7 @@ func TestConnectionRecoveryExclusiveQueue(t *testing.T) {
 	}
 
 	// 4. Record the current topology using channel.TopologyConfiguration
-	preRecoveryTopology := ch.TopologyConfiguration()
+	preRecoveryTopology := ch.TopologyConfiguration(true)
 
 	// Verify old queue name was indeed recorded in pre-recovery topology
 	if _, found := preRecoveryTopology.Queues[preRecoveryQueueName]; !found {
@@ -1030,7 +1030,7 @@ func TestConnectionRecoveryExclusiveQueue(t *testing.T) {
 
 	// 8. Verify topology is recovered by comparing with channel.TopologyConfiguration (Note, server queue name changed is confirmed)
 	// and actual queue declare passive and exchange declare passive
-	postRecoveryTopology := ch.TopologyConfiguration()
+	postRecoveryTopology := ch.TopologyConfiguration(true)
 
 	// Verify length of queues in topology
 	if len(postRecoveryTopology.Queues) != 1 {
@@ -1578,7 +1578,7 @@ func TestConnectionRecoveryMultiChannelTopology(t *testing.T) {
 	waitForChannelOpen(t, ch2StateChanged)
 
 	// Confirm the server-generated queue name was updated after recovery (it will differ).
-	postRecoveryTopology := ch2.TopologyConfiguration()
+	postRecoveryTopology := ch1.TopologyConfiguration(true)
 	if len(postRecoveryTopology.Queues) != 1 {
 		t.Fatalf("Expected 1 queue in ch2 post-recovery topology, got %d", len(postRecoveryTopology.Queues))
 	}
