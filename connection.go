@@ -1560,33 +1560,20 @@ func (c *Connection) Reconnect() error {
 		}
 		c.m.Unlock()
 
-		_, isDefaultTopologyRecovery := c.Config.Recovery.TopologyRecovery.(*DefaultTopologyRecovery)
-
-		if isDefaultTopologyRecovery {
-			// Phase 1: Reconnect and open all channel sessions, apply QoS and Confirms
-			for _, ch := range channels {
-				if err = ch.reconnectChannel(); err != nil {
-					Logger.Printf("Connection recovery failed to reconnect channel %d: %v", ch.id, err)
-					conn.Close()
-					break
-				}
+		// Phase 1: Reconnect and open all channel sessions, apply QoS and Confirms
+		for _, ch := range channels {
+			if err = ch.reconnectChannel(); err != nil {
+				Logger.Printf("Connection recovery failed to reconnect channel %d: %v", ch.id, err)
+				conn.Close()
+				break
 			}
+		}
 
-			if err == nil {
-				// Phase 2: Perform phased topology recovery across all channels
-				if err = c.recoverConnectionTopology(channels); err != nil {
-					Logger.Printf("Connection recovery failed to recover topology: %v", err)
-					conn.Close()
-				}
-			}
-		} else {
-			// Fallback to channel-by-channel recovery for custom TopologyRecovery implementations
-			for _, ch := range channels {
-				if err = ch.Reconnect(); err != nil {
-					Logger.Printf("Connection recovery failed to reconnect channel %d: %v", ch.id, err)
-					conn.Close()
-					break
-				}
+		if err == nil && c.IsTopologyRecoveryEnabled() {
+			// Phase 2: Recover topology across all channels via the configured implementation
+			if err = c.Config.Recovery.TopologyRecovery.RecoverTopology(c, channels); err != nil {
+				Logger.Printf("Connection recovery failed to recover topology: %v", err)
+				conn.Close()
 			}
 		}
 
@@ -2033,6 +2020,57 @@ func cloneSlice[T any](s []T) []T {
 	result := make([]T, len(s), cap(s))
 	copy(result, s)
 	return result
+}
+
+// filterTransientTopology returns only the connection-scoped (transient) subset of
+// the given topology, used by TopologyRecoveryOnlyTransient.
+//
+// An exchange is transient when it is auto-delete; a queue is transient when it is
+// exclusive and/or auto-delete (server-named queues are exclusive+auto-delete and
+// are therefore included). A queue-to-exchange binding is recovered when either its
+// queue or its exchange is transient: re-declaring a transient queue drops all of
+// its bindings, including those to durable exchanges, so such bindings must be
+// recreated. An exchange-to-exchange binding is recovered when its source or
+// destination exchange is transient. Durable, non-auto-delete entities (and bindings
+// purely between them) are dropped because the broker retains them across a network
+// interruption.
+func filterTransientTopology(
+	exchanges map[string]ExchangeConfig,
+	queues map[string]QueueConfig,
+	bindings []BindingConfig,
+	exchangeBindings []ExchangeBindingConfig,
+	globalTransientQueues map[string]bool,
+	globalTransientExchanges map[string]bool,
+) (map[string]ExchangeConfig, map[string]QueueConfig, []BindingConfig, []ExchangeBindingConfig) {
+	filteredExchanges := make(map[string]ExchangeConfig)
+	for name, ec := range exchanges {
+		if ec.AutoDelete {
+			filteredExchanges[name] = ec
+		}
+	}
+
+	filteredQueues := make(map[string]QueueConfig)
+	for name, qc := range queues {
+		if qc.Exclusive || qc.AutoDelete {
+			filteredQueues[name] = qc
+		}
+	}
+
+	filteredBindings := make([]BindingConfig, 0, len(bindings))
+	for _, b := range bindings {
+		if globalTransientQueues[b.Queue] || globalTransientExchanges[b.Exchange] {
+			filteredBindings = append(filteredBindings, b)
+		}
+	}
+
+	filteredExchangeBindings := make([]ExchangeBindingConfig, 0, len(exchangeBindings))
+	for _, eb := range exchangeBindings {
+		if globalTransientExchanges[eb.Source] || globalTransientExchanges[eb.Destination] {
+			filteredExchangeBindings = append(filteredExchangeBindings, eb)
+		}
+	}
+
+	return filteredExchanges, filteredQueues, filteredBindings, filteredExchangeBindings
 }
 
 func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
