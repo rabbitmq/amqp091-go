@@ -276,3 +276,329 @@ func TestTLSConfigFromURIWithCACertAndClientCerts(t *testing.T) {
 		t.Fatalf("expected ServerName localhost, got %q", cfg.ServerName)
 	}
 }
+
+const (
+	testQueue1             = "test-queue-1"
+	testQueue2             = "test-queue-2"
+	testQueue3             = "test-queue-3"
+	testExchange1          = "test-exchange-1"
+	testExchange2          = "test-exchange-2"
+	testExchange3          = "test-exchange-3"
+	testExchange4          = "test-exchange-4"
+	testExchangeKindDirect = "direct"
+	testExchangeKindTopic  = "topic"
+	testKey1               = "test-key-1"
+	testKey2               = "test-key-2"
+	testKey3               = "test-key-3"
+	testKeyEb1             = "test-key-eb-1"
+	testKeyEb2             = "test-key-eb-2"
+	testKeyEb3             = "test-key-eb-3"
+	testKeyEb4             = "test-key-eb-4"
+)
+
+func compareBinding(b1, b2 BindingConfig) bool {
+	return b1.Queue == b2.Queue && b1.Exchange == b2.Exchange && b1.Key == b2.Key
+}
+
+func compareExchangeBinding(eb1, eb2 ExchangeBindingConfig) bool {
+	return eb1.Source == eb2.Source && eb1.Destination == eb2.Destination && eb1.Key == eb2.Key
+}
+
+func TestRecordAndRemoveQueue(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+	ch := &Channel{
+		connection: conn,
+		consumers:  makeConsumers(),
+	}
+	defer ch.consumers.close()
+
+	ch.consumers.add("ctag1", make(chan Delivery), consumerConfig{Queue: testQueue1})
+	ch.consumers.add("ctag2", make(chan Delivery), consumerConfig{Queue: testQueue2})
+
+	qc1 := QueueConfig{ActualName: testQueue1, Durable: true}
+	qc2 := QueueConfig{ActualName: testQueue2, AutoDelete: true}
+
+	conn.recordQueue(ch.id, qc1)
+	conn.recordQueue(ch.id, qc2)
+
+	config := conn.getTopologyConfiguration(ch.id)
+	if len(config.Queues) != 2 {
+		t.Fatalf("expected 2 queues, got %d", len(config.Queues))
+	}
+	if q, ok := config.Queues[testQueue1]; !ok || !q.Durable {
+		t.Errorf("%s not recorded correctly", testQueue1)
+	}
+	if q, ok := config.Queues[testQueue2]; !ok || !q.AutoDelete {
+		t.Errorf("%s not recorded correctly", testQueue2)
+	}
+
+	b1 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1}
+	b2 := BindingConfig{Queue: testQueue2, Exchange: testExchange1, Key: testKey2}
+	b3 := BindingConfig{Queue: testQueue1, Exchange: testExchange2, Key: testKey3}
+
+	conn.recordBinding(ch.id, b1)
+	conn.recordBinding(ch.id, b2)
+	conn.recordBinding(ch.id, b3)
+
+	config = conn.getTopologyConfiguration(ch.id)
+	if len(config.Bindings) != 3 {
+		t.Fatalf("expected 3 bindings, got %d", len(config.Bindings))
+	}
+
+	conn.removeQueue(ch.id, testQueue1)
+	ch.consumers.cancelByQueue(testQueue1)
+
+	ch.consumers.Lock()
+	_, found1 := ch.consumers.configs["ctag1"]
+	_, found2 := ch.consumers.configs["ctag2"]
+	ch.consumers.Unlock()
+
+	if found1 {
+		t.Error("Expected consumer for removed queue testQueue1 to be cancelled/removed")
+	}
+	if !found2 {
+		t.Error("Expected consumer for remaining queue testQueue2 to still exist")
+	}
+
+	config = conn.getTopologyConfiguration(ch.id)
+	if _, ok := config.Queues[testQueue1]; ok {
+		t.Errorf("%s should be deleted from Queues", testQueue1)
+	}
+	if _, ok := config.Queues[testQueue2]; !ok {
+		t.Errorf("%s should not be deleted from Queues", testQueue2)
+	}
+
+	if len(config.Bindings) != 1 {
+		t.Fatalf("expected 1 remaining binding, got %d", len(config.Bindings))
+	}
+	if !compareBinding(config.Bindings[0], b2) {
+		t.Errorf("expected remaining binding to be %+v, got %+v", b2, config.Bindings[0])
+	}
+
+	// Verify that removing a queue from a connection with nil topology is a safe no-op.
+	connEmpty := &Connection{}
+	connEmpty.removeQueue(0, "any")
+}
+
+func TestRecordAndRemoveExchange(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	ec1 := ExchangeConfig{Name: testExchange1, Kind: testExchangeKindDirect}
+	ec2 := ExchangeConfig{Name: testExchange2, Kind: testExchangeKindTopic}
+
+	conn.recordExchange(0, ec1)
+	conn.recordExchange(0, ec2)
+
+	config := conn.getTopologyConfiguration(0)
+	if len(config.Exchanges) != 2 {
+		t.Fatalf("expected 2 exchanges, got %d", len(config.Exchanges))
+	}
+	if ex, ok := config.Exchanges[testExchange1]; !ok || ex.Kind != testExchangeKindDirect {
+		t.Errorf("%s not recorded correctly", testExchange1)
+	}
+	if ex, ok := config.Exchanges[testExchange2]; !ok || ex.Kind != testExchangeKindTopic {
+		t.Errorf("%s not recorded correctly", testExchange2)
+	}
+
+	b1 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1}
+	b2 := BindingConfig{Queue: testQueue2, Exchange: testExchange2, Key: testKey2}
+	b3 := BindingConfig{Queue: testQueue3, Exchange: testExchange1, Key: testKey3}
+
+	conn.recordBinding(0, b1)
+	conn.recordBinding(0, b2)
+	conn.recordBinding(0, b3)
+
+	eb1 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKeyEb1}
+	eb2 := ExchangeBindingConfig{Source: testExchange2, Destination: testExchange3, Key: testKeyEb2}
+	eb3 := ExchangeBindingConfig{Source: testExchange3, Destination: testExchange1, Key: testKeyEb3}
+	eb4 := ExchangeBindingConfig{Source: testExchange3, Destination: testExchange4, Key: testKeyEb4}
+
+	conn.recordExchangeBinding(0, eb1)
+	conn.recordExchangeBinding(0, eb2)
+	conn.recordExchangeBinding(0, eb3)
+	conn.recordExchangeBinding(0, eb4)
+
+	conn.removeExchange(0, testExchange1)
+
+	config = conn.getTopologyConfiguration(0)
+	if _, ok := config.Exchanges[testExchange1]; ok {
+		t.Errorf("%s should be deleted from Exchanges", testExchange1)
+	}
+	if _, ok := config.Exchanges[testExchange2]; !ok {
+		t.Errorf("%s should not be deleted from Exchanges", testExchange2)
+	}
+
+	if len(config.Bindings) != 1 {
+		t.Fatalf("expected 1 remaining queue binding, got %d", len(config.Bindings))
+	}
+	if !compareBinding(config.Bindings[0], b2) {
+		t.Errorf("expected remaining queue binding to be %+v, got %+v", b2, config.Bindings[0])
+	}
+
+	if len(config.ExchangeBindings) != 2 {
+		t.Fatalf("expected 2 remaining exchange bindings, got %d", len(config.ExchangeBindings))
+	}
+	for _, eb := range config.ExchangeBindings {
+		if eb.Source == testExchange1 || eb.Destination == testExchange1 {
+			t.Errorf("found exchange binding containing %s: %+v", testExchange1, eb)
+		}
+	}
+
+	// Verify that removing an exchange from a connection with nil topology is a safe no-op.
+	connEmpty := &Connection{}
+	connEmpty.removeExchange(0, "any")
+}
+
+func TestRecordAndRemoveBinding(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	b1 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1}
+	b2 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey2}
+	b3 := BindingConfig{Queue: testQueue2, Exchange: testExchange1, Key: testKey1}
+	b4 := BindingConfig{Queue: testQueue1, Exchange: testExchange2, Key: testKey1}
+
+	conn.recordBinding(0, b1)
+	conn.recordBinding(0, b2)
+	conn.recordBinding(0, b3)
+	conn.recordBinding(0, b4)
+
+	config := conn.getTopologyConfiguration(0)
+	if len(config.Bindings) != 4 {
+		t.Fatalf("expected 4 bindings, got %d", len(config.Bindings))
+	}
+
+	conn.removeBinding(0, b1)
+
+	config = conn.getTopologyConfiguration(0)
+	if len(config.Bindings) != 3 {
+		t.Fatalf("expected 3 remaining bindings, got %d", len(config.Bindings))
+	}
+
+	foundB2, foundB3, foundB4 := false, false, false
+	for _, b := range config.Bindings {
+		if compareBinding(b, b2) {
+			foundB2 = true
+		} else if compareBinding(b, b3) {
+			foundB3 = true
+		} else if compareBinding(b, b4) {
+			foundB4 = true
+		} else if compareBinding(b, b1) {
+			t.Error("b1 was not removed")
+		}
+	}
+
+	if !foundB2 || !foundB3 || !foundB4 {
+		t.Errorf("expected b2, b3, b4 to remain, but some were missing. Active: %+v", config.Bindings)
+	}
+
+	// Verify in-place compaction zeroed the vacated slot in the internal slice.
+	internalSlice := conn.topologyConfiguration[0].Bindings
+	if internalSlice[:cap(internalSlice)][3].Queue != "" {
+		t.Error("expected compacted slots in the underlying slice to be zero-valued")
+	}
+
+	conn.removeBinding(0, BindingConfig{Queue: "non-existent", Exchange: "non-existent", Key: "non-existent"})
+	config = conn.getTopologyConfiguration(0)
+	if len(config.Bindings) != 3 {
+		t.Fatalf("expected 3 bindings after non-existent unbind, got %d", len(config.Bindings))
+	}
+}
+
+func TestRecordAndRemoveExchangeBinding(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	eb1 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1}
+	eb2 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey2}
+	eb3 := ExchangeBindingConfig{Source: testExchange2, Destination: testExchange3, Key: testKey1}
+	eb4 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange3, Key: testKey1}
+
+	conn.recordExchangeBinding(0, eb1)
+	conn.recordExchangeBinding(0, eb2)
+	conn.recordExchangeBinding(0, eb3)
+	conn.recordExchangeBinding(0, eb4)
+
+	config := conn.getTopologyConfiguration(0)
+	if len(config.ExchangeBindings) != 4 {
+		t.Fatalf("expected 4 exchange bindings, got %d", len(config.ExchangeBindings))
+	}
+
+	conn.removeExchangeBinding(0, eb1)
+
+	config = conn.getTopologyConfiguration(0)
+	if len(config.ExchangeBindings) != 3 {
+		t.Fatalf("expected 3 remaining exchange bindings, got %d", len(config.ExchangeBindings))
+	}
+
+	foundEB2, foundEB3, foundEB4 := false, false, false
+	for _, eb := range config.ExchangeBindings {
+		if compareExchangeBinding(eb, eb2) {
+			foundEB2 = true
+		} else if compareExchangeBinding(eb, eb3) {
+			foundEB3 = true
+		} else if compareExchangeBinding(eb, eb4) {
+			foundEB4 = true
+		} else if compareExchangeBinding(eb, eb1) {
+			t.Error("eb1 was not removed")
+		}
+	}
+
+	if !foundEB2 || !foundEB3 || !foundEB4 {
+		t.Errorf("expected eb2, eb3, eb4 to remain, but some were missing. Active: %+v", config.ExchangeBindings)
+	}
+
+	// Verify in-place compaction zeroed the vacated slot in the internal slice.
+	internalSlice := conn.topologyConfiguration[0].ExchangeBindings
+	if internalSlice[:cap(internalSlice)][3].Source != "" {
+		t.Error("expected compacted slots in the underlying slice to be zero-valued")
+	}
+
+	conn.removeExchangeBinding(0, ExchangeBindingConfig{Source: "non-existent", Destination: "non-existent", Key: "non-existent"})
+	config = conn.getTopologyConfiguration(0)
+	if len(config.ExchangeBindings) != 3 {
+		t.Fatalf("expected 3 exchange bindings after non-existent unbind, got %d", len(config.ExchangeBindings))
+	}
+}
+
+func TestRecordBindingDeduplication(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	b1 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1}
+	b2 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1} // duplicate
+	b3 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: Table{"foo": "bar"}}
+	b4 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: Table{"foo": "bar"}} // duplicate of b3
+
+	conn.recordBinding(0, b1)
+	conn.recordBinding(0, b2)
+	conn.recordBinding(0, b3)
+	conn.recordBinding(0, b4)
+
+	config := conn.getTopologyConfiguration(0)
+	if len(config.Bindings) != 2 {
+		t.Fatalf("expected 2 unique bindings, got %d", len(config.Bindings))
+	}
+
+	eb1 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1}
+	eb2 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1} // duplicate
+	eb3 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: Table{"foo": "bar"}}
+	eb4 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: Table{"foo": "bar"}} // duplicate of eb3
+
+	conn.recordExchangeBinding(0, eb1)
+	conn.recordExchangeBinding(0, eb2)
+	conn.recordExchangeBinding(0, eb3)
+	conn.recordExchangeBinding(0, eb4)
+
+	config = conn.getTopologyConfiguration(0)
+	if len(config.ExchangeBindings) != 2 {
+		t.Fatalf("expected 2 unique exchange bindings, got %d", len(config.ExchangeBindings))
+	}
+}

@@ -1036,7 +1036,7 @@ func (ch *Channel) QueueDeclare(name string, durable, autoDelete, exclusive, noW
 	}
 
 	if ch.connection.IsTopologyRecoveryEnabled() {
-		ch.recordQueue(QueueConfig{
+		ch.connection.recordQueue(ch.id, QueueConfig{
 			DeclaredName: name,
 			ActualName:   actualName,
 			Durable:      durable,
@@ -1181,7 +1181,7 @@ func (ch *Channel) QueueBind(name, key, exchange string, noWait bool, args Table
 		&queueBindOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.recordBinding(BindingConfig{
+		ch.connection.recordBinding(ch.id, BindingConfig{
 			Queue:    name,
 			Key:      key,
 			Exchange: exchange,
@@ -1211,7 +1211,7 @@ func (ch *Channel) QueueUnbind(name, key, exchange string, args Table) error {
 		&queueUnbindOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.removeBinding(BindingConfig{
+		ch.connection.removeBinding(ch.id, BindingConfig{
 			Queue:    name,
 			Key:      key,
 			Exchange: exchange,
@@ -1272,7 +1272,8 @@ func (ch *Channel) QueueDelete(name string, ifUnused, ifEmpty, noWait bool) (int
 
 	err := ch.call(req, res)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.removeQueue(name)
+		ch.connection.removeQueue(ch.id, name)
+		ch.consumers.cancelByQueue(name)
 	}
 
 	return int(res.MessageCount), err
@@ -1575,7 +1576,7 @@ func (ch *Channel) ExchangeDeclare(name, kind string, durable, autoDelete, inter
 		&exchangeDeclareOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.recordExchange(ExchangeConfig{
+		ch.connection.recordExchange(ch.id, ExchangeConfig{
 			Name:       name,
 			Kind:       kind,
 			Durable:    durable,
@@ -1639,7 +1640,7 @@ func (ch *Channel) ExchangeDelete(name string, ifUnused, noWait bool) error {
 		&exchangeDeleteOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.removeExchange(name)
+		ch.connection.removeExchange(ch.id, name)
 	}
 	return err
 }
@@ -1691,7 +1692,7 @@ func (ch *Channel) ExchangeBind(destination, key, source string, noWait bool, ar
 		&exchangeBindOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.recordExchangeBinding(ExchangeBindingConfig{
+		ch.connection.recordExchangeBinding(ch.id, ExchangeBindingConfig{
 			Destination: destination,
 			Key:         key,
 			Source:      source,
@@ -1732,7 +1733,7 @@ func (ch *Channel) ExchangeUnbind(destination, key, source string, noWait bool, 
 		&exchangeUnbindOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.removeExchangeBinding(ExchangeBindingConfig{
+		ch.connection.removeExchangeBinding(ch.id, ExchangeBindingConfig{
 			Destination: destination,
 			Key:         key,
 			Source:      source,
@@ -2322,86 +2323,11 @@ func (ch *Channel) resetState() {
 	}
 }
 
-func (ch *Channel) recordExchange(ec ExchangeConfig) {
-	if ch.connection != nil {
-		ch.connection.recordExchange(ch.id, ec)
-	}
-}
-
-func (ch *Channel) removeExchange(name string) {
-	if ch.connection != nil {
-		ch.connection.removeExchange(ch.id, name)
-	}
-}
-
-func (ch *Channel) recordQueue(qc QueueConfig) {
-	if ch.connection != nil {
-		ch.connection.recordQueue(ch.id, qc)
-	}
-}
-
-func (ch *Channel) removeQueue(name string) {
-	if ch.connection != nil {
-		ch.connection.removeQueue(ch.id, name)
-	}
-
-	if ch.consumers != nil {
-		ch.consumers.cancelByQueue(name)
-	}
-}
-
-func (ch *Channel) recordBinding(bc BindingConfig) {
-	if ch.connection != nil {
-		ch.connection.recordBinding(ch.id, bc)
-	}
-}
-
-func (ch *Channel) removeBinding(bc BindingConfig) {
-	if ch.connection != nil {
-		ch.connection.removeBinding(ch.id, bc)
-	}
-}
-
-func (ch *Channel) recordExchangeBinding(ebc ExchangeBindingConfig) {
-	if ch.connection != nil {
-		ch.connection.recordExchangeBinding(ch.id, ebc)
-	}
-}
-
-func (ch *Channel) removeExchangeBinding(ebc ExchangeBindingConfig) {
-	if ch.connection != nil {
-		ch.connection.removeExchangeBinding(ch.id, ebc)
-	}
-}
-
-func cloneMap[K comparable, V any](m map[K]V) map[K]V {
-	if m == nil {
-		return nil
-	}
-	result := make(map[K]V, len(m))
-	for k, v := range m {
-		result[k] = v
-	}
-	return result
-}
-
-func cloneSlice[T any](s []T) []T {
-	if s == nil {
-		return nil
-	}
-	result := make([]T, len(s), cap(s))
-	copy(result, s)
-	return result
-}
-
 // TopologyConfiguration returns a cloned, read-only copy of the channel's tracked topology.
 // Modifying the returned configuration will not affect the channel's internal state.
 func (ch *Channel) TopologyConfiguration() TopologyConfiguration {
 	if ch.connection == nil {
-		return TopologyConfiguration{
-			Exchanges: make(map[string]ExchangeConfig),
-			Queues:    make(map[string]QueueConfig),
-		}
+		return *newTopologyConfiguration()
 	}
 	return ch.connection.getTopologyConfiguration(ch.id)
 }

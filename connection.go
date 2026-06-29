@@ -1992,9 +1992,29 @@ func (c *Connection) getTopologyConfiguration(channelID uint16) TopologyConfigur
 		Qos:              qos,
 		Exchanges:        cloneMap(config.Exchanges),
 		Queues:           cloneMap(config.Queues),
-		Bindings:         config.Bindings,
-		ExchangeBindings: config.ExchangeBindings,
+		Bindings:         cloneSlice(config.Bindings),
+		ExchangeBindings: cloneSlice(config.ExchangeBindings),
 	}
+}
+
+func cloneMap[K comparable, V any](m map[K]V) map[K]V {
+	if m == nil {
+		return nil
+	}
+	result := make(map[K]V, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
+func cloneSlice[T any](s []T) []T {
+	if s == nil {
+		return nil
+	}
+	result := make([]T, len(s), cap(s))
+	copy(result, s)
+	return result
 }
 
 func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
