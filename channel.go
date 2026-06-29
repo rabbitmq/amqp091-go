@@ -173,6 +173,13 @@ type TopologyConfiguration struct {
 	ExchangeBindings []ExchangeBindingConfig
 }
 
+func newTopologyConfiguration() *TopologyConfiguration {
+	return &TopologyConfiguration{
+		Exchanges: make(map[string]ExchangeConfig),
+		Queues:    make(map[string]QueueConfig),
+	}
+}
+
 // Constructs a new channel with the given framing rules
 func newChannel(c *Connection, id uint16) *Channel {
 	return &Channel{

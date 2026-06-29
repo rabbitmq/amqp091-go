@@ -1748,27 +1748,22 @@ func (c *Connection) AddRecoverableErrorCodes(codes ...int) error {
 	return nil
 }
 
-func (c *Connection) recordExchange(channelID uint16, ec ExchangeConfig) {
-	c.topologyM.Lock()
-	defer c.topologyM.Unlock()
-
+// channelTopology returns the TopologyConfiguration for the given channel,
+// creating one if it does not exist. Caller must hold c.topologyM.
+func (c *Connection) channelTopology(channelID uint16) *TopologyConfiguration {
 	if c.topologyConfiguration == nil {
 		c.topologyConfiguration = make(map[uint16]*TopologyConfiguration)
 	}
-
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		config = &TopologyConfiguration{
-			Exchanges: make(map[string]ExchangeConfig),
-			Queues:    make(map[string]QueueConfig),
-		}
-		c.topologyConfiguration[channelID] = config
+	if _, ok := c.topologyConfiguration[channelID]; !ok {
+		c.topologyConfiguration[channelID] = newTopologyConfiguration()
 	}
+	return c.topologyConfiguration[channelID]
+}
 
-	if config.Exchanges == nil {
-		config.Exchanges = make(map[string]ExchangeConfig)
-	}
-	config.Exchanges[ec.Name] = ec
+func (c *Connection) recordExchange(channelID uint16, ec ExchangeConfig) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+	c.channelTopology(channelID).Exchanges[ec.Name] = ec
 }
 
 func (c *Connection) removeExchange(channelID uint16, name string) {
@@ -1818,24 +1813,7 @@ func (c *Connection) removeExchange(channelID uint16, name string) {
 func (c *Connection) recordQueue(channelID uint16, qc QueueConfig) {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
-
-	if c.topologyConfiguration == nil {
-		c.topologyConfiguration = make(map[uint16]*TopologyConfiguration)
-	}
-
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		config = &TopologyConfiguration{
-			Exchanges: make(map[string]ExchangeConfig),
-			Queues:    make(map[string]QueueConfig),
-		}
-		c.topologyConfiguration[channelID] = config
-	}
-
-	if config.Queues == nil {
-		config.Queues = make(map[string]QueueConfig)
-	}
-	config.Queues[qc.ActualName] = qc
+	c.channelTopology(channelID).Queues[qc.ActualName] = qc
 }
 
 func (c *Connection) removeQueue(channelID uint16, name string) {
@@ -1873,18 +1851,7 @@ func (c *Connection) recordBinding(channelID uint16, bc BindingConfig) {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
 
-	if c.topologyConfiguration == nil {
-		c.topologyConfiguration = make(map[uint16]*TopologyConfiguration)
-	}
-
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		config = &TopologyConfiguration{
-			Exchanges: make(map[string]ExchangeConfig),
-			Queues:    make(map[string]QueueConfig),
-		}
-		c.topologyConfiguration[channelID] = config
-	}
+	config := c.channelTopology(channelID)
 
 	for _, b := range config.Bindings {
 		if b.Queue == bc.Queue && b.Exchange == bc.Exchange && b.Key == bc.Key && reflect.DeepEqual(b.Args, bc.Args) {
@@ -1936,18 +1903,7 @@ func (c *Connection) recordExchangeBinding(channelID uint16, ebc ExchangeBinding
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
 
-	if c.topologyConfiguration == nil {
-		c.topologyConfiguration = make(map[uint16]*TopologyConfiguration)
-	}
-
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		config = &TopologyConfiguration{
-			Exchanges: make(map[string]ExchangeConfig),
-			Queues:    make(map[string]QueueConfig),
-		}
-		c.topologyConfiguration[channelID] = config
-	}
+	config := c.channelTopology(channelID)
 
 	for _, eb := range config.ExchangeBindings {
 		if eb.Source == ebc.Source && eb.Destination == ebc.Destination && eb.Key == ebc.Key && reflect.DeepEqual(eb.Args, ebc.Args) {
@@ -1998,21 +1954,7 @@ func (c *Connection) removeExchangeBinding(channelID uint16, ebc ExchangeBinding
 func (c *Connection) recordQos(channelID uint16, qos QosConfig) {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
-
-	if c.topologyConfiguration == nil {
-		c.topologyConfiguration = make(map[uint16]*TopologyConfiguration)
-	}
-
-	config, ok := c.topologyConfiguration[channelID]
-	if !ok {
-		config = &TopologyConfiguration{
-			Exchanges: make(map[string]ExchangeConfig),
-			Queues:    make(map[string]QueueConfig),
-		}
-		c.topologyConfiguration[channelID] = config
-	}
-
-	config.Qos = &qos
+	c.channelTopology(channelID).Qos = &qos
 }
 
 func (c *Connection) removeChannelTopology(channelID uint16) {
@@ -2029,18 +1971,12 @@ func (c *Connection) getTopologyConfiguration(channelID uint16) TopologyConfigur
 	defer c.topologyM.Unlock()
 
 	if c.topologyConfiguration == nil {
-		return TopologyConfiguration{
-			Exchanges: make(map[string]ExchangeConfig),
-			Queues:    make(map[string]QueueConfig),
-		}
+		return *newTopologyConfiguration()
 	}
 
 	config, ok := c.topologyConfiguration[channelID]
 	if !ok {
-		return TopologyConfiguration{
-			Exchanges: make(map[string]ExchangeConfig),
-			Queues:    make(map[string]QueueConfig),
-		}
+		return *newTopologyConfiguration()
 	}
 
 	var qos *QosConfig
@@ -2070,13 +2006,13 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
 	// Clone the topology configuration map to avoid holding the lock during network calls
 	topologyMap := make(map[uint16]*TopologyConfiguration, len(c.topologyConfiguration))
 	for chID, config := range c.topologyConfiguration {
-		topologyMap[chID] = &TopologyConfiguration{
-			Qos:              config.Qos,
-			Exchanges:        cloneMap(config.Exchanges),
-			Queues:           cloneMap(config.Queues),
-			Bindings:         cloneSlice(config.Bindings),
-			ExchangeBindings: cloneSlice(config.ExchangeBindings),
-		}
+		tc := newTopologyConfiguration()
+		tc.Qos = config.Qos
+		tc.Exchanges = cloneMap(config.Exchanges)
+		tc.Queues = cloneMap(config.Queues)
+		tc.Bindings = cloneSlice(config.Bindings)
+		tc.ExchangeBindings = cloneSlice(config.ExchangeBindings)
+		topologyMap[chID] = tc
 	}
 	c.topologyM.Unlock()
 
