@@ -90,6 +90,13 @@ type Config struct {
 	// If Recovery.ConnectionRecovery is nil, a default connection recovery implementation (DefaultConnectionRecovery) is used.
 	// If Recovery.TopologyRecovery is nil, a default topology recovery implementation (DefaultTopologyRecovery) is used.
 	//
+	// Topology recovery scope is controlled by Recovery.TopologyRecoveryMode:
+	//   - TopologyRecoveryOnlyTransient (default): recovers only transient entities
+	//     (exclusive/auto-delete queues, auto-delete exchanges, and bindings to them).
+	//   - TopologyRecoveryAllEnabled: recovers all tracked topology (exchanges, queues,
+	//     bindings, exchange-to-exchange bindings, and consumers).
+	//   - TopologyRecoveryDisabled: skips topology and consumer recovery entirely.
+	//
 	// During the recovery process, applications can monitor state changes (such as reconnecting
 	// or closed) by registering a listener using `Connection.NotifyStateChange` and
 	// `Channel.NotifyStateChange`.
@@ -155,7 +162,7 @@ type Connection struct {
 	channels  map[uint16]*Channel
 
 	topologyM             sync.Mutex // Mutex for protecting connection-level topology configuration
-	topologyConfiguration map[uint16]*TopologyConfiguration
+	topologyConfiguration map[uint16]*TopologyConfiguration // connection-level topology indexed by channel ID
 
 	noNotify bool // true when we will never notify again
 	closes   []chan *Error
@@ -1774,7 +1781,7 @@ func (c *Connection) removeExchange(name string) {
 				}
 			}
 			for i := len(active); i < len(oldBindings); i++ {
-				oldBindings[i] = BindingConfig{}
+				oldBindings[i] = BindingConfig{} // zero-value tail slots to avoid memory leak
 			}
 			config.Bindings = active
 		}
@@ -1787,7 +1794,7 @@ func (c *Connection) removeExchange(name string) {
 				}
 			}
 			for i := len(active); i < len(oldExchangeBindings); i++ {
-				oldExchangeBindings[i] = ExchangeBindingConfig{}
+				oldExchangeBindings[i] = ExchangeBindingConfig{} // zero-value tail slots to avoid memory leak
 			}
 			config.ExchangeBindings = active
 		}
@@ -1821,7 +1828,7 @@ func (c *Connection) removeQueue(name string) {
 				}
 			}
 			for i := len(active); i < len(oldBindings); i++ {
-				oldBindings[i] = BindingConfig{}
+				oldBindings[i] = BindingConfig{} // zero-value tail slots to avoid memory leak
 			}
 			config.Bindings = active
 		}
@@ -1860,7 +1867,7 @@ func (c *Connection) removeBinding(bc BindingConfig) {
 			}
 		}
 		for i := len(active); i < len(oldBindings); i++ {
-			oldBindings[i] = BindingConfig{}
+			oldBindings[i] = BindingConfig{} // zero-value tail slots to avoid memory leak
 		}
 		config.Bindings = active
 	}
@@ -1898,7 +1905,7 @@ func (c *Connection) removeExchangeBinding(ebc ExchangeBindingConfig) {
 			}
 		}
 		for i := len(active); i < len(oldExchangeBindings); i++ {
-			oldExchangeBindings[i] = ExchangeBindingConfig{}
+			oldExchangeBindings[i] = ExchangeBindingConfig{} // zero-value tail slots to avoid memory leak
 		}
 		config.ExchangeBindings = active
 	}
