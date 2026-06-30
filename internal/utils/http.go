@@ -68,7 +68,11 @@ func httpDelete(url, username, password string) (string, error) {
 }
 
 func baseCall(url, username, password string, method string) (string, error) {
-	var client http.Client
+	// These are one-shot management API calls. Disable keep-alives so the
+	// underlying TCP connection is closed when the response is done rather than
+	// pooled as an idle connection; a pooled connection from the last call in a
+	// test would otherwise linger and be flagged by goleak at suite teardown.
+	client := http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return "", err
