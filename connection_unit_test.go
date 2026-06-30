@@ -780,10 +780,9 @@ func TestFilterTransientTopologyAllDurable(t *testing.T) {
 		{Source: testExchange1, Destination: testExchange2, Key: testKey1},
 	}
 
-	fEx, fQ, fB, fEB := filterTransientTopology(
-		exchanges, queues, bindings, exchangeBindings,
-		map[string]bool{}, map[string]bool{},
-	)
+	config := &TopologyConfiguration{Exchanges: exchanges, Queues: queues, Bindings: bindings, ExchangeBindings: exchangeBindings}
+	filterTransientTopology(config, map[string]bool{}, map[string]bool{})
+	fEx, fQ, fB, fEB := config.Exchanges, config.Queues, config.Bindings, config.ExchangeBindings
 	if len(fEx) != 0 {
 		t.Errorf("expected 0 filtered exchanges (all durable), got %d", len(fEx))
 	}
@@ -804,10 +803,9 @@ func TestFilterTransientTopologyAutoDeleteExchange(t *testing.T) {
 		testExchange2: {Name: testExchange2, AutoDelete: false},
 	}
 
-	fEx, _, _, _ := filterTransientTopology(
-		exchanges, nil, nil, nil,
-		map[string]bool{}, map[string]bool{},
-	)
+	config := &TopologyConfiguration{Exchanges: exchanges}
+	filterTransientTopology(config, map[string]bool{}, map[string]bool{})
+	fEx := config.Exchanges
 	if len(fEx) != 1 {
 		t.Fatalf("expected 1 auto-delete exchange, got %d", len(fEx))
 	}
@@ -823,10 +821,9 @@ func TestFilterTransientTopologyExclusiveAndAutoDeleteQueues(t *testing.T) {
 		testQueue3: {ActualName: testQueue3, Durable: true},
 	}
 
-	_, fQ, _, _ := filterTransientTopology(
-		nil, queues, nil, nil,
-		map[string]bool{}, map[string]bool{},
-	)
+	config := &TopologyConfiguration{Queues: queues}
+	filterTransientTopology(config, map[string]bool{}, map[string]bool{})
+	fQ := config.Queues
 	if len(fQ) != 2 {
 		t.Fatalf("expected 2 transient queues, got %d", len(fQ))
 	}
@@ -854,10 +851,9 @@ func TestFilterTransientTopologyBindingsRetainedByTransientQueueOrExchange(t *te
 	globalTransientQueues := map[string]bool{testQueue1: true}
 	globalTransientExchanges := map[string]bool{testExchange2: true}
 
-	_, _, fB, _ := filterTransientTopology(
-		nil, nil, bindings, nil,
-		globalTransientQueues, globalTransientExchanges,
-	)
+	config := &TopologyConfiguration{Bindings: bindings}
+	filterTransientTopology(config, globalTransientQueues, globalTransientExchanges)
+	fB := config.Bindings
 	if len(fB) != 2 {
 		t.Fatalf("expected 2 retained bindings, got %d: %+v", len(fB), fB)
 	}
@@ -880,10 +876,9 @@ func TestFilterTransientTopologyExchangeBindingsRetainedByTransientSourceOrDest(
 
 	globalTransientExchanges := map[string]bool{testExchange1: true, testExchange4: true}
 
-	_, _, _, fEB := filterTransientTopology(
-		nil, nil, nil, exchangeBindings,
-		map[string]bool{}, globalTransientExchanges,
-	)
+	config := &TopologyConfiguration{ExchangeBindings: exchangeBindings}
+	filterTransientTopology(config, map[string]bool{}, globalTransientExchanges)
+	fEB := config.ExchangeBindings
 	if len(fEB) != 2 {
 		t.Fatalf("expected 2 retained exchange bindings, got %d: %+v", len(fEB), fEB)
 	}
@@ -916,10 +911,9 @@ func TestFilterTransientTopologyMixedScenario(t *testing.T) {
 	globalTransientQueues := map[string]bool{testQueue1: true}
 	globalTransientExchanges := map[string]bool{testExchange1: true}
 
-	fEx, fQ, fB, fEB := filterTransientTopology(
-		exchanges, queues, bindings, exchangeBindings,
-		globalTransientQueues, globalTransientExchanges,
-	)
+	config := &TopologyConfiguration{Exchanges: exchanges, Queues: queues, Bindings: bindings, ExchangeBindings: exchangeBindings}
+	filterTransientTopology(config, globalTransientQueues, globalTransientExchanges)
+	fEx, fQ, fB, fEB := config.Exchanges, config.Queues, config.Bindings, config.ExchangeBindings
 
 	if len(fEx) != 1 {
 		t.Fatalf("expected 1 filtered exchange, got %d", len(fEx))

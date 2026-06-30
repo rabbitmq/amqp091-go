@@ -161,7 +161,7 @@ type Connection struct {
 	allocator *allocator // id generator valid after openTune
 	channels  map[uint16]*Channel
 
-	topologyM             sync.Mutex // Mutex for protecting connection-level topology configuration
+	topologyM             sync.Mutex                        // Mutex for protecting connection-level topology configuration
 	topologyConfiguration map[uint16]*TopologyConfiguration // connection-level topology indexed by channel ID
 
 	noNotify bool // true when we will never notify again
@@ -2016,42 +2016,42 @@ func (c *Connection) getTopologyConfiguration(channelID uint16, global bool) Top
 // purely between them) are dropped because the broker retains them across a network
 // interruption.
 func filterTransientTopology(
-	exchanges map[string]ExchangeConfig,
-	queues map[string]QueueConfig,
-	bindings []BindingConfig,
-	exchangeBindings []ExchangeBindingConfig,
+	config *TopologyConfiguration,
 	globalTransientQueues map[string]bool,
 	globalTransientExchanges map[string]bool,
-) (map[string]ExchangeConfig, map[string]QueueConfig, []BindingConfig, []ExchangeBindingConfig) {
+) {
 	filteredExchanges := make(map[string]ExchangeConfig)
-	for name, ec := range exchanges {
+	for name, ec := range config.Exchanges {
 		if ec.AutoDelete {
 			filteredExchanges[name] = ec
 		}
 	}
 
 	filteredQueues := make(map[string]QueueConfig)
-	for name, qc := range queues {
+	for name, qc := range config.Queues {
 		if qc.Exclusive || qc.AutoDelete {
 			filteredQueues[name] = qc
 		}
 	}
 
-	filteredBindings := make([]BindingConfig, 0, len(bindings))
-	for _, b := range bindings {
+	filteredBindings := make([]BindingConfig, 0, len(config.Bindings))
+	for _, b := range config.Bindings {
 		if globalTransientQueues[b.Queue] || globalTransientExchanges[b.Exchange] {
 			filteredBindings = append(filteredBindings, b)
 		}
 	}
 
-	filteredExchangeBindings := make([]ExchangeBindingConfig, 0, len(exchangeBindings))
-	for _, eb := range exchangeBindings {
+	filteredExchangeBindings := make([]ExchangeBindingConfig, 0, len(config.ExchangeBindings))
+	for _, eb := range config.ExchangeBindings {
 		if globalTransientExchanges[eb.Source] || globalTransientExchanges[eb.Destination] {
 			filteredExchangeBindings = append(filteredExchangeBindings, eb)
 		}
 	}
 
-	return filteredExchanges, filteredQueues, filteredBindings, filteredExchangeBindings
+	config.Exchanges = filteredExchanges
+	config.Queues = filteredQueues
+	config.Bindings = filteredBindings
+	config.ExchangeBindings = filteredExchangeBindings
 }
 
 // recoverConnectionTopology re-establishes all tracked AMQP entities on the
@@ -2117,15 +2117,9 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
 				}
 			}
 		}
-		for chID, config := range topologyMap {
-			exchanges, queues, bindings, exchangeBindings := filterTransientTopology(
-				config.Exchanges, config.Queues, config.Bindings, config.ExchangeBindings,
-				globalTransientQueues, globalTransientExchanges)
-			config.Exchanges = exchanges
-			config.Queues = queues
-			config.Bindings = bindings
-			config.ExchangeBindings = exchangeBindings
-			topologyMap[chID] = config
+		// Filter transient topology for all channels.
+		for _, config := range topologyMap {
+			filterTransientTopology(config, globalTransientQueues, globalTransientExchanges)
 		}
 	}
 
