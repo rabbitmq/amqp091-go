@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -600,6 +601,176 @@ func TestRecordBindingDeduplication(t *testing.T) {
 	config = conn.getTopologyConfiguration(0, false)
 	if len(config.ExchangeBindings) != 2 {
 		t.Fatalf("expected 2 unique exchange bindings, got %d", len(config.ExchangeBindings))
+	}
+}
+
+// TestRemoveBindingPreservesArgsDistinctBindings verifies that removeBinding and
+// removeExchangeBinding use the full (Queue/Source, Exchange/Destination, Key,
+// Args) identity that recordBinding uses to deduplicate. Two bindings that share
+// the same queue, exchange and key but differ only by Args are distinct and
+// simultaneously valid (a headers exchange routes entirely on arguments). Removing
+// one must leave the other intact. A removal that ignored Args would purge every
+// binding sharing the (Queue, Exchange, Key) tuple, silently dropping topology
+// that still exists on the broker and would otherwise be recovered.
+func TestRemoveBindingPreservesArgsDistinctBindings(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	// Same Queue/Exchange/Key, different Args -> two distinct bindings.
+	b1 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: Table{"x-match": "all", "type": "a"}}
+	b2 := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: Table{"x-match": "all", "type": "b"}}
+
+	conn.recordBinding(0, b1)
+	conn.recordBinding(0, b2)
+
+	if got := len(conn.getTopologyConfiguration(0, false).Bindings); got != 2 {
+		t.Fatalf("setup: expected 2 distinct bindings recorded, got %d", got)
+	}
+
+	conn.removeBinding(b1)
+
+	remaining := conn.getTopologyConfiguration(0, false).Bindings
+	if len(remaining) != 1 {
+		t.Fatalf("expected 1 surviving binding after removing b1, got %d: %+v", len(remaining), remaining)
+	}
+	if !reflect.DeepEqual(remaining[0].Args, b2.Args) {
+		t.Errorf("expected the surviving binding to be b2 (Args=%v), got Args=%v", b2.Args, remaining[0].Args)
+	}
+
+	// Same identity check for exchange-to-exchange bindings.
+	eb1 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: Table{"x-match": "all", "type": "a"}}
+	eb2 := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: Table{"x-match": "all", "type": "b"}}
+
+	conn.recordExchangeBinding(0, eb1)
+	conn.recordExchangeBinding(0, eb2)
+
+	if got := len(conn.getTopologyConfiguration(0, false).ExchangeBindings); got != 2 {
+		t.Fatalf("setup: expected 2 distinct exchange bindings recorded, got %d", got)
+	}
+
+	conn.removeExchangeBinding(eb1)
+
+	remainingEx := conn.getTopologyConfiguration(0, false).ExchangeBindings
+	if len(remainingEx) != 1 {
+		t.Fatalf("expected 1 surviving exchange binding after removing eb1, got %d: %+v", len(remainingEx), remainingEx)
+	}
+	if !reflect.DeepEqual(remainingEx[0].Args, eb2.Args) {
+		t.Errorf("expected the surviving exchange binding to be eb2 (Args=%v), got Args=%v", eb2.Args, remainingEx[0].Args)
+	}
+}
+
+// TestRemoveBindingDuplicateArgsDeduplication verifies that two bindings that are
+// fully identical — including Args — are stored as a single entry, and that
+// removing that binding leaves nothing behind. This is the counterpart to
+// TestRemoveBindingPreservesArgsDistinctBindings: where that test confirms
+// Args-distinct bindings survive removal of one, this test confirms
+// Args-identical bindings are deduplicated on record so the remove path sees
+// exactly one entry.
+func TestRemoveBindingDuplicateArgsDeduplication(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	args := Table{"x-match": "all", "type": "a"}
+	b := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: args}
+	bDup := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: args}
+
+	conn.recordBinding(1, b)
+	conn.recordBinding(1, bDup)
+
+	if got := len(conn.getTopologyConfiguration(1, false).Bindings); got != 1 {
+		t.Fatalf("expected 1 binding after recording duplicates, got %d", got)
+	}
+
+	conn.removeBinding(b)
+
+	if got := len(conn.getTopologyConfiguration(1, false).Bindings); got != 0 {
+		t.Fatalf("expected 0 bindings after removing the sole deduplicated entry, got %d", got)
+	}
+
+	// Same check for exchange-to-exchange bindings.
+	eb := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: args}
+	ebDup := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: args}
+
+	conn.recordExchangeBinding(1, eb)
+	conn.recordExchangeBinding(1, ebDup)
+
+	if got := len(conn.getTopologyConfiguration(1, false).ExchangeBindings); got != 1 {
+		t.Fatalf("expected 1 exchange binding after recording duplicates, got %d", got)
+	}
+
+	conn.removeExchangeBinding(eb)
+
+	if got := len(conn.getTopologyConfiguration(1, false).ExchangeBindings); got != 0 {
+		t.Fatalf("expected 0 exchange bindings after removing the sole deduplicated entry, got %d", got)
+	}
+}
+
+// TestGetTopologyConfigurationGlobalMergePreservesArgsDistinctBindings verifies the
+// global (connection-wide) merge keeps Args-distinct bindings separate. Two
+// bindings on different channels that share (Queue, Exchange, Key) but differ by
+// Args must both appear in the merged view rather than collapsing to one.
+func TestGetTopologyConfigurationGlobalMergePreservesArgsDistinctBindings(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	conn.recordBinding(1, BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: Table{"type": "a"}})
+	conn.recordBinding(2, BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: Table{"type": "b"}})
+
+	merged := conn.getTopologyConfiguration(1, true)
+	if len(merged.Bindings) != 2 {
+		t.Fatalf("expected 2 Args-distinct bindings in merged view, got %d: %+v", len(merged.Bindings), merged.Bindings)
+	}
+
+	conn.recordExchangeBinding(1, ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: Table{"type": "a"}})
+	conn.recordExchangeBinding(2, ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: Table{"type": "b"}})
+
+	merged = conn.getTopologyConfiguration(1, true)
+	if len(merged.ExchangeBindings) != 2 {
+		t.Fatalf("expected 2 Args-distinct exchange bindings in merged view, got %d: %+v", len(merged.ExchangeBindings), merged.ExchangeBindings)
+	}
+}
+
+// TestGetTopologyConfigurationGlobalMergeDeduplicatesArgsIdenticalBindings verifies
+// that the global merge collapses bindings that are fully identical — including
+// Args — even when they were recorded on different channels. This is the
+// counterpart to TestGetTopologyConfigurationGlobalMergePreservesArgsDistinctBindings:
+// where that test confirms Args-distinct bindings both survive the merge, this
+// test confirms Args-identical bindings are collapsed to a single entry.
+func TestGetTopologyConfigurationGlobalMergeDeduplicatesArgsIdenticalBindings(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	args := Table{"x-match": "all", "type": "a"}
+	b := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1, Args: args}
+
+	// Same binding with identical Args recorded on two different channels.
+	conn.recordBinding(1, b)
+	conn.recordBinding(2, b)
+
+	merged := conn.getTopologyConfiguration(1, true)
+	if len(merged.Bindings) != 1 {
+		t.Fatalf("expected 1 deduplicated binding in global view, got %d: %+v", len(merged.Bindings), merged.Bindings)
+	}
+	if !reflect.DeepEqual(merged.Bindings[0].Args, args) {
+		t.Errorf("surviving binding has wrong Args: got %v, want %v", merged.Bindings[0].Args, args)
+	}
+
+	// Same check for exchange-to-exchange bindings.
+	eb := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1, Args: args}
+
+	conn.recordExchangeBinding(1, eb)
+	conn.recordExchangeBinding(2, eb)
+
+	merged = conn.getTopologyConfiguration(1, true)
+	if len(merged.ExchangeBindings) != 1 {
+		t.Fatalf("expected 1 deduplicated exchange binding in global view, got %d: %+v", len(merged.ExchangeBindings), merged.ExchangeBindings)
+	}
+	if !reflect.DeepEqual(merged.ExchangeBindings[0].Args, args) {
+		t.Errorf("surviving exchange binding has wrong Args: got %v, want %v", merged.ExchangeBindings[0].Args, args)
 	}
 }
 
