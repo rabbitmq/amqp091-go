@@ -1862,7 +1862,7 @@ func (c *Connection) removeBinding(bc BindingConfig) {
 		oldBindings := config.Bindings
 		active := config.Bindings[:0]
 		for _, b := range oldBindings {
-			if b.Queue != bc.Queue || b.Key != bc.Key || b.Exchange != bc.Exchange {
+			if b.Queue != bc.Queue || b.Key != bc.Key || b.Exchange != bc.Exchange || !reflect.DeepEqual(b.Args, bc.Args) {
 				active = append(active, b)
 			}
 		}
@@ -1900,7 +1900,7 @@ func (c *Connection) removeExchangeBinding(ebc ExchangeBindingConfig) {
 		oldExchangeBindings := config.ExchangeBindings
 		active := config.ExchangeBindings[:0]
 		for _, eb := range oldExchangeBindings {
-			if eb.Destination != ebc.Destination || eb.Key != ebc.Key || eb.Source != ebc.Source {
+			if eb.Destination != ebc.Destination || eb.Key != ebc.Key || eb.Source != ebc.Source || !reflect.DeepEqual(eb.Args, ebc.Args) {
 				active = append(active, eb)
 			}
 		}
@@ -1963,11 +1963,12 @@ func (c *Connection) getTopologyConfiguration(channelID uint16, global bool) Top
 	mergedQueues := make(map[string]QueueConfig)
 
 	// Bindings are stored as slices, so we need explicit dedup during merge.
-	// Keying by (Queue, Exchange, Key) matches the same tuple used by removeBinding.
-	type bindingKey struct{ Queue, Exchange, Key string }
-	type exBindingKey struct{ Source, Destination, Key string }
-	seenBindings := make(map[bindingKey]bool)
-	seenExchangeBindings := make(map[exBindingKey]bool)
+	// The identity is (Queue, Exchange, Key, Args) — the same tuple used by
+	// recordBinding and removeBinding. Args must participate: bindings that
+	// differ only by arguments (e.g. headers-exchange bindings) are distinct and
+	// must both survive the merge. Args is a Table (a map, not comparable), so a
+	// map key cannot be used; the binding lists are small, so a linear scan that
+	// mirrors recordBinding's dedup is used instead.
 	var mergedBindings []BindingConfig
 	var mergedExchangeBindings []ExchangeBindingConfig
 
@@ -1979,16 +1980,26 @@ func (c *Connection) getTopologyConfiguration(channelID uint16, global bool) Top
 			mergedQueues[name] = qc
 		}
 		for _, b := range config.Bindings {
-			k := bindingKey{b.Queue, b.Exchange, b.Key}
-			if !seenBindings[k] {
-				seenBindings[k] = true
+			seen := false
+			for _, existing := range mergedBindings {
+				if existing.Queue == b.Queue && existing.Exchange == b.Exchange && existing.Key == b.Key && reflect.DeepEqual(existing.Args, b.Args) {
+					seen = true
+					break
+				}
+			}
+			if !seen {
 				mergedBindings = append(mergedBindings, b)
 			}
 		}
 		for _, eb := range config.ExchangeBindings {
-			k := exBindingKey{eb.Source, eb.Destination, eb.Key}
-			if !seenExchangeBindings[k] {
-				seenExchangeBindings[k] = true
+			seen := false
+			for _, existing := range mergedExchangeBindings {
+				if existing.Source == eb.Source && existing.Destination == eb.Destination && existing.Key == eb.Key && reflect.DeepEqual(existing.Args, eb.Args) {
+					seen = true
+					break
+				}
+			}
+			if !seen {
 				mergedExchangeBindings = append(mergedExchangeBindings, eb)
 			}
 		}
