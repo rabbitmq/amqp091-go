@@ -821,10 +821,10 @@ func (c *Connection) shutdown(err *Error) {
 		for _, listener := range c.closes {
 			close(listener)
 		}
-
 		for _, block := range c.blocks {
 			close(block)
 		}
+		c.closes, c.blocks = nil, nil // nil to prevent double-close
 	}
 
 	// Shutdown the channel, but do not use closeChannel() as it calls
@@ -1422,10 +1422,10 @@ func (c *Connection) cleanup() {
 	for _, listener := range c.closes {
 		close(listener)
 	}
-
 	for _, block := range c.blocks {
 		close(block)
 	}
+	c.closes, c.blocks = nil, nil // nil to prevent double-close
 
 	for _, ch := range c.channels {
 		ch.cleanup()

@@ -2042,3 +2042,128 @@ func TestConnectionRecoveryTopologyDisabled(t *testing.T) {
 		t.Fatalf("Timeout waiting for post-recovery message via fresh connection")
 	}
 }
+
+// TestConnectionRecoveryExhaustionDoesNotPanic verifies that when topology
+// recovery fails on every retry and recovery is ultimately exhausted, the final
+// cleanup() does not double-close the NotifyClose/NotifyBlocked listener channels.
+//
+// The failure path is: a recoverable drop starts recovery; a queue that can no
+// longer be redeclared (its definition was changed out-of-band) makes
+// RecoverTopology fail; Reconnect() calls Close() on the transport, whose reader
+// raises a non-recoverable shutdown that closes the listeners; after retries are
+// exhausted OnConnectionClose calls cleanup(), which closed the same listeners a
+// second time and panicked with "close of closed channel". A registered
+// NotifyClose listener is required to surface the panic.
+func TestConnectionRecoveryExhaustionDoesNotPanic(t *testing.T) {
+	connectionName := "test-connection-recovery-exhaustion-no-panic"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{
+				MaxRetryCount: 2,
+				RetryInterval: 1 * time.Second,
+			},
+			TopologyRecoveryMode: TopologyRecoveryAllEnabled,
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+
+	// A durable queue tracked for recovery. We will change its definition
+	// out-of-band so the recovery-time redeclare fails with precondition_failed.
+	queueName := "test_recovery_exhaustion_q"
+	if _, err := ch.QueueDeclare(queueName, true, false, false, false, Table{"x-max-length": int32(10)}); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+	defer func() {
+		// Clean up via a fresh connection; the recovering one is expected to die.
+		cleanupConn, derr := DialConfig(amqpURL, Config{Locale: defaultLocale})
+		if derr != nil {
+			return
+		}
+		defer cleanupConn.Close()
+		if cleanupCh, cerr := cleanupConn.Channel(); cerr == nil {
+			_, _ = cleanupCh.QueueDelete(queueName, false, false, false)
+		}
+	}()
+
+	// Register a NotifyClose listener: this is the channel that cleanup()
+	// double-closed. Drain it concurrently (the realistic usage) so the listener
+	// never blocks shutdown's send; a blocked send would exercise an unrelated,
+	// pre-existing send/close race in shutdown() rather than the double-close this
+	// test targets. The drain goroutine exits when the channel is finally closed.
+	closeCh := conn.NotifyClose(make(chan *Error, 1))
+	closeDrained := make(chan struct{})
+	go func() {
+		defer close(closeDrained)
+		for range closeCh {
+		}
+	}()
+
+	// Out-of-band: delete and redeclare the queue with a conflicting definition so
+	// the client's recovery redeclare fails.
+	adminConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("admin DialConfig failed: %v", err)
+	}
+	adminCh, err := adminConn.Channel()
+	if err != nil {
+		t.Fatalf("admin Channel failed: %v", err)
+	}
+	if _, err := adminCh.QueueDelete(queueName, false, false, false); err != nil {
+		t.Fatalf("admin QueueDelete failed: %v", err)
+	}
+	if _, err := adminCh.QueueDeclare(queueName, true, false, false, false, Table{"x-max-length": int32(99)}); err != nil {
+		t.Fatalf("admin QueueDeclare failed: %v", err)
+	}
+	_ = adminConn.Close()
+
+	stateChanged := make(chan *StateChanged, 20)
+	conn.NotifyStateChange(stateChanged)
+
+	// Drop the client connection to trigger recovery, which will fail to recover
+	// the now-conflicting queue and eventually exhaust retries.
+	dropConnection(t, connectionName)
+
+	// Wait for the connection to reach its terminal Closed state. If cleanup()
+	// double-closes the listeners it panics and crashes the test binary, so simply
+	// reaching this state without a panic is the assertion.
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case sc := <-stateChanged:
+			t.Logf("Connection state changed: %s", sc)
+			if sc.To == StateClosed {
+				goto closed
+			}
+		case <-timeout:
+			t.Fatalf("Timeout waiting for connection to reach StateClosed after recovery exhaustion")
+		}
+	}
+
+closed:
+	// The NotifyClose listener must be closed (not double-closed -> panic) exactly
+	// once. The drain goroutine returns only when the channel is closed.
+	select {
+	case <-closeDrained:
+		// Listener was finalized and closed cleanly.
+	case <-time.After(5 * time.Second):
+		t.Fatalf("NotifyClose listener was not closed after recovery exhaustion")
+	}
+
+	if !conn.IsClosed() {
+		t.Fatalf("expected connection to be closed after recovery exhaustion")
+	}
+	t.Log("Recovery exhaustion completed without panicking on listener cleanup")
+}
