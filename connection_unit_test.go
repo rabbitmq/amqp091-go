@@ -602,3 +602,344 @@ func TestRecordBindingDeduplication(t *testing.T) {
 		t.Fatalf("expected 2 unique exchange bindings, got %d", len(config.ExchangeBindings))
 	}
 }
+
+// --- getTopologyConfiguration tests ---
+
+func isEmptyTopology(config TopologyConfiguration) bool {
+	return len(config.Exchanges) == 0 && len(config.Queues) == 0 &&
+		len(config.Bindings) == 0 && len(config.ExchangeBindings) == 0 && config.Qos == nil
+}
+
+func TestGetTopologyConfigurationNilMap(t *testing.T) {
+	conn := &Connection{} // topologyConfiguration is nil
+	if !isEmptyTopology(conn.getTopologyConfiguration(1, false)) {
+		t.Errorf("expected empty topology for nil map (local)")
+	}
+	if !isEmptyTopology(conn.getTopologyConfiguration(1, true)) {
+		t.Errorf("expected empty topology for nil map (global)")
+	}
+}
+
+func TestGetTopologyConfigurationChannelLocalUnknownChannel(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+	if !isEmptyTopology(conn.getTopologyConfiguration(99, false)) {
+		t.Errorf("expected empty topology for unknown channel")
+	}
+}
+
+func TestGetTopologyConfigurationChannelLocalView(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	conn.recordExchange(1, ExchangeConfig{Name: testExchange1, Kind: testExchangeKindDirect})
+	conn.recordQueue(1, QueueConfig{ActualName: testQueue1, Durable: true})
+	conn.recordBinding(1, BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1})
+
+	conn.recordExchange(2, ExchangeConfig{Name: testExchange2, Kind: testExchangeKindTopic})
+	conn.recordQueue(2, QueueConfig{ActualName: testQueue2})
+
+	config := conn.getTopologyConfiguration(1, false)
+	if len(config.Exchanges) != 1 {
+		t.Fatalf("expected 1 exchange on channel 1, got %d", len(config.Exchanges))
+	}
+	if _, ok := config.Exchanges[testExchange1]; !ok {
+		t.Errorf("expected %s on channel 1", testExchange1)
+	}
+	if _, ok := config.Exchanges[testExchange2]; ok {
+		t.Errorf("did not expect %s on channel 1", testExchange2)
+	}
+	if len(config.Queues) != 1 {
+		t.Fatalf("expected 1 queue on channel 1, got %d", len(config.Queues))
+	}
+	if len(config.Bindings) != 1 {
+		t.Fatalf("expected 1 binding on channel 1, got %d", len(config.Bindings))
+	}
+}
+
+func TestGetTopologyConfigurationGlobalMerge(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	conn.recordExchange(1, ExchangeConfig{Name: testExchange1, Kind: testExchangeKindDirect})
+	conn.recordQueue(1, QueueConfig{ActualName: testQueue1, Durable: true})
+	conn.recordBinding(1, BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1})
+
+	conn.recordExchange(2, ExchangeConfig{Name: testExchange2, Kind: testExchangeKindTopic})
+	conn.recordQueue(2, QueueConfig{ActualName: testQueue2})
+	conn.recordBinding(2, BindingConfig{Queue: testQueue2, Exchange: testExchange2, Key: testKey2})
+
+	config := conn.getTopologyConfiguration(1, true)
+	if len(config.Exchanges) != 2 {
+		t.Fatalf("expected 2 exchanges in global view, got %d", len(config.Exchanges))
+	}
+	if len(config.Queues) != 2 {
+		t.Fatalf("expected 2 queues in global view, got %d", len(config.Queues))
+	}
+	if len(config.Bindings) != 2 {
+		t.Fatalf("expected 2 bindings in global view, got %d", len(config.Bindings))
+	}
+}
+
+func TestGetTopologyConfigurationGlobalDeduplicatesBindings(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	// Same binding recorded on two different channels.
+	b := BindingConfig{Queue: testQueue1, Exchange: testExchange1, Key: testKey1}
+	conn.recordBinding(1, b)
+	conn.recordBinding(2, b)
+
+	eb := ExchangeBindingConfig{Source: testExchange1, Destination: testExchange2, Key: testKey1}
+	conn.recordExchangeBinding(1, eb)
+	conn.recordExchangeBinding(2, eb)
+
+	config := conn.getTopologyConfiguration(1, true)
+	if len(config.Bindings) != 1 {
+		t.Fatalf("expected 1 deduplicated binding in global view, got %d", len(config.Bindings))
+	}
+	if len(config.ExchangeBindings) != 1 {
+		t.Fatalf("expected 1 deduplicated exchange binding in global view, got %d", len(config.ExchangeBindings))
+	}
+}
+
+func TestGetTopologyConfigurationQoSIsChannelScoped(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	conn.topologyConfiguration[1] = newTopologyConfiguration()
+	conn.topologyConfiguration[1].Qos = &QosConfig{PrefetchCount: 10}
+	conn.topologyConfiguration[2] = newTopologyConfiguration()
+	conn.topologyConfiguration[2].Qos = &QosConfig{PrefetchCount: 20}
+
+	// Channel-local: should return channel 1's QoS.
+	local := conn.getTopologyConfiguration(1, false)
+	if local.Qos == nil || local.Qos.PrefetchCount != 10 {
+		t.Errorf("expected channel 1 QoS prefetch=10, got %+v", local.Qos)
+	}
+
+	// Global merge should still return channel 1's QoS, not channel 2's.
+	global := conn.getTopologyConfiguration(1, true)
+	if global.Qos == nil || global.Qos.PrefetchCount != 10 {
+		t.Errorf("expected global view to carry channel 1 QoS prefetch=10, got %+v", global.Qos)
+	}
+
+	// Global merge for channel 2 should return channel 2's QoS.
+	global2 := conn.getTopologyConfiguration(2, true)
+	if global2.Qos == nil || global2.Qos.PrefetchCount != 20 {
+		t.Errorf("expected global view to carry channel 2 QoS prefetch=20, got %+v", global2.Qos)
+	}
+}
+
+func TestGetTopologyConfigurationQoSMissingChannel(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+	conn.topologyConfiguration[1] = newTopologyConfiguration()
+	// No QoS set on channel 1; requesting channel 99 (absent).
+	config := conn.getTopologyConfiguration(99, false)
+	if config.Qos != nil {
+		t.Errorf("expected nil QoS for absent channel, got %+v", config.Qos)
+	}
+}
+
+func TestGetTopologyConfigurationReturnIsSnapshot(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+	conn.recordExchange(1, ExchangeConfig{Name: testExchange1, Kind: testExchangeKindDirect})
+
+	config := conn.getTopologyConfiguration(1, false)
+	// Mutate the returned snapshot; the stored topology must not change.
+	config.Exchanges[testExchange2] = ExchangeConfig{Name: testExchange2}
+
+	stored := conn.getTopologyConfiguration(1, false)
+	if _, ok := stored.Exchanges[testExchange2]; ok {
+		t.Error("mutating returned snapshot should not affect stored topology")
+	}
+}
+
+// --- filterTransientTopology tests ---
+
+func TestFilterTransientTopologyAllDurable(t *testing.T) {
+	exchanges := map[string]ExchangeConfig{
+		testExchange1: {Name: testExchange1, AutoDelete: false},
+	}
+	queues := map[string]QueueConfig{
+		testQueue1: {ActualName: testQueue1, AutoDelete: false, Exclusive: false},
+	}
+	bindings := []BindingConfig{
+		{Queue: testQueue1, Exchange: testExchange1, Key: testKey1},
+	}
+	exchangeBindings := []ExchangeBindingConfig{
+		{Source: testExchange1, Destination: testExchange2, Key: testKey1},
+	}
+
+	fEx, fQ, fB, fEB := filterTransientTopology(
+		exchanges, queues, bindings, exchangeBindings,
+		map[string]bool{}, map[string]bool{},
+	)
+	if len(fEx) != 0 {
+		t.Errorf("expected 0 filtered exchanges (all durable), got %d", len(fEx))
+	}
+	if len(fQ) != 0 {
+		t.Errorf("expected 0 filtered queues (all durable), got %d", len(fQ))
+	}
+	if len(fB) != 0 {
+		t.Errorf("expected 0 filtered bindings, got %d", len(fB))
+	}
+	if len(fEB) != 0 {
+		t.Errorf("expected 0 filtered exchange bindings, got %d", len(fEB))
+	}
+}
+
+func TestFilterTransientTopologyAutoDeleteExchange(t *testing.T) {
+	exchanges := map[string]ExchangeConfig{
+		testExchange1: {Name: testExchange1, AutoDelete: true},
+		testExchange2: {Name: testExchange2, AutoDelete: false},
+	}
+
+	fEx, _, _, _ := filterTransientTopology(
+		exchanges, nil, nil, nil,
+		map[string]bool{}, map[string]bool{},
+	)
+	if len(fEx) != 1 {
+		t.Fatalf("expected 1 auto-delete exchange, got %d", len(fEx))
+	}
+	if _, ok := fEx[testExchange1]; !ok {
+		t.Errorf("expected %s (auto-delete) to be retained", testExchange1)
+	}
+}
+
+func TestFilterTransientTopologyExclusiveAndAutoDeleteQueues(t *testing.T) {
+	queues := map[string]QueueConfig{
+		testQueue1: {ActualName: testQueue1, Exclusive: true},
+		testQueue2: {ActualName: testQueue2, AutoDelete: true},
+		testQueue3: {ActualName: testQueue3, Durable: true},
+	}
+
+	_, fQ, _, _ := filterTransientTopology(
+		nil, queues, nil, nil,
+		map[string]bool{}, map[string]bool{},
+	)
+	if len(fQ) != 2 {
+		t.Fatalf("expected 2 transient queues, got %d", len(fQ))
+	}
+	if _, ok := fQ[testQueue1]; !ok {
+		t.Errorf("expected exclusive %s to be retained", testQueue1)
+	}
+	if _, ok := fQ[testQueue2]; !ok {
+		t.Errorf("expected auto-delete %s to be retained", testQueue2)
+	}
+	if _, ok := fQ[testQueue3]; ok {
+		t.Errorf("expected durable %s to be filtered out", testQueue3)
+	}
+}
+
+func TestFilterTransientTopologyBindingsRetainedByTransientQueueOrExchange(t *testing.T) {
+	bindings := []BindingConfig{
+		// retained: queue is transient
+		{Queue: testQueue1, Exchange: testExchange1, Key: testKey1},
+		// retained: exchange is transient
+		{Queue: testQueue2, Exchange: testExchange2, Key: testKey2},
+		// dropped: both are durable
+		{Queue: testQueue3, Exchange: testExchange3, Key: testKey3},
+	}
+
+	globalTransientQueues := map[string]bool{testQueue1: true}
+	globalTransientExchanges := map[string]bool{testExchange2: true}
+
+	_, _, fB, _ := filterTransientTopology(
+		nil, nil, bindings, nil,
+		globalTransientQueues, globalTransientExchanges,
+	)
+	if len(fB) != 2 {
+		t.Fatalf("expected 2 retained bindings, got %d: %+v", len(fB), fB)
+	}
+	for _, b := range fB {
+		if b.Queue == testQueue3 && b.Exchange == testExchange3 {
+			t.Errorf("binding between two durable entities should have been filtered: %+v", b)
+		}
+	}
+}
+
+func TestFilterTransientTopologyExchangeBindingsRetainedByTransientSourceOrDest(t *testing.T) {
+	exchangeBindings := []ExchangeBindingConfig{
+		// retained: source is transient
+		{Source: testExchange1, Destination: testExchange2, Key: testKeyEb1},
+		// retained: destination is transient
+		{Source: testExchange3, Destination: testExchange4, Key: testKeyEb2},
+		// dropped: both are durable
+		{Source: testExchange2, Destination: testExchange3, Key: testKeyEb3},
+	}
+
+	globalTransientExchanges := map[string]bool{testExchange1: true, testExchange4: true}
+
+	_, _, _, fEB := filterTransientTopology(
+		nil, nil, nil, exchangeBindings,
+		map[string]bool{}, globalTransientExchanges,
+	)
+	if len(fEB) != 2 {
+		t.Fatalf("expected 2 retained exchange bindings, got %d: %+v", len(fEB), fEB)
+	}
+	for _, eb := range fEB {
+		if eb.Source == testExchange2 && eb.Destination == testExchange3 {
+			t.Errorf("exchange binding between two durable exchanges should have been filtered: %+v", eb)
+		}
+	}
+}
+
+func TestFilterTransientTopologyMixedScenario(t *testing.T) {
+	exchanges := map[string]ExchangeConfig{
+		testExchange1: {Name: testExchange1, AutoDelete: true},
+		testExchange2: {Name: testExchange2, AutoDelete: false},
+	}
+	queues := map[string]QueueConfig{
+		testQueue1: {ActualName: testQueue1, Exclusive: true},
+		testQueue2: {ActualName: testQueue2, Durable: true},
+	}
+	bindings := []BindingConfig{
+		{Queue: testQueue1, Exchange: testExchange2, Key: testKey1}, // retained: queue is transient
+		{Queue: testQueue2, Exchange: testExchange1, Key: testKey2}, // retained: exchange is transient
+		{Queue: testQueue2, Exchange: testExchange2, Key: testKey3}, // dropped
+	}
+	exchangeBindings := []ExchangeBindingConfig{
+		{Source: testExchange1, Destination: testExchange2, Key: testKeyEb1}, // retained: source transient
+		{Source: testExchange2, Destination: testExchange2, Key: testKeyEb2}, // dropped
+	}
+
+	globalTransientQueues := map[string]bool{testQueue1: true}
+	globalTransientExchanges := map[string]bool{testExchange1: true}
+
+	fEx, fQ, fB, fEB := filterTransientTopology(
+		exchanges, queues, bindings, exchangeBindings,
+		globalTransientQueues, globalTransientExchanges,
+	)
+
+	if len(fEx) != 1 {
+		t.Fatalf("expected 1 filtered exchange, got %d", len(fEx))
+	}
+	if _, ok := fEx[testExchange1]; !ok {
+		t.Errorf("expected auto-delete %s to be retained", testExchange1)
+	}
+
+	if len(fQ) != 1 {
+		t.Fatalf("expected 1 filtered queue, got %d", len(fQ))
+	}
+	if _, ok := fQ[testQueue1]; !ok {
+		t.Errorf("expected exclusive %s to be retained", testQueue1)
+	}
+
+	if len(fB) != 2 {
+		t.Fatalf("expected 2 filtered bindings, got %d: %+v", len(fB), fB)
+	}
+
+	if len(fEB) != 1 {
+		t.Fatalf("expected 1 filtered exchange binding, got %d: %+v", len(fEB), fEB)
+	}
+}

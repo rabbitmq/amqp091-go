@@ -180,6 +180,40 @@ func newTopologyConfiguration() *TopologyConfiguration {
 	}
 }
 
+// Clone returns a deep copy of the TopologyConfiguration.
+func (tc *TopologyConfiguration) Clone() *TopologyConfiguration {
+	clone := &TopologyConfiguration{}
+	if tc.Qos != nil {
+		qos := *tc.Qos
+		clone.Qos = &qos
+	}
+	clone.Exchanges = cloneMap(tc.Exchanges)
+	clone.Queues = cloneMap(tc.Queues)
+	clone.Bindings = cloneSlice(tc.Bindings)
+	clone.ExchangeBindings = cloneSlice(tc.ExchangeBindings)
+	return clone
+}
+
+func cloneMap[K comparable, V any](m map[K]V) map[K]V {
+	if m == nil {
+		return nil
+	}
+	result := make(map[K]V, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
+func cloneSlice[T any](s []T) []T {
+	if s == nil {
+		return nil
+	}
+	result := make([]T, len(s), cap(s))
+	copy(result, s)
+	return result
+}
+
 // Constructs a new channel with the given framing rules
 func newChannel(c *Connection, id uint16) *Channel {
 	return &Channel{
