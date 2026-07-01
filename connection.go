@@ -76,17 +76,26 @@ type Config struct {
 	// used during TLS and AMQP handshaking.
 	Dial func(network, addr string) (net.Conn, error)
 
-	// Recovery configuration for automatic reconnection.
+	// Recovery configuration for automatic reconnection and topology recovery.
 	//
 	// Experimental: This is an experimental feature and may be subject to API or
 	// behavioral changes in future releases.
 	//
 	// When a network failure occurs, the connection and all its channels will automatically
-	// attempt to reconnect based on the parameters specified in the Recovery configuration.
+	// attempt to reconnect, and their topology (including queues, exchanges, bindings, and active consumers)
+	// will be recovered based on the parameters specified in the Recovery configuration.
 	//
-	// If Recovery is nil, automatic reconnection is disabled.
+	// If Recovery is nil, automatic reconnection and topology recovery are disabled.
 	// If Recovery.ReconnectionConfig is nil, a default reconnection configuration (DefaultReconnectionConfig) is used.
 	// If Recovery.ConnectionRecovery is nil, a default connection recovery implementation (DefaultConnectionRecovery) is used.
+	// If Recovery.TopologyRecovery is nil, a default topology recovery implementation (DefaultTopologyRecovery) is used.
+	//
+	// Topology recovery scope is controlled by Recovery.TopologyRecoveryMode:
+	//   - TopologyRecoveryOnlyTransient (default): recovers only transient entities
+	//     (exclusive/auto-delete queues, auto-delete exchanges, and bindings to them).
+	//   - TopologyRecoveryAllEnabled: recovers all tracked topology (exchanges, queues,
+	//     bindings, exchange-to-exchange bindings, and consumers).
+	//   - TopologyRecoveryDisabled: skips topology and consumer recovery entirely.
 	//
 	// During the recovery process, applications can monitor state changes (such as reconnecting
 	// or closed) by registering a listener using `Connection.NotifyStateChange` and
@@ -151,6 +160,9 @@ type Connection struct {
 
 	allocator *allocator // id generator valid after openTune
 	channels  map[uint16]*Channel
+
+	topologyM             sync.Mutex                        // Mutex for protecting connection-level topology configuration
+	topologyConfiguration map[uint16]*TopologyConfiguration // connection-level topology indexed by channel ID
 
 	noNotify bool // true when we will never notify again
 	closes   []chan *Error
@@ -336,6 +348,9 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		if config.Recovery.ConnectionRecovery == nil {
 			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{}
 		}
+		if config.Recovery.TopologyRecovery == nil && config.Recovery.TopologyRecoveryMode != TopologyRecoveryDisabled {
+			config.Recovery.TopologyRecovery = &DefaultTopologyRecovery{}
+		}
 	}
 
 	c, err := Open(conn, config)
@@ -354,16 +369,17 @@ to use your own custom transport.
 */
 func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 	c := &Connection{
-		conn:      conn,
-		writer:    &writer{bufio.NewWriter(conn)},
-		channels:  make(map[uint16]*Channel),
-		rpc:       make(chan message),
-		sends:     make(chan time.Time),
-		errors:    make(chan *Error, 1),
-		close:     make(chan struct{}),
-		deadlines: make(chan readDeadliner, 1),
-		Config:    config,
-		lifeCycle: newLifeCycle(),
+		conn:                  conn,
+		writer:                &writer{bufio.NewWriter(conn)},
+		channels:              make(map[uint16]*Channel),
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+		rpc:                   make(chan message),
+		sends:                 make(chan time.Time),
+		errors:                make(chan *Error, 1),
+		close:                 make(chan struct{}),
+		deadlines:             make(chan readDeadliner, 1),
+		Config:                config,
+		lifeCycle:             newLifeCycle(),
 	}
 	go c.reader(conn)
 	err := c.open(config)
@@ -805,10 +821,10 @@ func (c *Connection) shutdown(err *Error) {
 		for _, listener := range c.closes {
 			close(listener)
 		}
-
 		for _, block := range c.blocks {
 			close(block)
 		}
+		c.closes, c.blocks = nil, nil // nil to prevent double-close
 	}
 
 	// Shutdown the channel, but do not use closeChannel() as it calls
@@ -1060,6 +1076,7 @@ func (c *Connection) releaseChannel(ch *Channel) {
 		if ok && got == ch {
 			delete(c.channels, ch.id)
 			c.allocator.release(int(ch.id))
+			c.removeChannelTopology(ch.id)
 		}
 	}
 }
@@ -1405,10 +1422,10 @@ func (c *Connection) cleanup() {
 	for _, listener := range c.closes {
 		close(listener)
 	}
-
 	for _, block := range c.blocks {
 		close(block)
 	}
+	c.closes, c.blocks = nil, nil // nil to prevent double-close
 
 	for _, ch := range c.channels {
 		ch.cleanup()
@@ -1422,6 +1439,10 @@ func (c *Connection) cleanup() {
 	c.channels = nil
 	c.allocator = nil
 	c.noNotify = true
+
+	c.topologyM.Lock()
+	c.topologyConfiguration = nil
+	c.topologyM.Unlock()
 }
 
 // watchConnection watches the connection for close events and triggers recovery if needed.
@@ -1431,7 +1452,7 @@ func (c *Connection) watchConnection() {
 		for err := range errCh {
 			if err != nil {
 				Logger.Printf("Connection closed unexpectedly: %v", err)
-				if c.Config.Recovery != nil && c.Config.Recovery.ConnectionRecovery != nil {
+				if c.IsConnectionRecoveryEnabled() {
 					c.Config.Recovery.ConnectionRecovery.OnConnectionClose(c, err)
 				}
 			}
@@ -1546,11 +1567,20 @@ func (c *Connection) Reconnect() error {
 		}
 		c.m.Unlock()
 
+		// Phase 1: Reconnect and open all channel sessions, apply QoS and Confirms
 		for _, ch := range channels {
-			if err = ch.Reconnect(); err != nil {
+			if err = ch.reconnectChannel(); err != nil {
 				Logger.Printf("Connection recovery failed to reconnect channel %d: %v", ch.id, err)
 				conn.Close()
 				break
+			}
+		}
+
+		if err == nil && c.IsTopologyRecoveryEnabled() {
+			// Phase 2: Recover topology across all channels via the configured implementation
+			if err = c.Config.Recovery.TopologyRecovery.RecoverTopology(c, channels); err != nil {
+				Logger.Printf("Connection recovery failed to recover topology: %v", err)
+				conn.Close()
 			}
 		}
 
@@ -1604,6 +1634,38 @@ func (c *Connection) IsRecoveryEnabled() bool {
 		c.Config.Recovery.ReconnectionConfig != nil &&
 		c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0 &&
 		len(c.GetRecoverableErrorCodes()) > 0
+}
+
+// IsTopologyRecoveryEnabled checks if the topology recovery is enabled.
+//
+// Topology recovery is disabled when recovery is off, when no TopologyRecovery
+// implementation is configured, or when the configured TopologyRecoveryMode is
+// TopologyRecoveryDisabled. This single check gates both entity recovery and
+// consumer re-subscription.
+func (c *Connection) IsTopologyRecoveryEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.IsRecoveryEnabled() &&
+		c.Config.Recovery.TopologyRecovery != nil &&
+		c.Config.Recovery.TopologyRecoveryMode != TopologyRecoveryDisabled
+}
+
+// topologyRecoveryMode returns the configured topology recovery mode, defaulting
+// to TopologyRecoveryOnlyTransient when recovery is not configured.
+func (c *Connection) topologyRecoveryMode() TopologyRecoveryMode {
+	if c == nil || c.Config.Recovery == nil {
+		return TopologyRecoveryOnlyTransient
+	}
+	return c.Config.Recovery.TopologyRecoveryMode
+}
+
+// IsConnectionRecoveryEnabled checks if the connection recovery is enabled.
+func (c *Connection) IsConnectionRecoveryEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.IsRecoveryEnabled() && c.Config.Recovery.ConnectionRecovery != nil
 }
 
 // isRecoverable returns true if the given error is recoverable based on RecoverableErrorCodes.
@@ -1677,5 +1739,565 @@ func (c *Connection) AddRecoverableErrorCodes(codes ...int) error {
 	c.recoveryErrorCodesM.Lock()
 	defer c.recoveryErrorCodesM.Unlock()
 	c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes = append(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes, codes...)
+	return nil
+}
+
+// channelTopology returns the TopologyConfiguration for the given channel,
+// creating one if it does not exist. Caller must hold c.topologyM.
+func (c *Connection) channelTopology(channelID uint16) *TopologyConfiguration {
+	if c.topologyConfiguration == nil {
+		c.topologyConfiguration = make(map[uint16]*TopologyConfiguration)
+	}
+	if _, ok := c.topologyConfiguration[channelID]; !ok {
+		c.topologyConfiguration[channelID] = newTopologyConfiguration()
+	}
+	return c.topologyConfiguration[channelID]
+}
+
+func (c *Connection) recordExchange(channelID uint16, ec ExchangeConfig) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+	c.channelTopology(channelID).Exchanges[ec.Name] = ec
+}
+
+func (c *Connection) removeExchange(name string) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+
+	if c.topologyConfiguration == nil {
+		return
+	}
+
+	for _, config := range c.topologyConfiguration {
+		delete(config.Exchanges, name)
+
+		// Clean up related bindings in-place (0 allocations)
+		if config.Bindings != nil {
+			oldBindings := config.Bindings
+			active := config.Bindings[:0]
+			for _, b := range oldBindings {
+				if b.Exchange != name {
+					active = append(active, b)
+				}
+			}
+			for i := len(active); i < len(oldBindings); i++ {
+				oldBindings[i] = BindingConfig{} // zero-value tail slots to avoid memory leak
+			}
+			config.Bindings = active
+		}
+		if config.ExchangeBindings != nil {
+			oldExchangeBindings := config.ExchangeBindings
+			active := config.ExchangeBindings[:0]
+			for _, eb := range oldExchangeBindings {
+				if eb.Destination != name && eb.Source != name {
+					active = append(active, eb)
+				}
+			}
+			for i := len(active); i < len(oldExchangeBindings); i++ {
+				oldExchangeBindings[i] = ExchangeBindingConfig{} // zero-value tail slots to avoid memory leak
+			}
+			config.ExchangeBindings = active
+		}
+	}
+}
+
+func (c *Connection) recordQueue(channelID uint16, qc QueueConfig) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+	c.channelTopology(channelID).Queues[qc.ActualName] = qc
+}
+
+func (c *Connection) removeQueue(name string) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+
+	if c.topologyConfiguration == nil {
+		return
+	}
+
+	for _, config := range c.topologyConfiguration {
+		delete(config.Queues, name)
+
+		// Clean up related bindings in-place (0 allocations)
+		if config.Bindings != nil {
+			oldBindings := config.Bindings
+			active := config.Bindings[:0]
+			for _, b := range oldBindings {
+				if b.Queue != name {
+					active = append(active, b)
+				}
+			}
+			for i := len(active); i < len(oldBindings); i++ {
+				oldBindings[i] = BindingConfig{} // zero-value tail slots to avoid memory leak
+			}
+			config.Bindings = active
+		}
+	}
+}
+
+func (c *Connection) recordBinding(channelID uint16, bc BindingConfig) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+
+	config := c.channelTopology(channelID)
+
+	for _, b := range config.Bindings {
+		if b.Queue == bc.Queue && b.Exchange == bc.Exchange && b.Key == bc.Key && reflect.DeepEqual(b.Args, bc.Args) {
+			return
+		}
+	}
+
+	config.Bindings = append(config.Bindings, bc)
+}
+
+func (c *Connection) removeBinding(bc BindingConfig) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+
+	if c.topologyConfiguration == nil {
+		return
+	}
+
+	for _, config := range c.topologyConfiguration {
+		oldBindings := config.Bindings
+		active := config.Bindings[:0]
+		for _, b := range oldBindings {
+			if b.Queue != bc.Queue || b.Key != bc.Key || b.Exchange != bc.Exchange || !reflect.DeepEqual(b.Args, bc.Args) {
+				active = append(active, b)
+			}
+		}
+		for i := len(active); i < len(oldBindings); i++ {
+			oldBindings[i] = BindingConfig{} // zero-value tail slots to avoid memory leak
+		}
+		config.Bindings = active
+	}
+}
+
+func (c *Connection) recordExchangeBinding(channelID uint16, ebc ExchangeBindingConfig) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+
+	config := c.channelTopology(channelID)
+
+	for _, eb := range config.ExchangeBindings {
+		if eb.Source == ebc.Source && eb.Destination == ebc.Destination && eb.Key == ebc.Key && reflect.DeepEqual(eb.Args, ebc.Args) {
+			return
+		}
+	}
+
+	config.ExchangeBindings = append(config.ExchangeBindings, ebc)
+}
+
+func (c *Connection) removeExchangeBinding(ebc ExchangeBindingConfig) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+
+	if c.topologyConfiguration == nil {
+		return
+	}
+
+	for _, config := range c.topologyConfiguration {
+		oldExchangeBindings := config.ExchangeBindings
+		active := config.ExchangeBindings[:0]
+		for _, eb := range oldExchangeBindings {
+			if eb.Destination != ebc.Destination || eb.Key != ebc.Key || eb.Source != ebc.Source || !reflect.DeepEqual(eb.Args, ebc.Args) {
+				active = append(active, eb)
+			}
+		}
+		for i := len(active); i < len(oldExchangeBindings); i++ {
+			oldExchangeBindings[i] = ExchangeBindingConfig{} // zero-value tail slots to avoid memory leak
+		}
+		config.ExchangeBindings = active
+	}
+}
+
+func (c *Connection) recordQos(channelID uint16, qos QosConfig) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+	c.channelTopology(channelID).Qos = &qos
+}
+
+func (c *Connection) removeChannelTopology(channelID uint16) {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+
+	if c.topologyConfiguration != nil {
+		delete(c.topologyConfiguration, channelID)
+	}
+}
+
+// getTopologyConfiguration returns a snapshot of topology for the given channel.
+// When global is false, only entities tracked on channelID are returned (channel-local view).
+// When global is true, entities from all channels are merged into a single connection-level
+// view — because AMQP topology (exchanges, queues, bindings) is scoped to the TCP connection,
+// not individual channels, the merged view is what must be recovered after a reconnect.
+// QoS is always channel-scoped and reflects only channelID's configuration in both modes.
+func (c *Connection) getTopologyConfiguration(channelID uint16, global bool) TopologyConfiguration {
+	c.topologyM.Lock()
+	defer c.topologyM.Unlock()
+
+	if c.topologyConfiguration == nil {
+		return *newTopologyConfiguration()
+	}
+
+	if !global {
+		config, ok := c.topologyConfiguration[channelID]
+		if !ok {
+			return *newTopologyConfiguration()
+		}
+		return *config.Clone() // Clone already deep-copies Qos for this channel.
+	}
+
+	// QoS is per-channel; pin channelID's QoS onto the merged result.
+	var qos *QosConfig
+	if config, ok := c.topologyConfiguration[channelID]; ok && config.Qos != nil {
+		qos = &QosConfig{
+			PrefetchCount: config.Qos.PrefetchCount,
+			PrefetchSize:  config.Qos.PrefetchSize,
+			Global:        config.Qos.Global,
+		}
+	}
+
+	// Merge entities from ALL channels into a single connection-level view.
+	mergedExchanges := make(map[string]ExchangeConfig)
+	mergedQueues := make(map[string]QueueConfig)
+
+	// Bindings are stored as slices, so we need explicit dedup during merge.
+	// The identity is (Queue, Exchange, Key, Args) — the same tuple used by
+	// recordBinding and removeBinding. Args must participate: bindings that
+	// differ only by arguments (e.g. headers-exchange bindings) are distinct and
+	// must both survive the merge. Args is a Table (a map, not comparable), so a
+	// map key cannot be used; the binding lists are small, so a linear scan that
+	// mirrors recordBinding's dedup is used instead.
+	var mergedBindings []BindingConfig
+	var mergedExchangeBindings []ExchangeBindingConfig
+
+	for _, config := range c.topologyConfiguration {
+		for name, ec := range config.Exchanges {
+			mergedExchanges[name] = ec
+		}
+		for name, qc := range config.Queues {
+			mergedQueues[name] = qc
+		}
+		for _, b := range config.Bindings {
+			seen := false
+			for _, existing := range mergedBindings {
+				if existing.Queue == b.Queue && existing.Exchange == b.Exchange && existing.Key == b.Key && reflect.DeepEqual(existing.Args, b.Args) {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				mergedBindings = append(mergedBindings, b)
+			}
+		}
+		for _, eb := range config.ExchangeBindings {
+			seen := false
+			for _, existing := range mergedExchangeBindings {
+				if existing.Source == eb.Source && existing.Destination == eb.Destination && existing.Key == eb.Key && reflect.DeepEqual(existing.Args, eb.Args) {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				mergedExchangeBindings = append(mergedExchangeBindings, eb)
+			}
+		}
+	}
+
+	return TopologyConfiguration{
+		Qos:              qos,
+		Exchanges:        mergedExchanges,
+		Queues:           mergedQueues,
+		Bindings:         mergedBindings,
+		ExchangeBindings: mergedExchangeBindings,
+	}
+}
+
+// filterTransientTopology returns only the connection-scoped (transient) subset of
+// the given topology, used by TopologyRecoveryOnlyTransient.
+//
+// An exchange is transient when it is auto-delete; a queue is transient when it is
+// exclusive and/or auto-delete (server-named queues are exclusive+auto-delete and
+// are therefore included). A queue-to-exchange binding is recovered when either its
+// queue or its exchange is transient: re-declaring a transient queue drops all of
+// its bindings, including those to durable exchanges, so such bindings must be
+// recreated. An exchange-to-exchange binding is recovered when its source or
+// destination exchange is transient. Durable, non-auto-delete entities (and bindings
+// purely between them) are dropped because the broker retains them across a network
+// interruption.
+func filterTransientTopology(
+	config *TopologyConfiguration,
+	globalTransientQueues map[string]bool,
+	globalTransientExchanges map[string]bool,
+) {
+	filteredExchanges := make(map[string]ExchangeConfig)
+	for name, ec := range config.Exchanges {
+		if ec.AutoDelete {
+			filteredExchanges[name] = ec
+		}
+	}
+
+	filteredQueues := make(map[string]QueueConfig)
+	for name, qc := range config.Queues {
+		if qc.Exclusive || qc.AutoDelete {
+			filteredQueues[name] = qc
+		}
+	}
+
+	filteredBindings := make([]BindingConfig, 0, len(config.Bindings))
+	for _, b := range config.Bindings {
+		if globalTransientQueues[b.Queue] || globalTransientExchanges[b.Exchange] {
+			filteredBindings = append(filteredBindings, b)
+		}
+	}
+
+	filteredExchangeBindings := make([]ExchangeBindingConfig, 0, len(config.ExchangeBindings))
+	for _, eb := range config.ExchangeBindings {
+		if globalTransientExchanges[eb.Source] || globalTransientExchanges[eb.Destination] {
+			filteredExchangeBindings = append(filteredExchangeBindings, eb)
+		}
+	}
+
+	config.Exchanges = filteredExchanges
+	config.Queues = filteredQueues
+	config.Bindings = filteredBindings
+	config.ExchangeBindings = filteredExchangeBindings
+}
+
+// recoverConnectionTopology re-establishes all tracked AMQP entities on the
+// reconnected channels in dependency order: exchanges → queues → bindings →
+// exchange-to-exchange bindings → consumers.
+//
+// The topology snapshot is cloned under topologyM before any network I/O so the
+// lock is not held during broker round-trips. When TopologyRecoveryOnlyTransient
+// is active the snapshot is filtered down to transient entities (exclusive /
+// auto-delete queues, auto-delete exchanges, and any bindings that reference
+// them) before the recovery loop begins; the global transient sets are built by
+// scanning all channels so that cross-channel bindings are retained correctly.
+//
+// Server-generated queue names (DeclaredName == "") may differ on each
+// reconnect. When the broker assigns a new name the old name is removed from the
+// persistent topology store, the new name is inserted, and a nameReplacements
+// map is populated so that any bindings and consumer configs that still reference
+// the old name are patched in a single pass before bindings are re-created.
+//
+// Consumer re-subscription sends basic.consume directly via ch.call rather than
+// calling ch.Consume, which intentionally reuses the existing delivery-channel
+// pipeline (buffer goroutine + outer chan Delivery) that was wired up before the
+// connection dropped. This means the application's delivery channel remains valid
+// across reconnects without any intervention from the caller.
+func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
+	if !c.IsTopologyRecoveryEnabled() {
+		return nil
+	}
+
+	// Clone the topology snapshot under lock so network I/O below does not
+	// hold topologyM and deadlock with concurrent record* / remove* calls.
+	c.topologyM.Lock()
+	topologyMap := make(map[uint16]*TopologyConfiguration, len(c.topologyConfiguration))
+	for chID, config := range c.topologyConfiguration {
+		topologyMap[chID] = config.Clone()
+	}
+	c.topologyM.Unlock()
+
+	// Build a channel-ID → Channel map for O(1) lookup during the recovery loops.
+	channelMap := make(map[uint16]*Channel, len(channels))
+	for _, ch := range channels {
+		channelMap[ch.id] = ch
+	}
+
+	// When only transient topology should be recovered, filter the snapshot down
+	// to auto-delete exchanges and exclusive/auto-delete queues (and their
+	// bindings). The global transient sets are built by scanning every channel
+	// first so that a binding on ch2 referencing a transient queue declared on
+	// ch1 is correctly retained even though that queue does not appear in ch2's
+	// own topology entry.
+	if c.topologyRecoveryMode() == TopologyRecoveryOnlyTransient {
+		globalTransientQueues := make(map[string]bool)
+		globalTransientExchanges := make(map[string]bool)
+		for _, config := range topologyMap {
+			for name, qc := range config.Queues {
+				if qc.Exclusive || qc.AutoDelete {
+					globalTransientQueues[name] = true
+				}
+			}
+			for name, ec := range config.Exchanges {
+				if ec.AutoDelete {
+					globalTransientExchanges[name] = true
+				}
+			}
+		}
+		// Filter transient topology for all channels.
+		for _, config := range topologyMap {
+			filterTransientTopology(config, globalTransientQueues, globalTransientExchanges)
+		}
+	}
+
+	// 1. Recover exchanges across all channels.
+	for chID, config := range topologyMap {
+		ch, ok := channelMap[chID]
+		if !ok {
+			continue
+		}
+		for _, ec := range config.Exchanges {
+			err := ch.ExchangeDeclare(ec.Name, ec.Kind, ec.Durable, ec.AutoDelete, ec.Internal, ec.NoWait, ec.Args)
+			if err != nil {
+				return fmt.Errorf("failed to recover exchange %s on channel %d: %w", ec.Name, chID, err)
+			}
+		}
+	}
+
+	// 2. Recover queues across all channels.
+	//
+	// nameReplacements collects old→new name mappings for server-generated queues
+	// whose broker-assigned name changed on this reconnect; these are applied to
+	// bindings and consumer configs after all queues have been declared.
+	//
+	// declaredQueues deduplicates named queues: the same queue may appear in
+	// multiple channels' topology when a binding or consumer on ch2 references a
+	// queue that was declared on ch1 — declaring it twice would be a no-op on
+	// the broker but wastes a round-trip.
+	nameReplacements := make(map[string]string)
+	declaredQueues := make(map[string]bool)
+
+	for chID, config := range topologyMap {
+		ch, ok := channelMap[chID]
+		if !ok {
+			continue
+		}
+		for _, qc := range config.Queues {
+			if qc.DeclaredName != "" {
+				if declaredQueues[qc.ActualName] {
+					continue
+				}
+				declaredQueues[qc.ActualName] = true
+			}
+
+			q, err := ch.QueueDeclare(qc.DeclaredName, qc.Durable, qc.AutoDelete, qc.Exclusive, qc.NoWait, qc.Args)
+			if err != nil {
+				return fmt.Errorf("failed to recover queue %s on channel %d: %w", qc.ActualName, chID, err)
+			}
+
+			// Server-generated queues (DeclaredName == "") receive a fresh broker-assigned
+			// name on every reconnect. Record the rename so bindings and consumers can be
+			// updated before they are re-created/re-subscribed below.
+			if qc.DeclaredName == "" && q.Name != qc.ActualName {
+				nameReplacements[qc.ActualName] = q.Name
+
+				// Patch the persistent topology store so future recoveries use the new name.
+				c.topologyM.Lock()
+				if c.topologyConfiguration != nil {
+					if connConfig, found := c.topologyConfiguration[chID]; found && connConfig.Queues != nil {
+						delete(connConfig.Queues, qc.ActualName)
+						newQc := qc
+						newQc.ActualName = q.Name
+						connConfig.Queues[q.Name] = newQc
+					}
+				}
+				c.topologyM.Unlock()
+			}
+		}
+	}
+
+	// Propagate server-generated name changes to bindings and consumer configs
+	// before re-creating bindings (step 3) so they reference the live queue name.
+	if len(nameReplacements) > 0 {
+		// Patch the persistent binding records so subsequent recoveries are consistent.
+		c.topologyM.Lock()
+		if c.topologyConfiguration != nil {
+			for _, connConfig := range c.topologyConfiguration {
+				for i := range connConfig.Bindings {
+					if newName, found := nameReplacements[connConfig.Bindings[i].Queue]; found {
+						connConfig.Bindings[i].Queue = newName
+					}
+				}
+			}
+		}
+		c.topologyM.Unlock()
+
+		// Patch the local snapshot used for the binding recovery loop below.
+		for _, config := range topologyMap {
+			for i := range config.Bindings {
+				if newName, found := nameReplacements[config.Bindings[i].Queue]; found {
+					config.Bindings[i].Queue = newName
+				}
+			}
+		}
+
+		// Patch consumer configs so re-subscription (step 5) targets the new queue name.
+		for _, ch := range channels {
+			ch.consumers.Lock()
+			for tag, config := range ch.consumers.configs {
+				if newName, found := nameReplacements[config.Queue]; found {
+					config.Queue = newName
+					ch.consumers.configs[tag] = config
+				}
+			}
+			ch.consumers.Unlock()
+		}
+	}
+
+	// 3. Recover queue-to-exchange bindings across all channels.
+	for chID, config := range topologyMap {
+		ch, ok := channelMap[chID]
+		if !ok {
+			continue
+		}
+		for _, b := range config.Bindings {
+			err := ch.QueueBind(b.Queue, b.Key, b.Exchange, b.NoWait, b.Args)
+			if err != nil {
+				return fmt.Errorf("failed to recover binding of queue %s to exchange %s on channel %d: %w", b.Queue, b.Exchange, chID, err)
+			}
+		}
+	}
+
+	// 4. Recover exchange-to-exchange bindings across all channels.
+	for chID, config := range topologyMap {
+		ch, ok := channelMap[chID]
+		if !ok {
+			continue
+		}
+		for _, eb := range config.ExchangeBindings {
+			err := ch.ExchangeBind(eb.Destination, eb.Key, eb.Source, eb.NoWait, eb.Args)
+			if err != nil {
+				return fmt.Errorf("failed to recover exchange binding from %s to %s on channel %d: %w", eb.Source, eb.Destination, chID, err)
+			}
+		}
+	}
+
+	// 5. Re-subscribe consumers across all channels.
+	//
+	// basic.consume is sent directly via ch.call rather than ch.Consume so that
+	// the existing buffer goroutine and outer delivery channel (chan Delivery)
+	// that the caller holds are reused. No new goroutines are spawned and the
+	// application's delivery channel stays valid without any caller intervention.
+	for _, ch := range channels {
+		// Snapshot consumer configs under lock to avoid holding the lock
+		// during the broker round-trips below.
+		ch.consumers.Lock()
+		configs := make(map[string]consumerConfig, len(ch.consumers.configs))
+		for tag, config := range ch.consumers.configs {
+			configs[tag] = config
+		}
+		ch.consumers.Unlock()
+
+		for tag, config := range configs {
+			req := &basicConsume{
+				Queue:       config.Queue,
+				ConsumerTag: tag,
+				NoLocal:     config.NoLocal,
+				NoAck:       config.AutoAck,
+				Exclusive:   config.Exclusive,
+				NoWait:      config.NoWait,
+				Arguments:   config.Args,
+			}
+			res := &basicConsumeOk{}
+			if err := ch.call(req, res); err != nil {
+				return fmt.Errorf("failed to recover consumer for tag %s on queue %s on channel %d: %w", tag, config.Queue, ch.id, err)
+			}
+		}
+	}
+
 	return nil
 }

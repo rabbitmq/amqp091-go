@@ -117,6 +117,103 @@ type Channel struct {
 	recoveryCancels []chan struct{} // listeners for channel recovery cancellation
 }
 
+// QosConfig holds QoS configuration settings for recovery.
+type QosConfig struct {
+	PrefetchCount uint16
+	PrefetchSize  uint32
+	Global        bool
+}
+
+// ExchangeConfig holds Exchange configuration settings for recovery.
+type ExchangeConfig struct {
+	Name       string
+	Kind       string
+	Durable    bool
+	AutoDelete bool
+	Internal   bool
+	NoWait     bool
+	Args       Table
+}
+
+// QueueConfig holds Queue configuration settings for recovery.
+type QueueConfig struct {
+	DeclaredName string // Original name passed to QueueDeclare (could be "")
+	ActualName   string // Server-returned name
+	Durable      bool
+	AutoDelete   bool
+	Exclusive    bool
+	NoWait       bool
+	Args         Table
+}
+
+// BindingConfig holds Queue Binding configuration settings for recovery.
+type BindingConfig struct {
+	Queue    string
+	Key      string
+	Exchange string
+	NoWait   bool
+	Args     Table
+}
+
+// ExchangeBindingConfig holds Exchange Binding configuration settings for recovery.
+type ExchangeBindingConfig struct {
+	Destination string
+	Key         string
+	Source      string
+	NoWait      bool
+	Args        Table
+}
+
+// TopologyConfiguration holds all tracked topology configurations for recovery.
+type TopologyConfiguration struct {
+	Qos              *QosConfig
+	Exchanges        map[string]ExchangeConfig
+	Queues           map[string]QueueConfig
+	Bindings         []BindingConfig
+	ExchangeBindings []ExchangeBindingConfig
+}
+
+func newTopologyConfiguration() *TopologyConfiguration {
+	return &TopologyConfiguration{
+		Exchanges: make(map[string]ExchangeConfig),
+		Queues:    make(map[string]QueueConfig),
+	}
+}
+
+// Clone returns a deep copy of the TopologyConfiguration.
+func (tc *TopologyConfiguration) Clone() *TopologyConfiguration {
+	clone := &TopologyConfiguration{}
+	if tc.Qos != nil {
+		qos := *tc.Qos
+		clone.Qos = &qos
+	}
+	clone.Exchanges = cloneMap(tc.Exchanges)
+	clone.Queues = cloneMap(tc.Queues)
+	clone.Bindings = cloneSlice(tc.Bindings)
+	clone.ExchangeBindings = cloneSlice(tc.ExchangeBindings)
+	return clone
+}
+
+func cloneMap[K comparable, V any](m map[K]V) map[K]V {
+	if m == nil {
+		return nil
+	}
+	result := make(map[K]V, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
+func cloneSlice[T any](s []T) []T {
+	if s == nil {
+		return nil
+	}
+	result := make([]T, len(s), cap(s))
+	copy(result, s)
+	return result
+}
+
 // Constructs a new channel with the given framing rules
 func newChannel(c *Connection, id uint16) *Channel {
 	return &Channel{
@@ -825,7 +922,7 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 	if err := ch.validateQos(prefetchCount, prefetchSize); err != nil {
 		return err
 	}
-	return ch.call(
+	err := ch.call(
 		&basicQos{
 			PrefetchCount: uint16(prefetchCount),
 			PrefetchSize:  uint32(prefetchSize),
@@ -833,6 +930,14 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 		},
 		&basicQosOk{},
 	)
+	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
+		ch.connection.recordQos(ch.id, QosConfig{
+			PrefetchCount: uint16(prefetchCount),
+			PrefetchSize:  uint32(prefetchSize),
+			Global:        global,
+		})
+	}
+	return err
 }
 
 func (ch *Channel) validateQos(prefetchCount, prefetchSize int) error {
@@ -953,15 +1058,30 @@ func (ch *Channel) QueueDeclare(name string, durable, autoDelete, exclusive, noW
 		return Queue{}, err
 	}
 
+	actualName := name
 	if req.wait() {
-		return Queue{
-			Name:      res.Queue,
-			Messages:  int(res.MessageCount),
-			Consumers: int(res.ConsumerCount),
-		}, nil
+		actualName = res.Queue
 	}
 
-	return Queue{Name: name}, nil
+	q := Queue{
+		Name:      actualName,
+		Messages:  int(res.MessageCount),
+		Consumers: int(res.ConsumerCount),
+	}
+
+	if ch.connection.IsTopologyRecoveryEnabled() {
+		ch.connection.recordQueue(ch.id, QueueConfig{
+			DeclaredName: name,
+			ActualName:   actualName,
+			Durable:      durable,
+			AutoDelete:   autoDelete,
+			Exclusive:    exclusive,
+			NoWait:       noWait,
+			Args:         args,
+		})
+	}
+
+	return q, nil
 }
 
 /*
@@ -1084,7 +1204,7 @@ func (ch *Channel) QueueBind(name, key, exchange string, noWait bool, args Table
 		return err
 	}
 
-	return ch.call(
+	err := ch.call(
 		&queueBind{
 			Queue:      name,
 			Exchange:   exchange,
@@ -1094,6 +1214,16 @@ func (ch *Channel) QueueBind(name, key, exchange string, noWait bool, args Table
 		},
 		&queueBindOk{},
 	)
+	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
+		ch.connection.recordBinding(ch.id, BindingConfig{
+			Queue:    name,
+			Key:      key,
+			Exchange: exchange,
+			NoWait:   noWait,
+			Args:     args,
+		})
+	}
+	return err
 }
 
 /*
@@ -1105,7 +1235,7 @@ func (ch *Channel) QueueUnbind(name, key, exchange string, args Table) error {
 		return err
 	}
 
-	return ch.call(
+	err := ch.call(
 		&queueUnbind{
 			Queue:      name,
 			Exchange:   exchange,
@@ -1114,6 +1244,15 @@ func (ch *Channel) QueueUnbind(name, key, exchange string, args Table) error {
 		},
 		&queueUnbindOk{},
 	)
+	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
+		ch.connection.removeBinding(BindingConfig{
+			Queue:    name,
+			Key:      key,
+			Exchange: exchange,
+			Args:     args,
+		})
+	}
+	return err
 }
 
 /*
@@ -1166,6 +1305,10 @@ func (ch *Channel) QueueDelete(name string, ifUnused, ifEmpty, noWait bool) (int
 	res := &queueDeleteOk{}
 
 	err := ch.call(req, res)
+	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
+		ch.connection.removeQueue(name)
+		ch.consumers.cancelByQueue(name)
+	}
 
 	return int(res.MessageCount), err
 }
@@ -1453,7 +1596,7 @@ func (ch *Channel) ExchangeDeclare(name, kind string, durable, autoDelete, inter
 		return err
 	}
 
-	return ch.call(
+	err := ch.call(
 		&exchangeDeclare{
 			Exchange:   name,
 			Type:       kind,
@@ -1466,6 +1609,18 @@ func (ch *Channel) ExchangeDeclare(name, kind string, durable, autoDelete, inter
 		},
 		&exchangeDeclareOk{},
 	)
+	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
+		ch.connection.recordExchange(ch.id, ExchangeConfig{
+			Name:       name,
+			Kind:       kind,
+			Durable:    durable,
+			AutoDelete: autoDelete,
+			Internal:   internal,
+			NoWait:     noWait,
+			Args:       args,
+		})
+	}
+	return err
 }
 
 /*
@@ -1510,7 +1665,7 @@ been deleted.  Failing to delete the channel could close the channel.  Add a
 NotifyClose listener to respond to these channel exceptions.
 */
 func (ch *Channel) ExchangeDelete(name string, ifUnused, noWait bool) error {
-	return ch.call(
+	err := ch.call(
 		&exchangeDelete{
 			Exchange: name,
 			IfUnused: ifUnused,
@@ -1518,6 +1673,10 @@ func (ch *Channel) ExchangeDelete(name string, ifUnused, noWait bool) error {
 		},
 		&exchangeDeleteOk{},
 	)
+	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
+		ch.connection.removeExchange(name)
+	}
+	return err
 }
 
 /*
@@ -1556,7 +1715,7 @@ func (ch *Channel) ExchangeBind(destination, key, source string, noWait bool, ar
 		return err
 	}
 
-	return ch.call(
+	err := ch.call(
 		&exchangeBind{
 			Destination: destination,
 			Source:      source,
@@ -1566,6 +1725,16 @@ func (ch *Channel) ExchangeBind(destination, key, source string, noWait bool, ar
 		},
 		&exchangeBindOk{},
 	)
+	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
+		ch.connection.recordExchangeBinding(ch.id, ExchangeBindingConfig{
+			Destination: destination,
+			Key:         key,
+			Source:      source,
+			NoWait:      noWait,
+			Args:        args,
+		})
+	}
+	return err
 }
 
 /*
@@ -1587,7 +1756,7 @@ func (ch *Channel) ExchangeUnbind(destination, key, source string, noWait bool, 
 		return err
 	}
 
-	return ch.call(
+	err := ch.call(
 		&exchangeUnbind{
 			Destination: destination,
 			Source:      source,
@@ -1597,6 +1766,16 @@ func (ch *Channel) ExchangeUnbind(destination, key, source string, noWait bool, 
 		},
 		&exchangeUnbindOk{},
 	)
+	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
+		ch.connection.removeExchangeBinding(ExchangeBindingConfig{
+			Destination: destination,
+			Key:         key,
+			Source:      source,
+			NoWait:      noWait,
+			Args:        args,
+		})
+	}
+	return err
 }
 
 /*
@@ -2039,7 +2218,7 @@ func (ch *Channel) watchChannel() {
 		for err := range errCh {
 			if err != nil {
 				Logger.Printf("Channel %d closed unexpectedly: %v", ch.id, err)
-				if ch.connection.Config.Recovery != nil && ch.connection.Config.Recovery.ConnectionRecovery != nil {
+				if ch.connection.IsConnectionRecoveryEnabled() {
 					ch.connection.Config.Recovery.ConnectionRecovery.OnChannelClose(ch, err)
 				}
 			}
@@ -2051,6 +2230,24 @@ func (ch *Channel) watchChannel() {
 // re-opens the AMQP channel with the same channel id and configuration,
 // and re-establishes all active publisher confirmations and consumer subscriptions.
 func (ch *Channel) Reconnect() error {
+	if err := ch.reconnectChannel(); err != nil {
+		return err
+	}
+
+	// Recover topology for this channel
+	if ch.connection.IsTopologyRecoveryEnabled() {
+		if err := ch.connection.Config.Recovery.TopologyRecovery.RecoverTopology(ch.connection, []*Channel{ch}); err != nil {
+			Logger.Printf("Channel %d recovery topology error: %v", ch.id, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+// reconnectChannel opens a fresh channel on the broker and performs basic setup (QoS, Confirms).
+// It does NOT recover the channel's topology.
+func (ch *Channel) reconnectChannel() error {
 	if !ch.connection.IsRecoveryEnabled() {
 		return ErrClosed
 	}
@@ -2090,8 +2287,6 @@ func (ch *Channel) Reconnect() error {
 		}
 
 		// 1. Reset client-side state
-		// Reset state under locks to ensure atomicity and prevent data races.
-		// Acquiring destructorM -> m avoids any lock ordering deadlocks.
 		ch.destructorM.Lock()
 		ch.m.Lock()
 		ch.resetState()
@@ -2104,17 +2299,15 @@ func (ch *Channel) Reconnect() error {
 			continue
 		}
 
-		// 3. Perform setup steps. If ANY step fails, we close the channel and retry.
-		if err = ch.setupChannel(); err != nil {
+		// 3. Perform QoS and Confirms setup.
+		if err = ch.setupChannelBasic(); err != nil {
 			Logger.Printf("Channel %d setup failed: %v, closing and retrying...", ch.id, err)
-			ch.setClosed() // Marks closed locally
-			// Send channel.close to the broker so it knows this channel is defunct
+			ch.setClosed()
 			_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Recovery retry"}, &channelCloseOk{})
 			continue
 		}
 
-		// If we reached here, recovery was 100% successful!
-		Logger.Printf("Channel %d recovery successful", ch.id)
+		// Channel session is successfully opened!
 		ch.lifeCycle.SetState(StateOpen, nil)
 		return nil
 	}
@@ -2125,11 +2318,17 @@ func (ch *Channel) Reconnect() error {
 	return err
 }
 
-// setupChannel performs all channel-level setup steps sequentially.
-// If any of these fail, we return the error immediately so the reconnect loop can try a new channel.
-func (ch *Channel) setupChannel() error {
+func (ch *Channel) setupChannelBasic() error {
 	var err error
-	// TODO Re-enable QoS if it was tracked
+
+	// Reset QoS if it was configured
+	config := ch.connection.getTopologyConfiguration(ch.id, false)
+	if config.Qos != nil {
+		if err = ch.Qos(int(config.Qos.PrefetchCount), int(config.Qos.PrefetchSize), config.Qos.Global); err != nil {
+			Logger.Printf("Channel %d recovery QoS error: %v", ch.id, err)
+			return err
+		}
+	}
 
 	// Re-enable confirms if needed
 	if ch.confirming {
@@ -2139,31 +2338,6 @@ func (ch *Channel) setupChannel() error {
 		}
 	}
 
-	// TODO Recover Topology (Exchanges, Queues, Bindings) here
-
-	// Re-subscribe consumers
-	ch.consumers.Lock()
-	configs := make(map[string]consumerConfig, len(ch.consumers.configs))
-	for tag, config := range ch.consumers.configs {
-		configs[tag] = config
-	}
-	ch.consumers.Unlock()
-	for tag, config := range configs {
-		req := &basicConsume{
-			Queue:       config.Queue,
-			ConsumerTag: tag,
-			NoLocal:     config.NoLocal,
-			NoAck:       config.AutoAck,
-			Exclusive:   config.Exclusive,
-			NoWait:      config.NoWait,
-			Arguments:   config.Args,
-		}
-		res := &basicConsumeOk{}
-		if err = ch.call(req, res); err != nil {
-			Logger.Printf("Channel %d recovery consume error for tag %s: %v", ch.id, tag, err)
-			return err
-		}
-	}
 	return nil
 }
 
@@ -2181,4 +2355,18 @@ func (ch *Channel) resetState() {
 	if ch.confirms != nil {
 		ch.confirms.reset()
 	}
+}
+
+// TopologyConfiguration returns a cloned, read-only snapshot of topology tracked for recovery.
+// When global is false, only entities declared on this channel are returned.
+// When global is true, entities from all channels on the connection are merged into a single
+// view — because AMQP topology (exchanges, queues, bindings) is scoped to the TCP connection,
+// the merged view reflects the complete set of entities that must be recovered after a reconnect.
+// QoS settings are channel-scoped and always reflect only this channel's configuration.
+// Modifying the returned value does not affect the channel's internal state.
+func (ch *Channel) TopologyConfiguration(global bool) TopologyConfiguration {
+	if ch.connection == nil {
+		return *newTopologyConfiguration()
+	}
+	return ch.connection.getTopologyConfiguration(ch.id, global)
 }

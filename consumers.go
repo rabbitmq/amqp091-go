@@ -160,6 +160,22 @@ func (subs *consumers) cancel(tag string) (found bool) {
 	return found
 }
 
+// cancelByQueue untracks and terminates all consumers registered on the given queue.
+func (subs *consumers) cancelByQueue(queue string) {
+	subs.Lock()
+	var tags []string
+	for tag, config := range subs.configs {
+		if config.Queue == queue {
+			tags = append(tags, tag)
+		}
+	}
+	subs.Unlock()
+
+	for _, tag := range tags {
+		subs.cancel(tag)
+	}
+}
+
 func (subs *consumers) close() {
 	subs.Lock()
 	defer subs.Unlock()
