@@ -91,10 +91,10 @@ type Config struct {
 	// If Recovery.TopologyRecovery is nil, a default topology recovery implementation (DefaultTopologyRecovery) is used.
 	//
 	// Topology recovery scope is controlled by Recovery.TopologyRecoveryMode:
-	//   - TopologyRecoveryOnlyTransient (default): recovers only transient entities
-	//     (exclusive/auto-delete queues, auto-delete exchanges, and bindings to them).
-	//   - TopologyRecoveryAllEnabled: recovers all tracked topology (exchanges, queues,
+	//   - TopologyRecoveryAllEnabled (default): recovers all tracked topology (exchanges, queues,
 	//     bindings, exchange-to-exchange bindings, and consumers).
+	//   - TopologyRecoveryOnlyTransient: recovers only transient entities
+	//     (exclusive/auto-delete queues, auto-delete exchanges, and bindings to them).
 	//   - TopologyRecoveryDisabled: skips topology and consumer recovery entirely.
 	//
 	// During the recovery process, applications can monitor state changes (such as reconnecting
@@ -1652,10 +1652,10 @@ func (c *Connection) IsTopologyRecoveryEnabled() bool {
 }
 
 // topologyRecoveryMode returns the configured topology recovery mode, defaulting
-// to TopologyRecoveryOnlyTransient when recovery is not configured.
+// to TopologyRecoveryAllEnabled when recovery is not configured.
 func (c *Connection) topologyRecoveryMode() TopologyRecoveryMode {
 	if c == nil || c.Config.Recovery == nil {
-		return TopologyRecoveryOnlyTransient
+		return TopologyRecoveryAllEnabled
 	}
 	return c.Config.Recovery.TopologyRecoveryMode
 }
