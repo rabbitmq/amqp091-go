@@ -91,6 +91,12 @@ type TopologyRecovery interface {
 type TopologyRecoveryMode byte
 
 const (
+	// TopologyRecoveryAllEnabled recovers all tracked topology: exchanges, queues,
+	// bindings, exchange-to-exchange bindings, and active consumers.
+	//
+	// This is the default (the zero value of TopologyRecoveryMode).
+	TopologyRecoveryAllEnabled TopologyRecoveryMode = iota
+
 	// TopologyRecoveryOnlyTransient recovers only connection-scoped (transient)
 	// entities: queues declared as exclusive and/or auto-delete (which includes
 	// server-named queues), auto-delete exchanges, and any bindings that reference
@@ -102,14 +108,7 @@ const (
 	// skipped because the broker retains them across a network interruption. Use
 	// this mode when durable topology is managed declaratively or out-of-band and
 	// only the connection-scoped entities need to be restored by the client.
-	//
-	// This is the default (the zero value of TopologyRecoveryMode), preserving the
-	// behavior of recovering only transient topology when the field is left unset.
-	TopologyRecoveryOnlyTransient TopologyRecoveryMode = iota
-
-	// TopologyRecoveryAllEnabled recovers all tracked topology: exchanges, queues,
-	// bindings, exchange-to-exchange bindings, and active consumers.
-	TopologyRecoveryAllEnabled
+	TopologyRecoveryOnlyTransient
 
 	// TopologyRecoveryDisabled disables topology recovery completely. Neither
 	// entities nor consumers are recovered. Connection and channel recovery still
@@ -124,7 +123,7 @@ type Recovery struct {
 	TopologyRecovery   TopologyRecovery    // The implementation of the topology recovery.
 
 	// TopologyRecoveryMode controls which topology entities are recovered. The zero
-	// value (TopologyRecoveryOnlyTransient) recovers only transient tracked topology.
+	// value (TopologyRecoveryAllEnabled) recovers all tracked topology.
 	// Setting it to TopologyRecoveryDisabled disables topology and consumer recovery entirely.
 	TopologyRecoveryMode TopologyRecoveryMode
 }
