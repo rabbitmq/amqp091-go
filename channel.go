@@ -2263,9 +2263,13 @@ func (ch *Channel) Reconnect() error {
 
 	// Recover topology for this channel
 	if ch.connection.IsTopologyRecoveryEnabled() {
-		if err := ch.connection.Config.Recovery.TopologyRecovery.RecoverTopology(ch.connection, []*Channel{ch}); err != nil {
+		skippedTopologyEntities, err := ch.connection.Config.Recovery.TopologyRecovery.RecoverTopology(ch.connection, []*Channel{ch})
+		if err != nil {
 			Logger.Printf("Channel %d recovery topology error: %v", ch.id, err)
 			return err
+		}
+		for _, e := range skippedTopologyEntities {
+			Logger.Printf("Channel %d topology recovery skipped entity: %v", ch.id, e)
 		}
 	}
 

@@ -1606,9 +1606,11 @@ func (c *Connection) Reconnect() error {
 			}
 		}
 
+		var skippedTopologyEntities []TopologyRecoveryEntity
 		if err == nil && c.IsTopologyRecoveryEnabled() {
 			// Phase 2: Recover topology across all channels via the configured implementation
-			if err = c.Config.Recovery.TopologyRecovery.RecoverTopology(c, channels); err != nil {
+			skippedTopologyEntities, err = c.Config.Recovery.TopologyRecovery.RecoverTopology(c, channels)
+			if err != nil {
 				Logger.Printf("Connection recovery failed to recover topology: %v", err)
 				conn.Close()
 			}
@@ -1619,8 +1621,12 @@ func (c *Connection) Reconnect() error {
 			continue
 		}
 
-		Logger.Printf("Connection recovery successful")
-		c.lifeCycle.SetState(StateOpen, nil)
+		if len(skippedTopologyEntities) > 0 {
+			Logger.Printf("Connection recovery succeeded with %d skipped topology entities", len(skippedTopologyEntities))
+		} else {
+			Logger.Printf("Connection recovery successful")
+		}
+		c.lifeCycle.setStateOpen(skippedTopologyEntities)
 		return nil
 	}
 
@@ -2230,9 +2236,9 @@ func filterTransientTopology(
 // pipeline (buffer goroutine + outer chan Delivery) that was wired up before the
 // connection dropped. This means the application's delivery channel remains valid
 // across reconnects without any intervention from the caller.
-func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
+func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyRecoveryEntity, error) {
 	if !c.IsTopologyRecoveryEnabled() {
-		return nil
+		return nil, nil
 	}
 
 	// Clone the topology snapshot under lock so network I/O below does not
@@ -2277,6 +2283,21 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
 		}
 	}
 
+	var skipped []TopologyRecoveryEntity
+	cb := c.Config.Recovery.OnTopologyEntityError
+
+	// skipOrAbort calls cb with the connection and entity error. If cb returns true
+	// (or is nil, matching DefaultOnTopologyEntityError behaviour) the entity is
+	// appended to skipped and the caller continues the loop. If cb returns false
+	// the entity error is returned as a fatal error, aborting topology recovery.
+	skipOrAbort := func(e TopologyRecoveryEntity) (skip bool, fatal error) {
+		if cb == nil || cb(c, e) {
+			skipped = append(skipped, e)
+			return true, nil
+		}
+		return false, fmt.Errorf("%w", e)
+	}
+
 	// 1. Recover exchanges across all channels.
 	for chID, config := range topologyMap {
 		ch, ok := channelMap[chID]
@@ -2284,9 +2305,12 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
 			continue
 		}
 		for _, ec := range config.Exchanges {
-			err := ch.ExchangeDeclare(ec.Name, ec.Kind, ec.Durable, ec.AutoDelete, ec.Internal, ec.NoWait, ec.Args)
-			if err != nil {
-				return fmt.Errorf("failed to recover exchange %s on channel %d: %w", ec.Name, chID, err)
+			if err := ch.ExchangeDeclare(ec.Name, ec.Kind, ec.Durable, ec.AutoDelete, ec.Internal, ec.NoWait, ec.Args); err != nil {
+				Logger.Printf("failed to recover exchange %s on channel %d: %v", ec.Name, chID, err)
+				e := TopologyRecoveryEntity{TopologyEntityExchange, ec.Name, chID, err}
+				if cont, fatal := skipOrAbort(e); !cont {
+					return skipped, fatal
+				}
 			}
 		}
 	}
@@ -2319,7 +2343,12 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
 
 			q, err := ch.QueueDeclare(qc.DeclaredName, qc.Durable, qc.AutoDelete, qc.Exclusive, qc.NoWait, qc.Args)
 			if err != nil {
-				return fmt.Errorf("failed to recover queue %s on channel %d: %w", qc.ActualName, chID, err)
+				Logger.Printf("failed to recover queue %s on channel %d: %v", qc.ActualName, chID, err)
+				e := TopologyRecoveryEntity{TopologyEntityQueue, qc.ActualName, chID, err}
+				if cont, fatal := skipOrAbort(e); !cont {
+					return skipped, fatal
+				}
+				continue
 			}
 
 			// Server-generated queues (DeclaredName == "") receive a fresh broker-assigned
@@ -2388,9 +2417,12 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
 			continue
 		}
 		for _, b := range config.Bindings {
-			err := ch.QueueBind(b.Queue, b.Key, b.Exchange, b.NoWait, b.Args)
-			if err != nil {
-				return fmt.Errorf("failed to recover binding of queue %s to exchange %s on channel %d: %w", b.Queue, b.Exchange, chID, err)
+			if err := ch.QueueBind(b.Queue, b.Key, b.Exchange, b.NoWait, b.Args); err != nil {
+				Logger.Printf("failed to recover binding of queue %s to exchange %s on channel %d: %v", b.Queue, b.Exchange, chID, err)
+				e := TopologyRecoveryEntity{TopologyEntityQueueBinding, b.Queue, chID, err}
+				if cont, fatal := skipOrAbort(e); !cont {
+					return skipped, fatal
+				}
 			}
 		}
 	}
@@ -2402,9 +2434,12 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
 			continue
 		}
 		for _, eb := range config.ExchangeBindings {
-			err := ch.ExchangeBind(eb.Destination, eb.Key, eb.Source, eb.NoWait, eb.Args)
-			if err != nil {
-				return fmt.Errorf("failed to recover exchange binding from %s to %s on channel %d: %w", eb.Source, eb.Destination, chID, err)
+			if err := ch.ExchangeBind(eb.Destination, eb.Key, eb.Source, eb.NoWait, eb.Args); err != nil {
+				Logger.Printf("failed to recover exchange binding from %s to %s on channel %d: %v", eb.Source, eb.Destination, chID, err)
+				e := TopologyRecoveryEntity{TopologyEntityExchangeBinding, eb.Source, chID, err}
+				if cont, fatal := skipOrAbort(e); !cont {
+					return skipped, fatal
+				}
 			}
 		}
 	}
@@ -2437,10 +2472,14 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) error {
 			}
 			res := &basicConsumeOk{}
 			if err := ch.call(req, res); err != nil {
-				return fmt.Errorf("failed to recover consumer for tag %s on queue %s on channel %d: %w", tag, config.Queue, ch.id, err)
+				Logger.Printf("failed to recover consumer for tag %s on queue %s on channel %d: %v", tag, config.Queue, ch.id, err)
+				e := TopologyRecoveryEntity{TopologyEntityConsumer, tag, ch.id, err}
+				if cont, fatal := skipOrAbort(e); !cont {
+					return skipped, fatal
+				}
 			}
 		}
 	}
 
-	return nil
+	return skipped, nil
 }

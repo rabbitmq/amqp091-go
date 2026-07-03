@@ -4,9 +4,55 @@
 package amqp091
 
 import (
+	"fmt"
 	"net/url"
 	"time"
 )
+
+// TopologyRecoveryEntityType identifies the topology recovery entity kind.
+type TopologyRecoveryEntityType byte
+
+const (
+	TopologyEntityExchange TopologyRecoveryEntityType = iota
+	TopologyEntityQueue
+	TopologyEntityQueueBinding
+	TopologyEntityExchangeBinding
+	TopologyEntityConsumer
+)
+
+func (t TopologyRecoveryEntityType) String() string {
+	switch t {
+	case TopologyEntityExchange:
+		return "exchange"
+	case TopologyEntityQueue:
+		return "queue"
+	case TopologyEntityQueueBinding:
+		return "queue-binding"
+	case TopologyEntityExchangeBinding:
+		return "exchange-binding"
+	case TopologyEntityConsumer:
+		return "consumer"
+	default:
+		return "unknown"
+	}
+}
+
+// TopologyRecoveryEntity describes a single topology entity during the recovery.
+type TopologyRecoveryEntity struct {
+	EntityType TopologyRecoveryEntityType
+	EntityName string // exchange/queue name, consumer tag, etc.
+	ChannelID  uint16
+	Err        error // the underlying broker or network error during the recovery.
+}
+
+func (e TopologyRecoveryEntity) Error() string {
+	return fmt.Sprintf("topology recovery: %s %q on channel %d: %v",
+		e.EntityType, e.EntityName, e.ChannelID, e.Err)
+}
+
+// Unwrap allows errors.As and errors.Is to inspect the underlying broker error,
+// enabling callers to match on *amqp091.Error reply codes inside OnTopologyEntityError.
+func (e TopologyRecoveryEntity) Unwrap() error { return e.Err }
 
 const (
 	// DefaultMaxRetryCount is the default maximum number of retries for recovery.
@@ -82,8 +128,12 @@ type ConnectionRecovery interface {
 //   - Load and declare topology dynamically from an external config or registry.
 //   - Rate-limit or stagger declarations to avoid overloading the broker after a reconnect.
 //   - Perform pre-recovery checks or customized failover/fallback routines.
+//
+// RecoverTopology returns any entity-level errors that were skipped (via the
+// Recovery.OnTopologyEntityError callback) as the first return value. A non-nil
+// second return value means recovery failed fatally and the retry cycle continues.
 type TopologyRecovery interface {
-	RecoverTopology(conn *Connection, channels []*Channel) error
+	RecoverTopology(conn *Connection, channels []*Channel) ([]TopologyRecoveryEntity, error)
 }
 
 // TopologyRecoveryMode controls which topology entities are recovered after a
@@ -126,6 +176,44 @@ type Recovery struct {
 	// value (TopologyRecoveryAllEnabled) recovers all tracked topology.
 	// Setting it to TopologyRecoveryDisabled disables topology and consumer recovery entirely.
 	TopologyRecoveryMode TopologyRecoveryMode
+
+	// OnTopologyEntityError is called each time a single topology entity fails to
+	// recover. Return true to skip the entity and continue recovering the remaining
+	// entities. Return false to abort topology recovery and trigger the normal retry
+	// cycle.
+	//
+	// The conn parameter is the connection on which recovery is running. Use it to
+	// inspect the full topology of the channel that owns the failed entity:
+	//
+	//	cfg := conn.Channel(e.ChannelID).TopologyConfiguration(true)
+	//
+	// The global flag merges topology from all channels into one connection-scoped
+	// view — appropriate because AMQP exchanges, queues, and bindings are scoped to
+	// the TCP connection, not individual channels. Pass false to limit the view to
+	// entities declared on that channel only.
+	//
+	// From cfg you can retrieve the full declaration arguments of the failed entity:
+	//
+	//	switch e.EntityType {
+	//	case amqp091.TopologyEntityQueue:
+	//	    qc, ok := cfg.Queues[e.EntityName]  // QueueConfig with Durable, AutoDelete, Args, etc.
+	//	case amqp091.TopologyEntityExchange:
+	//	    ec, ok := cfg.Exchanges[e.EntityName] // ExchangeConfig with Kind, Durable, Args, etc.
+	//	case amqp091.TopologyEntityQueueBinding:
+	//	    // cfg.Bindings is a slice; find the entry whose Queue matches e.EntityName
+	//	case amqp091.TopologyEntityExchangeBinding:
+	//	    // cfg.ExchangeBindings is a slice; find the entry whose Source matches e.EntityName
+	//	case amqp091.TopologyEntityConsumer:
+	//	    // Consumer internals are not exposed via TopologyConfiguration.
+	//	    // The consumer tag is available in e.EntityName.
+	//	}
+	//
+	// Skipped-entity errors are collected and delivered to NotifyStateChange listeners
+	// in the SkippedTopologyEntities field of the StateReconnecting→StateOpen transition, so the
+	// application can observe what was not restored even on an otherwise successful reconnect.
+	//
+	// Default: nil — entity is skipped on failure and recovery continues (same as returning true).
+	OnTopologyEntityError func(conn *Connection, e TopologyRecoveryEntity) bool
 }
 
 // DefaultConnectionRecovery is the default implementation of the connection recovery.
@@ -195,6 +283,6 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 // DefaultTopologyRecovery is the default implementation of the topology recovery.
 type DefaultTopologyRecovery struct{}
 
-func (d *DefaultTopologyRecovery) RecoverTopology(conn *Connection, channels []*Channel) error {
+func (d *DefaultTopologyRecovery) RecoverTopology(conn *Connection, channels []*Channel) ([]TopologyRecoveryEntity, error) {
 	return conn.recoverConnectionTopology(channels)
 }
