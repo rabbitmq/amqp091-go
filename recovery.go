@@ -37,17 +37,46 @@ func (t TopologyRecoveryEntityType) String() string {
 	}
 }
 
-// TopologyRecoveryEntity describes a single topology entity during the recovery.
+// TopologyRecoveryEntity describes a single topology entity that failed during recovery.
+// It is passed to Recovery.OnTopologyEntityError and collected in StateChanged.SkippedTopologyEntities.
+//
+// For non-binding entity types, EntityName uniquely identifies the entity.
+// For binding types (QueueBinding, ExchangeBinding), use EntityName + SecondaryName + RoutingKey
+// together — the same queue or exchange may appear in multiple bindings with different
+// routing keys or destination exchanges.
 type TopologyRecoveryEntity struct {
 	EntityType TopologyRecoveryEntityType
-	EntityName string // exchange/queue name, consumer tag, etc.
+	// EntityName is the primary name of the entity:
+	//   - Exchange: the exchange name
+	//   - Queue: the queue name
+	//   - QueueBinding: the queue name
+	//   - ExchangeBinding: the source exchange name
+	//   - Consumer: the consumer tag
+	EntityName string
+	// SecondaryName disambiguates binding entities that share the same EntityName:
+	//   - QueueBinding: the exchange the queue is bound to
+	//   - ExchangeBinding: the destination exchange
+	//   - Empty for all other entity types.
+	SecondaryName string
+	// RoutingKey is set for binding entities (QueueBinding, ExchangeBinding).
+	// Empty for all other entity types.
+	RoutingKey string
 	ChannelID  uint16
 	Err        error // the underlying broker or network error during the recovery.
 }
 
 func (e TopologyRecoveryEntity) Error() string {
-	return fmt.Sprintf("topology recovery: %s %q on channel %d: %v",
-		e.EntityType, e.EntityName, e.ChannelID, e.Err)
+	switch e.EntityType {
+	case TopologyEntityQueueBinding:
+		return fmt.Sprintf("topology recovery: queue-binding %q → %q [%s] on channel %d: %v",
+			e.EntityName, e.SecondaryName, e.RoutingKey, e.ChannelID, e.Err)
+	case TopologyEntityExchangeBinding:
+		return fmt.Sprintf("topology recovery: exchange-binding %q → %q [%s] on channel %d: %v",
+			e.EntityName, e.SecondaryName, e.RoutingKey, e.ChannelID, e.Err)
+	default:
+		return fmt.Sprintf("topology recovery: %s %q on channel %d: %v",
+			e.EntityType, e.EntityName, e.ChannelID, e.Err)
+	}
 }
 
 // Unwrap allows errors.As and errors.Is to inspect the underlying broker error,
@@ -182,8 +211,22 @@ type Recovery struct {
 	// entities. Return false to abort topology recovery and trigger the normal retry
 	// cycle.
 	//
+	// The entity e carries enough information to identify the failed entity without
+	// any additional lookup:
+	//
+	//	e.EntityType   — what kind of entity failed (exchange, queue, binding, consumer)
+	//	e.EntityName   — primary name: exchange/queue name, source exchange, consumer tag
+	//	e.SecondaryName — for bindings only: exchange (queue-binding) or destination exchange (exchange-binding)
+	//	e.RoutingKey   — for bindings only: the routing key
+	//	e.ChannelID    — the channel on which the failure occurred
+	//	e.Err          — the underlying broker or network error
+	//
+	// For bindings, EntityName alone is not sufficient to identify the specific
+	// binding — the same queue or exchange may be bound multiple times with different
+	// routing keys. Use EntityName + SecondaryName + RoutingKey together.
+	//
 	// The conn parameter is the connection on which recovery is running. Use it to
-	// inspect the full topology of the channel that owns the failed entity:
+	// retrieve the full declaration arguments of the failed entity when needed:
 	//
 	//	cfg := conn.Channel(e.ChannelID).TopologyConfiguration(true)
 	//
@@ -192,17 +235,21 @@ type Recovery struct {
 	// the TCP connection, not individual channels. Pass false to limit the view to
 	// entities declared on that channel only.
 	//
-	// From cfg you can retrieve the full declaration arguments of the failed entity:
-	//
 	//	switch e.EntityType {
 	//	case amqp091.TopologyEntityQueue:
-	//	    qc, ok := cfg.Queues[e.EntityName]  // QueueConfig with Durable, AutoDelete, Args, etc.
+	//	    qc, ok := cfg.Queues[e.EntityName]    // QueueConfig with Durable, AutoDelete, Args, etc.
 	//	case amqp091.TopologyEntityExchange:
-	//	    ec, ok := cfg.Exchanges[e.EntityName] // ExchangeConfig with Kind, Durable, Args, etc.
+	//	    ec, ok := cfg.Exchanges[e.EntityName]  // ExchangeConfig with Kind, Durable, Args, etc.
 	//	case amqp091.TopologyEntityQueueBinding:
-	//	    // cfg.Bindings is a slice; find the entry whose Queue matches e.EntityName
+	//	    // Match by Queue + Exchange + Key (args may further distinguish headers bindings).
+	//	    for _, b := range cfg.Bindings {
+	//	        if b.Queue == e.EntityName && b.Exchange == e.SecondaryName && b.Key == e.RoutingKey { ... }
+	//	    }
 	//	case amqp091.TopologyEntityExchangeBinding:
-	//	    // cfg.ExchangeBindings is a slice; find the entry whose Source matches e.EntityName
+	//	    // Match by Source + Destination + Key.
+	//	    for _, eb := range cfg.ExchangeBindings {
+	//	        if eb.Source == e.EntityName && eb.Destination == e.SecondaryName && eb.Key == e.RoutingKey { ... }
+	//	    }
 	//	case amqp091.TopologyEntityConsumer:
 	//	    // Consumer internals are not exposed via TopologyConfiguration.
 	//	    // The consumer tag is available in e.EntityName.
@@ -246,6 +293,7 @@ func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Err
 	// Reconnect connection
 	if err := conn.Reconnect(); err != nil {
 		Logger.Printf("Connection %s recovery failed: %v.", parsedURL.Redacted(), err)
+		Logger.Printf("Now cleanup channels")
 		conn.cleanup()
 	}
 }

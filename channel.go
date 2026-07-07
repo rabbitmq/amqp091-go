@@ -253,6 +253,8 @@ func (ch *Channel) shutdown(e *Error) {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
+	isRecoveryInProgress := ch.connection.inTopologyRecovery.Load()
+	Logger.Printf("Channel isRecoveryInProgress: %v", isRecoveryInProgress)
 	// Broadcast abnormal shutdown
 	if e != nil {
 		for _, c := range ch.closes {
@@ -281,7 +283,8 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 	}
 
-	if e == nil || !ch.connection.IsRecoveryEnabled() || !ch.connection.isRecoverable(e) {
+	if e == nil || !ch.connection.IsRecoveryEnabled() || (!ch.connection.isRecoverable(e) && !isRecoveryInProgress) {
+		Logger.Printf("Channel: Removing consumers")
 		ch.consumers.close()
 
 		for _, c := range ch.closes {
@@ -2203,6 +2206,8 @@ func (ch *Channel) cleanup() {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
+	Logger.Printf("Cleanup channel")
+
 	ch.consumers.close()
 
 	for _, c := range ch.closes {
@@ -2276,6 +2281,31 @@ func (ch *Channel) Reconnect() error {
 	return nil
 }
 
+// openChannelSession resets client-side state, opens a fresh broker channel,
+// and restores QoS/Confirm configuration. It is the shared single-attempt core
+// used by both reconnectChannel (retry loop) and reopenChannelIfClosed (topology
+// recovery). The caller must hold ch.reconnecting and manage lifecycle transitions.
+//
+// openSucceeded is true when ch.open() completed — the caller needs this to decide
+// whether to send a channel.close courtesy frame to the broker before the next
+// retry (meaningful only when open succeeded but setup then failed).
+func (ch *Channel) openChannelSession() (openSucceeded bool, err error) {
+	// 1. Reset client-side state
+	ch.destructorM.Lock()
+	ch.m.Lock()
+	ch.resetState()
+	ch.m.Unlock()
+	ch.destructorM.Unlock()
+
+	// 2. Open a fresh channel on the broker
+	if err = ch.open(); err != nil {
+		return false, err
+	}
+
+	// 3. Perform QoS and Confirms setup.
+	return true, ch.setupChannelBasic()
+}
+
 // reconnectChannel opens a fresh channel on the broker and performs basic setup (QoS, Confirms).
 // It does NOT recover the channel's topology.
 func (ch *Channel) reconnectChannel() error {
@@ -2294,7 +2324,10 @@ func (ch *Channel) reconnectChannel() error {
 
 	cancelCh := ch.NotifyRecoveryCancel(make(chan struct{}))
 
-	var err error
+	var (
+		err    error
+		opened bool
+	)
 	for i := 0; i < ch.connection.MaxRetryCount(); i++ {
 		// Exit early if Close() was already called
 		select {
@@ -2317,24 +2350,16 @@ func (ch *Channel) reconnectChannel() error {
 			}
 		}
 
-		// 1. Reset client-side state
-		ch.destructorM.Lock()
-		ch.m.Lock()
-		ch.resetState()
-		ch.m.Unlock()
-		ch.destructorM.Unlock()
-
-		// 2. Open a fresh channel on the broker
-		if err = ch.open(); err != nil {
-			Logger.Printf("Channel %d recovery open error: %v", ch.id, err)
-			continue
-		}
-
-		// 3. Perform QoS and Confirms setup.
-		if err = ch.setupChannelBasic(); err != nil {
-			Logger.Printf("Channel %d setup failed: %v, closing and retrying...", ch.id, err)
-			ch.setClosed()
-			_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Recovery retry"}, &channelCloseOk{})
+		opened, err = ch.openChannelSession()
+		if err != nil {
+			Logger.Printf("Channel %d recovery attempt %d failed: %v", ch.id, i+1, err)
+			if opened {
+				// open() succeeded but setupChannelBasic() failed:
+				// gracefully close the broker-side session before the next attempt.
+				// channelClose must be sent before setClosed()
+				_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Recovery retry"}, &channelCloseOk{})
+				ch.setClosed()
+			}
 			continue
 		}
 

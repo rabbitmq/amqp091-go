@@ -2049,11 +2049,12 @@ func TestConnectionRecoveryTopologyDisabled(t *testing.T) {
 //
 // The failure path is: a recoverable drop starts recovery; a queue that can no
 // longer be redeclared (its definition was changed out-of-band) makes
-// RecoverTopology fail; Reconnect() calls Close() on the transport, whose reader
-// raises a non-recoverable shutdown that closes the listeners; after retries are
-// exhausted OnConnectionClose calls cleanup(), which closed the same listeners a
-// second time and panicked with "close of closed channel". A registered
-// NotifyClose listener is required to surface the panic.
+// RecoverTopology fail (OnTopologyEntityError returns false to abort, not skip);
+// Reconnect() calls Close() on the transport, whose reader raises a
+// non-recoverable shutdown that closes the listeners; after retries are exhausted
+// OnConnectionClose calls cleanup(), which closed the same listeners a second time
+// and panicked with "close of closed channel". A registered NotifyClose listener
+// is required to surface the panic.
 func TestConnectionRecoveryExhaustionDoesNotPanic(t *testing.T) {
 	connectionName := "test-connection-recovery-exhaustion-no-panic"
 	properties := NewConnectionProperties()
@@ -2066,6 +2067,12 @@ func TestConnectionRecoveryExhaustionDoesNotPanic(t *testing.T) {
 				RetryInterval: 1 * time.Second,
 			},
 			TopologyRecoveryMode: TopologyRecoveryAllEnabled,
+			// Return false to abort topology recovery on any entity error.
+			// Without this, the default behavior skips the failed entity and
+			// recovery succeeds — the connection never reaches StateClosed.
+			OnTopologyEntityError: func(_ *Connection, _ TopologyRecoveryEntity) bool {
+				return false
+			},
 		},
 		Locale:     defaultLocale,
 		Properties: properties,
@@ -2674,4 +2681,135 @@ func TestConnectionRecoveryAutoDeleteExchangeCascade(t *testing.T) {
 		t.Fatalf("s4: auto-delete source exchange %q must be forgotten after ExchangeDelete removed its only e2e binding, but it is still tracked", s4Source)
 	}
 	t.Logf("Scenario 4 OK: source exchange %q cascade-forgotten after ExchangeDelete of destination %q", s4Source, s4Dest)
+}
+
+// TestConnectionRecoverySkipAndContinue tests that when a topology entity fails to
+// recover, OnTopologyEntityError can skip it and recovery still completes successfully.
+// The StateReconnecting→StateOpen transition must carry the skipped entities in
+// SkippedTopologyEntities so the caller can observe what was not restored.
+func TestConnectionRecoverySkipAndContinue(t *testing.T) {
+	connectionName := "test-connection-recovery-skip-and-continue"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+
+	// 1. Declare topology: auto-delete exchange, durable queue (with x-max-length),
+	//    a binding, and a consumer.
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			// Explicitly return true to skip the failed entity and continue recovery.
+			OnTopologyEntityError: func(_ *Connection, e TopologyRecoveryEntity) bool {
+				return true
+			},
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	exchangeName := "test_skip_continue_ex"
+	if err := ch.ExchangeDeclare(exchangeName, "direct", false, true, false, false, nil); err != nil {
+		t.Fatalf("ExchangeDeclare failed: %v", err)
+	}
+	defer func() {
+		if !conn.IsClosed() {
+			_ = ch.ExchangeDelete(exchangeName, false, false)
+		}
+	}()
+
+	queueName := "test_skip_continue_q"
+	if _, err := ch.QueueDeclare(queueName, true, false, false, false, Table{"x-max-length": int32(10)}); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+	defer func() {
+		// ch may be closed after the conflicting-queue error during recovery; use a
+		// fresh channel for cleanup so the queue is always removed.
+		if conn.IsClosed() {
+			return
+		}
+		cleanupCh, cerr := conn.Channel()
+		if cerr != nil {
+			return
+		}
+		defer cleanupCh.Close()
+		_, _ = cleanupCh.QueueDelete(queueName, false, false, false)
+	}()
+
+	routingKey := "skip-continue-key"
+	if err := ch.QueueBind(queueName, routingKey, exchangeName, false, nil); err != nil {
+		t.Fatalf("QueueBind failed: %v", err)
+	}
+
+	msgs, err := ch.Consume(queueName, "skip-continue-consumer", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume failed: %v", err)
+	}
+	_ = msgs
+
+	// 2. Out-of-band: delete and redeclare the queue with a conflicting definition
+	//    so that the client's recovery-time redeclare fails with PRECONDITION_FAILED.
+	adminConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("admin DialConfig failed: %v", err)
+	}
+	adminCh, err := adminConn.Channel()
+	if err != nil {
+		t.Fatalf("admin Channel failed: %v", err)
+	}
+	if _, err := adminCh.QueueDelete(queueName, false, false, false); err != nil {
+		t.Fatalf("admin QueueDelete failed: %v", err)
+	}
+	if _, err := adminCh.QueueDeclare(queueName, true, false, false, false, Table{"x-max-length": int32(99)}); err != nil {
+		t.Fatalf("admin QueueDeclare (conflicting) failed: %v", err)
+	}
+	_ = adminCh.Close()
+	_ = adminConn.Close()
+
+	// 3. Register state change listener.
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+
+	// 4. Drop the connection.
+	dropConnection(t, connectionName)
+
+	// 5. Wait for recovery; 6. Assert the open transition carries skipped entities.
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case sc := <-stateChanged:
+			t.Logf("Connection state changed: %s", sc)
+			if sc.To != StateOpen {
+				continue
+			}
+			if len(sc.SkippedTopologyEntities) == 0 {
+				t.Fatalf("Expected SkippedTopologyEntities to be non-empty on StateOpen after skip-and-continue, but it was nil/empty")
+			}
+			t.Logf("Recovery succeeded with %d skipped topology entity/entities:", len(sc.SkippedTopologyEntities))
+			for _, e := range sc.SkippedTopologyEntities {
+				t.Logf("  - %s %q on channel %d: %v", e.EntityType, e.EntityName, e.ChannelID, e.Err)
+			}
+			// Verify at least one skipped entity is the conflicting queue.
+			foundQueue := false
+			for _, e := range sc.SkippedTopologyEntities {
+				if e.EntityType == TopologyEntityQueue && e.EntityName == queueName {
+					foundQueue = true
+				}
+			}
+			if !foundQueue {
+				t.Fatalf("Expected a skipped entity for queue %q but it was not found in SkippedTopologyEntities: %+v",
+					queueName, sc.SkippedTopologyEntities)
+			}
+			return
+		case <-timeout:
+			t.Fatalf("Timeout waiting for connection to recover to StateOpen with skipped topology entities")
+		}
+	}
 }
