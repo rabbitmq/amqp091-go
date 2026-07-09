@@ -63,6 +63,7 @@ should be discarded and a new channel established.
 type Channel struct {
 	destructorM sync.Mutex   // Mutex for destroying the channel.
 	destructed  bool         // Will be true if the channel has been destroyed, false otherwise.
+	cleanedUp   atomic.Bool  // Thread-safe atomic boolean to track final cleanup status
 	m           sync.Mutex   // Mutex for the channel.
 	notifyM     sync.RWMutex // Mutex for the notify state.
 
@@ -253,8 +254,6 @@ func (ch *Channel) shutdown(e *Error) {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
-	isRecoveryInProgress := ch.connection.inTopologyRecovery.Load()
-	Logger.Printf("Channel isRecoveryInProgress: %v", isRecoveryInProgress)
 	// Broadcast abnormal shutdown
 	if e != nil {
 		for _, c := range ch.closes {
@@ -283,8 +282,7 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 	}
 
-	if e == nil || !ch.connection.IsRecoveryEnabled() || (!ch.connection.isRecoverable(e) && !isRecoveryInProgress) {
-		Logger.Printf("Channel: Removing consumers")
+	if e == nil || !ch.connection.IsRecoveryEnabled() {
 		ch.consumers.close()
 
 		for _, c := range ch.closes {
@@ -2199,14 +2197,23 @@ func (ch *Channel) GetNextPublishSeqNo() uint64 {
 }
 
 // cleanup closes all the channels and the confirms.
-func (ch *Channel) cleanup() {
+func (ch *Channel) cleanup(e *Error) {
+	ch.setClosed() // Ensure ch.IsClosed() returns true globally
+
+	// If it returns false, it means cleanedUp was already true (cleanup already ran).
+	if !ch.cleanedUp.CompareAndSwap(false, true) {
+		return
+	}
+
+	ch.destructorM.Lock()
+	ch.destructed = true // Lock out any future transport shutdowns as well
+	ch.destructorM.Unlock()
+
 	ch.m.Lock()
 	defer ch.m.Unlock()
 
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
-
-	Logger.Printf("Cleanup channel")
 
 	ch.consumers.close()
 
@@ -2241,6 +2248,13 @@ func (ch *Channel) cleanup() {
 	}
 
 	ch.noNotify = true
+
+	var err error
+	if e != nil {
+		err = fmt.Errorf("%w", e)
+	}
+
+	ch.lifeCycle.SetState(StateClosed, err)
 }
 
 // watchChannel watches the channel for close events and triggers recovery if needed.
@@ -2370,7 +2384,6 @@ func (ch *Channel) reconnectChannel() error {
 
 	Logger.Printf("Channel %d recovery exhausted all %d retries", ch.id, ch.connection.MaxRetryCount())
 	ch.setClosed()
-	ch.lifeCycle.SetState(StateClosed, err)
 	return err
 }
 

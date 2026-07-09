@@ -143,14 +143,13 @@ func (config *Config) setSASL(uri URI) error {
 // multiplexed on this channel.  There must always be active receivers for
 // every asynchronous message on this connection.
 type Connection struct {
-	destructorM         sync.Mutex   // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
-	destructed          bool         // true when the connection has been destructed (teardown is initiated or completed)
-	closeM              sync.Mutex   // Mutex for connection close handshake: sending a single connection.close frame to the broker
-	closeInit           bool         // true when a connection close has been initiated (connection.close frame has been or is being sent)
-	sendM               sync.Mutex   // conn writer mutex
-	m                   sync.Mutex   // struct field mutex
-	recoveryErrorCodesM sync.Mutex   // Mutex for protecting RecoverableErrorCodes updates and reads
-	notifyM             sync.RWMutex // Mutex for notifying close/block listeners; mirrors Channel.notifyM
+	destructorM sync.Mutex   // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
+	destructed  bool         // true when the connection has been destructed (teardown is initiated or completed)
+	closeM      sync.Mutex   // Mutex for connection close handshake: sending a single connection.close frame to the broker
+	closeInit   bool         // true when a connection close has been initiated (connection.close frame has been or is being sent)
+	sendM       sync.Mutex   // conn writer mutex
+	m           sync.Mutex   // struct field mutex
+	notifyM     sync.RWMutex // Mutex for notifying close/block listeners; mirrors Channel.notifyM
 
 	conn io.ReadWriteCloser
 
@@ -182,8 +181,7 @@ type Connection struct {
 	Properties Table    // Server properties
 	Locales    []string // Server locales
 
-	closed             atomic.Bool // Will be true if the connection is closed, false otherwise.
-	inTopologyRecovery atomic.Bool // True while RecoverTopology is running; suppresses full channel teardown on soft broker errors.
+	closed atomic.Bool // Will be true if the connection is closed, false otherwise.
 
 	// maxFrameSize mirrors Config.FrameSize once negotiated via connection.tune,
 	// letting the reader goroutine reject over-sized frames before allocating
@@ -349,8 +347,6 @@ func DialConfig(url string, config Config) (*Connection, error) {
 	if config.Recovery != nil {
 		if config.Recovery.ReconnectionConfig == nil {
 			config.Recovery.ReconnectionConfig = DefaultReconnectionConfig.Clone()
-		} else if config.Recovery.ReconnectionConfig.RecoverableErrorCodes == nil {
-			config.Recovery.ReconnectionConfig.RecoverableErrorCodes = cloneRecoverableErrorCodes(defaultRecoverableErrorCodes)
 		}
 		if config.Recovery.ConnectionRecovery == nil {
 			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{}
@@ -799,9 +795,6 @@ func (c *Connection) shutdown(err *Error) {
 	c.notifyM.Lock()
 	defer c.notifyM.Unlock()
 
-	isRecoveryInProgress := c.inTopologyRecovery.Load()
-	Logger.Printf("Connection: isRecoveryInProgress: %v", isRecoveryInProgress)
-
 	if err != nil {
 		for _, listener := range c.closes {
 			select {
@@ -832,8 +825,7 @@ func (c *Connection) shutdown(err *Error) {
 	// Shutdown handler goroutine can still receive the result.
 	close(c.errors)
 
-	if err == nil || !c.IsRecoveryEnabled() || (!c.isRecoverable(err) && !isRecoveryInProgress) {
-		Logger.Printf("Connection: Removing listener, block")
+	if err == nil || !c.IsRecoveryEnabled() {
 		for _, listener := range c.closes {
 			close(listener)
 		}
@@ -856,8 +848,7 @@ func (c *Connection) shutdown(err *Error) {
 	// reader exit
 	close(c.close)
 
-	if err == nil || !c.IsRecoveryEnabled() || (!c.isRecoverable(err) && !isRecoveryInProgress) {
-		Logger.Printf("Connection: Removing channels to nil")
+	if err == nil || !c.IsRecoveryEnabled() {
 		c.channels = nil
 		c.allocator = nil
 		c.noNotify = true
@@ -1097,7 +1088,6 @@ func (c *Connection) releaseChannel(ch *Channel) {
 	if !c.IsClosed() {
 		got, ok := c.channels[ch.id]
 		if ok && got == ch {
-			Logger.Printf("releasing channel %d", ch.id)
 			delete(c.channels, ch.id)
 			c.allocator.release(int(ch.id))
 			c.removeChannelTopology(ch.id)
@@ -1113,7 +1103,6 @@ func (c *Connection) openChannel() (*Channel, error) {
 	}
 
 	if err := ch.open(); err != nil {
-		Logger.Printf("Calling release channel from openChannel")
 		c.releaseChannel(ch)
 		return nil, err
 	}
@@ -1130,49 +1119,15 @@ func (c *Connection) openChannel() (*Channel, error) {
 // closeChannel releases and initiates a shutdown of the channel.  All channel
 // closures should be initiated here for proper channel lifecycle management on
 // this connection.
-//
-// releaseChannel is called first so the channel is removed from c.channels
-// before ch.shutdown sends to ch.errors. This guarantees that when the topology
-// recovery goroutine wakes (via ch.errors) and calls reopenChannelIfClosed, the
-// channel is already absent from c.channels and the re-registration check
-// (!present) correctly fires. Reversing the order creates a TOCTOU window where
-// the recovery goroutine sees the channel as still present, skips re-registration,
-// and then releaseChannel removes it — causing channelOpenOk to go to
-// dispatchClosed and triggering a spurious ErrClosed(504) connection close.
-//
-// Exception: when a non-recoverable soft channel error (e.g. 406 PRECONDITION_FAILED)
-// arrives during topology recovery, releaseChannel is skipped so that ch stays in
-// c.channels. This prevents a goroutine leak: ch.shutdown takes the minimal-cleanup
-// branch (preserving consumers and leaving ch.closes open), so conn.cleanup() must
-// be able to find ch via c.channels to call ch.cleanup() and close ch.closes.
-// The TOCTOU concern above does not apply here because OnChannelClose returns
-// immediately for non-recoverable errors and never calls ch.Reconnect() concurrently.
 func (c *Connection) closeChannel(ch *Channel, e *Error) {
-	// if e == nil || !ch.connection.IsRecoveryEnabled() || !ch.connection.inTopologyRecovery.Load() {
-	// 	c.releaseChannel(ch)
-	// }
-	// Logger.Printf("Skipping release channel from closeChannel, err: %v", e)
-	//c.releaseChannel(ch)
-
 	// If we are actively recovering topology, do NOT purge the channel from memory yet.
 	// We keep it in c.channels so that:
 	//   1. reopenChannelIfClosed can find and reuse it if we skip-and-continue.
 	//   2. connection.cleanup can access it to force a full shutdown if recovery fails completely.
-	if !c.inTopologyRecovery.Load() {
+	if e == nil || !c.IsRecoveryEnabled() {
 		c.releaseChannel(ch)
 	}
 	ch.shutdown(e)
-	// if e != nil && !c.isRecoverable(e) && c.inTopologyRecovery.Load() {
-	// 	c.m.Lock()
-	// 	if c.channels != nil && c.allocator != nil {
-	// 		if _, present := c.channels[ch.id]; !present {
-	// 			Logger.Printf("Adding channel back to connection, %d", ch.id)
-	// 			c.channels[ch.id] = ch
-	// 			c.allocator.reserve(int(ch.id))
-	// 		}
-	// 	}
-	// 	c.m.Unlock()
-	// }
 }
 
 /*
@@ -1490,7 +1445,7 @@ func negotiateFrameSize(client, server int) int {
 }
 
 // cleanup releases registered resources and performs final teardown of the connection.
-func (c *Connection) cleanup() {
+func (c *Connection) cleanup(err *Error) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
@@ -1505,10 +1460,8 @@ func (c *Connection) cleanup() {
 	}
 	c.closes, c.blocks = nil, nil // nil to prevent double-close
 
-	Logger.Printf("Total channels: %d", len(c.channels))
 	for _, ch := range c.channels {
-		Logger.Printf("Cleaning up channel %d", ch.id)
-		ch.cleanup()
+		ch.cleanup(err)
 	}
 
 	for _, listener := range c.recoveryCancels {
@@ -1523,6 +1476,13 @@ func (c *Connection) cleanup() {
 	c.topologyM.Lock()
 	c.topologyConfiguration = nil
 	c.topologyM.Unlock()
+
+	var e error
+	if err != nil {
+		e = fmt.Errorf("%w", err)
+	}
+
+	c.lifeCycle.SetState(StateClosed, e)
 }
 
 // watchConnection watches the connection for close events and triggers recovery if needed.
@@ -1569,7 +1529,6 @@ func (c *Connection) Reconnect() error {
 		select {
 		case <-cancelCh:
 			Logger.Printf("Connection recovery aborted: connection closed during backoff.")
-			c.inTopologyRecovery.Store(false)
 			return ErrClosed
 		case <-time.After(c.RetryInterval() + jitter):
 		}
@@ -1686,7 +1645,6 @@ func (c *Connection) Reconnect() error {
 		c.conn.Close()
 	}
 	c.closed.Store(true)
-	c.lifeCycle.SetState(StateClosed, err)
 
 	return err
 }
@@ -1719,8 +1677,7 @@ func (c *Connection) IsRecoveryEnabled() bool {
 	}
 	return c.Config.Recovery != nil &&
 		c.Config.Recovery.ReconnectionConfig != nil &&
-		c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0 &&
-		len(c.GetRecoverableErrorCodes()) > 0
+		c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0
 }
 
 // IsTopologyRecoveryEnabled checks if the topology recovery is enabled.
@@ -1755,36 +1712,6 @@ func (c *Connection) IsConnectionRecoveryEnabled() bool {
 	return c.IsRecoveryEnabled() && c.Config.Recovery.ConnectionRecovery != nil
 }
 
-// isRecoverable returns true if the given error is recoverable based on RecoverableErrorCodes.
-func (c *Connection) isRecoverable(err *Error) bool {
-	if !c.IsRecoveryEnabled() {
-		return false
-	}
-	if err == nil {
-		return true
-	}
-	for _, code := range c.GetRecoverableErrorCodes() {
-		if err.Code == code {
-			return true
-		}
-	}
-	return false
-}
-
-// GetRecoverableErrorCodes returns a copy of the recoverable error codes.
-func (c *Connection) GetRecoverableErrorCodes() []int {
-	if c == nil {
-		return nil
-	}
-	c.recoveryErrorCodesM.Lock()
-	defer c.recoveryErrorCodesM.Unlock()
-	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
-		return nil
-	}
-
-	return cloneRecoverableErrorCodes(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes)
-}
-
 // MaxRetryCount returns the maximum number of retries if recovery is enabled, otherwise returns 0.
 func (c *Connection) MaxRetryCount() int {
 	if c.IsRecoveryEnabled() {
@@ -1799,34 +1726,6 @@ func (c *Connection) RetryInterval() time.Duration {
 		return c.Config.Recovery.ReconnectionConfig.RetryInterval
 	}
 	return 0
-}
-
-// SetRecoverableErrorCodes sets the list of error codes that trigger recovery.
-func (c *Connection) SetRecoverableErrorCodes(codes []int) error {
-	if c == nil {
-		return ErrClosed
-	}
-	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
-		return ErrRecoveryNotEnabled
-	}
-	c.recoveryErrorCodesM.Lock()
-	defer c.recoveryErrorCodesM.Unlock()
-	c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes = codes
-	return nil
-}
-
-// AddRecoverableErrorCodes adds one or more error codes to the list of recoverable error codes.
-func (c *Connection) AddRecoverableErrorCodes(codes ...int) error {
-	if c == nil {
-		return ErrClosed
-	}
-	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
-		return ErrRecoveryNotEnabled
-	}
-	c.recoveryErrorCodesM.Lock()
-	defer c.recoveryErrorCodesM.Unlock()
-	c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes = append(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes, codes...)
-	return nil
 }
 
 // channelTopology returns the TopologyConfiguration for the given channel,
@@ -2292,9 +2191,6 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 		return nil, nil
 	}
 
-	c.inTopologyRecovery.Store(true)
-	defer c.inTopologyRecovery.Store(false)
-
 	// Clone the topology snapshot under lock so network I/O below does not
 	// hold topologyM and deadlock with concurrent record* / remove* calls.
 	c.topologyM.Lock()
@@ -2354,9 +2250,6 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 
 	// reopenChannelIfClosed reopens a channel that was closed as a side-effect of a
 	// broker soft error (e.g. PRECONDITION_FAILED / 406) during topology recovery.
-	//
-	// Lifecycle state transitions follow the same pattern as reconnectChannel:
-	// StateClosed → StateReconnecting → StateOpen (success) or StateClosed (failure).
 	reopenChannelIfClosed := func(ch *Channel) {
 		// Fast path: skip the mutex entirely for the common case where the channel
 		// is already open. Avoids blocking on ch.reconnecting for every entity in
@@ -2378,11 +2271,8 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 		Logger.Printf("topology recovery: channel %d closed by broker soft error; reopening for remaining entities", ch.id)
 		ch.lifeCycle.SetState(StateReconnecting, nil)
 
+		// Make sure the channel id is registered in c.channels.
 		// Re-register the channel in c.channels before sending channel.open.
-		// closeChannel→releaseChannel removes the channel from c.channels before
-		// waking this goroutine (via ch.shutdown→ch.errors). Without re-registering,
-		// the reader goroutine cannot route the channelOpenOk frame to ch.rpc, which
-		// permanently stalls call() and leaks the goroutine even after connection shutdown.
 		c.m.Lock()
 		if _, present := c.channels[ch.id]; !present && c.allocator != nil {
 			c.channels[ch.id] = ch
@@ -2396,7 +2286,6 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Topology recovery"}, &channelCloseOk{})
 			}
 			ch.setClosed()
-			ch.lifeCycle.SetState(StateClosed, err)
 			return
 		}
 

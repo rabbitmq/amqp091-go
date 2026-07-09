@@ -4,6 +4,7 @@
 package amqp091
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -92,33 +93,17 @@ const (
 )
 
 var (
-	// defaultRecoverableErrorCodes contains the default exception codes that trigger recovery.
-	defaultRecoverableErrorCodes = []int{ConnectionForced, InternalError}
-
 	// DefaultReconnectionConfig is the default reconnection config settings.
 	DefaultReconnectionConfig = &ReconnectionConfig{
-		MaxRetryCount:         DefaultMaxRetryCount,
-		RetryInterval:         DefaultRetryInterval,
-		RecoverableErrorCodes: cloneRecoverableErrorCodes(defaultRecoverableErrorCodes),
+		MaxRetryCount: DefaultMaxRetryCount,
+		RetryInterval: DefaultRetryInterval,
 	}
 )
 
-// cloneRecoverableErrorCodes returns a clone of given RecoverableErrorCodes slice.
-// It is used to avoid modifying the original slice.
-func cloneRecoverableErrorCodes(inRecoverableErrorCodes []int) []int {
-	if inRecoverableErrorCodes == nil {
-		return nil
-	}
-	codes := make([]int, len(inRecoverableErrorCodes))
-	copy(codes, inRecoverableErrorCodes)
-	return codes
-}
-
 // ReconnectionConfig is the configuration for the reconnection.
 type ReconnectionConfig struct {
-	MaxRetryCount         int           // The maximum number of retries.
-	RetryInterval         time.Duration // The interval between retries.
-	RecoverableErrorCodes []int         // The error codes that trigger recovery.
+	MaxRetryCount int           // The maximum number of retries.
+	RetryInterval time.Duration // The interval between retries.
 }
 
 // Clone returns a deep copy of the ReconnectionConfig.
@@ -127,20 +112,16 @@ func (rc *ReconnectionConfig) Clone() *ReconnectionConfig {
 		return nil
 	}
 	return &ReconnectionConfig{
-		MaxRetryCount:         rc.MaxRetryCount,
-		RetryInterval:         rc.RetryInterval,
-		RecoverableErrorCodes: cloneRecoverableErrorCodes(rc.RecoverableErrorCodes),
+		MaxRetryCount: rc.MaxRetryCount,
+		RetryInterval: rc.RetryInterval,
 	}
 }
 
 // ConnectionRecovery is the interface for the connection recovery.
 //
 // The err parameter in OnConnectionClose and OnChannelClose provides the reason
-// why the connection or channel was closed. Under the hood, DefaultConnectionRecovery
-// performs conditional recovery based on RecoverableErrorCodes. You can also customize
-// the list of recoverable errors dynamically using Connection.SetRecoverableErrorCodes and
-// Connection.AddRecoverableErrorCodes, or use custom implementations of this interface to
-// perform more advanced logic, log errors to external monitoring systems (e.g., Prometheus),
+// why the connection or channel was closed. Custom implementations of this interface
+// can perform advanced logic, log errors to external monitoring systems (e.g., Prometheus),
 // or trigger alerts.
 type ConnectionRecovery interface {
 	OnConnectionClose(conn *Connection, err *Error) // Called when the connection is closed.
@@ -280,21 +261,13 @@ func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Err
 		return
 	}
 
-	if !conn.isRecoverable(err) {
-		code := 0
-		if err != nil {
-			code = err.Code
-		}
-		Logger.Printf("Connection %s closed with non-recoverable error code %d, skipping reconnect.", parsedURL.Redacted(), code)
-		return
-	}
-
 	Logger.Printf("Initiating connection recovery for %s.", parsedURL.Redacted())
 	// Reconnect connection
 	if err := conn.Reconnect(); err != nil {
 		Logger.Printf("Connection %s recovery failed: %v.", parsedURL.Redacted(), err)
-		Logger.Printf("Now cleanup channels")
-		conn.cleanup()
+		var amqpErr *Error
+		errors.As(err, &amqpErr)
+		conn.cleanup(amqpErr)
 	}
 }
 
@@ -311,20 +284,13 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 		return
 	}
 
-	if !ch.connection.isRecoverable(err) {
-		code := 0
-		if err != nil {
-			code = err.Code
-		}
-		Logger.Printf("Channel %d closed with non-recoverable error code %d, skipping reconnect.", ch.id, code)
-		return
-	}
-
 	Logger.Printf("Initiating channel %d recovery", ch.id)
 	// Reconnect channel
 	if err := ch.Reconnect(); err != nil {
 		Logger.Printf("Channel %d recovery failed: %v.", ch.id, err)
-		ch.cleanup()
+		var amqpErr *Error
+		errors.As(err, &amqpErr)
+		ch.cleanup(amqpErr)
 	}
 }
 
