@@ -64,7 +64,6 @@ type Channel struct {
 	destructorM sync.Mutex   // Mutex for destroying the channel.
 	destructed  bool         // Will be true if the channel has been destroyed, false otherwise.
 	m           sync.Mutex   // Mutex for the channel.
-	confirmM    sync.Mutex   // Mutex for the publisher confirms state.
 	notifyM     sync.RWMutex // Mutex for the notify state.
 
 	connection *Connection
@@ -98,7 +97,7 @@ type Channel struct {
 
 	// Allocated when in confirm mode in order to track publish counter and order confirms
 	confirms   *confirms
-	confirming bool
+	confirming atomic.Bool
 
 	// Selects on any errors from shutdown during RPC
 	errors chan *Error
@@ -256,21 +255,28 @@ func (ch *Channel) shutdown(e *Error) {
 
 	// Broadcast abnormal shutdown
 	if e != nil {
+		closeCh := ch.close // capture before shutdown closes it; used as abort signal
 		for _, c := range ch.closes {
 			select {
 			case c <- e:
 			default:
-				// If blocked/full, send in a goroutine so we never deadlock the shutdown sequence
-				go func(c chan *Error, e *Error) {
-					defer func() {
-						_ = recover() // Gracefully ignore panics if the channel is closed concurrently
-					}()
+				// Channel is full; deliver in a background goroutine so we never deadlock
+				// the shutdown sequence. The goroutine holds notifyM.RLock() for the
+				// duration of the send, which is mutually exclusive with cleanup()'s
+				// notifyM.Lock(), preventing a concurrent send+close data race.
+				// shutdown() holds notifyM.Lock() right now, so the goroutine is blocked
+				// on RLock until shutdown() closes ch.close (the abort) and returns —
+				// guaranteeing <-done is always ready when the goroutine first runs.
+				go func(c chan *Error, e *Error, done <-chan struct{}) {
+					defer func() { _ = recover() }()
+					ch.notifyM.RLock()
+					defer ch.notifyM.RUnlock()
 					select {
 					case c <- e:
+					case <-done:
 					case <-time.After(5 * time.Second):
-						// Give up to avoid leaking the goroutine permanently
 					}
-				}(c, e)
+				}(c, e, closeCh)
 			}
 		}
 		// Notify RPC if we're selecting
@@ -350,14 +356,19 @@ func (ch *Channel) call(req message, res ...message) error {
 	}
 
 	if req.wait() {
+		ch.m.Lock()
+		errors := ch.errors
+		rpc := ch.rpc
+		ch.m.Unlock()
+
 		select {
-		case e, ok := <-ch.errors:
+		case e, ok := <-errors:
 			if ok {
 				return e
 			}
 			return ErrClosed
 
-		case msg := <-ch.rpc:
+		case msg := <-rpc:
 			if msg != nil {
 				for _, try := range res {
 					if reflect.TypeOf(msg) == reflect.TypeOf(try) {
@@ -514,7 +525,7 @@ func (ch *Channel) dispatch(msg message) {
 		ch.notifyM.RUnlock()
 
 	case *basicAck:
-		if ch.confirming {
+		if ch.confirming.Load() {
 			if m.Multiple {
 				ch.confirms.Multiple(Confirmation{m.DeliveryTag, true})
 			} else {
@@ -523,7 +534,7 @@ func (ch *Channel) dispatch(msg message) {
 		}
 
 	case *basicNack:
-		if ch.confirming {
+		if ch.confirming.Load() {
 			if m.Multiple {
 				ch.confirms.Multiple(Confirmation{m.DeliveryTag, false})
 			} else {
@@ -537,10 +548,15 @@ func (ch *Channel) dispatch(msg message) {
 		// deliveries are in flight and a no-wait cancel has happened
 
 	default:
+		ch.m.Lock()
+		closeCh := ch.close
+		rpc := ch.rpc
+		ch.m.Unlock()
+
 		select {
-		case <-ch.close:
+		case <-closeCh:
 			return
-		case ch.rpc <- msg:
+		case rpc <- msg:
 		}
 	}
 }
@@ -1876,7 +1892,7 @@ func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, i
 	defer ch.m.Unlock()
 
 	var dc *DeferredConfirmation
-	if ch.confirming {
+	if ch.confirming.Load() {
 		dc = ch.confirms.publish()
 	}
 
@@ -1902,7 +1918,7 @@ func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, i
 			AppId:           msg.AppId,
 		},
 	}); err != nil {
-		if ch.confirming {
+		if ch.confirming.Load() {
 			ch.confirms.unpublish()
 		}
 		return nil, err
@@ -2073,9 +2089,7 @@ func (ch *Channel) Confirm(noWait bool) error {
 		return err
 	}
 
-	ch.confirmM.Lock()
-	ch.confirming = true
-	ch.confirmM.Unlock()
+	ch.confirming.Store(true)
 
 	return nil
 }
@@ -2331,7 +2345,7 @@ func (ch *Channel) setupChannelBasic() error {
 	}
 
 	// Re-enable confirms if needed
-	if ch.confirming {
+	if ch.confirming.Load() {
 		if err = ch.Confirm(false); err != nil {
 			Logger.Printf("Channel %d recovery Confirm error: %v", ch.id, err)
 			return err
