@@ -63,6 +63,7 @@ should be discarded and a new channel established.
 type Channel struct {
 	destructorM sync.Mutex   // Mutex for destroying the channel.
 	destructed  bool         // Will be true if the channel has been destroyed, false otherwise.
+	cleanedUp   atomic.Bool  // Thread-safe atomic boolean to track final cleanup status
 	m           sync.Mutex   // Mutex for the channel.
 	confirmM    sync.Mutex   // Mutex for the publisher confirms state.
 	notifyM     sync.RWMutex // Mutex for the notify state.
@@ -280,7 +281,8 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 	}
 
-	if e == nil || !ch.connection.IsRecoveryEnabled() || !ch.connection.isRecoverable(e) {
+	if e == nil || !ch.connection.IsRecoveryEnabled() {
+		Logger.Printf("Channel: Removing consumers")
 		ch.consumers.close()
 
 		for _, c := range ch.closes {
@@ -2169,7 +2171,21 @@ func (ch *Channel) GetNextPublishSeqNo() uint64 {
 }
 
 // cleanup closes all the channels and the confirms.
-func (ch *Channel) cleanup() {
+func (ch *Channel) cleanup(e *Error) {
+	ch.setClosed() // Ensure ch.IsClosed() returns true globally
+
+	// ATOMIC GUARD: Swap from false to true.
+	// If it returns false, it means cleanedUp was ALREADY true (cleanup already ran).
+	if !ch.cleanedUp.CompareAndSwap(false, true) {
+		Logger.Printf("Skip channel cleanup as it is already ran")
+		return
+	}
+
+	// Now proceed with your normal locks and cleanup payload safely
+	ch.destructorM.Lock()
+	ch.destructed = true // Lock out any future transport shutdowns as well
+	ch.destructorM.Unlock()
+
 	ch.m.Lock()
 	defer ch.m.Unlock()
 
@@ -2209,6 +2225,13 @@ func (ch *Channel) cleanup() {
 	}
 
 	ch.noNotify = true
+
+	var err error
+	if e != nil {
+		err = fmt.Errorf("%w", e)
+	}
+
+	ch.lifeCycle.SetState(StateClosed, err)
 }
 
 // watchChannel watches the channel for close events and triggers recovery if needed.

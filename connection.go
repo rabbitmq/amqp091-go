@@ -817,7 +817,7 @@ func (c *Connection) shutdown(err *Error) {
 	// Shutdown handler goroutine can still receive the result.
 	close(c.errors)
 
-	if err == nil || !c.IsRecoveryEnabled() || !c.isRecoverable(err) {
+	if err == nil || !c.IsRecoveryEnabled() {
 		for _, listener := range c.closes {
 			close(listener)
 		}
@@ -840,7 +840,7 @@ func (c *Connection) shutdown(err *Error) {
 	// reader exit
 	close(c.close)
 
-	if err == nil || !c.IsRecoveryEnabled() || !c.isRecoverable(err) {
+	if err == nil || !c.IsRecoveryEnabled() {
 		c.channels = nil
 		c.allocator = nil
 		c.noNotify = true
@@ -1106,8 +1106,14 @@ func (c *Connection) openChannel() (*Channel, error) {
 // closures should be initiated here for proper channel lifecycle management on
 // this connection.
 func (c *Connection) closeChannel(ch *Channel, e *Error) {
+	// If recovery is enabled, do NOT purge the channel from memory yet.
+	// We keep it in c.channels so that:
+	//   1. reopenChannelIfClosed can find and reuse it if we skip-and-continue.
+	//   2. connection.cleanup can access it to force a full shutdown if recovery fails completely.
+	if e == nil || !c.IsRecoveryEnabled() {
+		c.releaseChannel(ch)
+	}
 	ch.shutdown(e)
-	c.releaseChannel(ch)
 }
 
 /*
@@ -1415,7 +1421,7 @@ func negotiateFrameSize(client, server int) int {
 }
 
 // cleanup releases registered resources and performs final teardown of the connection.
-func (c *Connection) cleanup() {
+func (c *Connection) cleanup(err *Error) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
@@ -1428,7 +1434,8 @@ func (c *Connection) cleanup() {
 	c.closes, c.blocks = nil, nil // nil to prevent double-close
 
 	for _, ch := range c.channels {
-		ch.cleanup()
+		Logger.Printf("Cleaning up channel %d", ch.id)
+		ch.cleanup(err)
 	}
 
 	for _, listener := range c.recoveryCancels {
@@ -1443,6 +1450,13 @@ func (c *Connection) cleanup() {
 	c.topologyM.Lock()
 	c.topologyConfiguration = nil
 	c.topologyM.Unlock()
+
+	var e error
+	if err != nil {
+		e = fmt.Errorf("%w", err)
+	}
+
+	c.lifeCycle.SetState(StateClosed, e)
 }
 
 // watchConnection watches the connection for close events and triggers recovery if needed.
@@ -1676,12 +1690,14 @@ func (c *Connection) isRecoverable(err *Error) bool {
 	if err == nil {
 		return true
 	}
-	for _, code := range c.GetRecoverableErrorCodes() {
-		if err.Code == code {
-			return true
-		}
-	}
-	return false
+	// for _, code := range c.GetRecoverableErrorCodes() {
+	// 	if err.Code == code {
+	// 		return true
+	// 	}
+	// }
+	// return false
+
+	return true
 }
 
 // GetRecoverableErrorCodes returns a copy of the recoverable error codes.
