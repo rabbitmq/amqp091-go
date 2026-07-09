@@ -18,33 +18,17 @@ const (
 )
 
 var (
-	// defaultRecoverableErrorCodes contains the default exception codes that trigger recovery.
-	defaultRecoverableErrorCodes = []int{ConnectionForced, InternalError}
-
 	// DefaultReconnectionConfig is the default reconnection config settings.
 	DefaultReconnectionConfig = &ReconnectionConfig{
-		MaxRetryCount:         DefaultMaxRetryCount,
-		RetryInterval:         DefaultRetryInterval,
-		RecoverableErrorCodes: cloneRecoverableErrorCodes(defaultRecoverableErrorCodes),
+		MaxRetryCount: DefaultMaxRetryCount,
+		RetryInterval: DefaultRetryInterval,
 	}
 )
 
-// cloneRecoverableErrorCodes returns a clone of given RecoverableErrorCodes slice.
-// It is used to avoid modifying the original slice.
-func cloneRecoverableErrorCodes(inRecoverableErrorCodes []int) []int {
-	if inRecoverableErrorCodes == nil {
-		return nil
-	}
-	codes := make([]int, len(inRecoverableErrorCodes))
-	copy(codes, inRecoverableErrorCodes)
-	return codes
-}
-
 // ReconnectionConfig is the configuration for the reconnection.
 type ReconnectionConfig struct {
-	MaxRetryCount         int           // The maximum number of retries.
-	RetryInterval         time.Duration // The interval between retries.
-	RecoverableErrorCodes []int         // The error codes that trigger recovery.
+	MaxRetryCount int           // The maximum number of retries.
+	RetryInterval time.Duration // The interval between retries.
 }
 
 // Clone returns a deep copy of the ReconnectionConfig.
@@ -53,9 +37,8 @@ func (rc *ReconnectionConfig) Clone() *ReconnectionConfig {
 		return nil
 	}
 	return &ReconnectionConfig{
-		MaxRetryCount:         rc.MaxRetryCount,
-		RetryInterval:         rc.RetryInterval,
-		RecoverableErrorCodes: cloneRecoverableErrorCodes(rc.RecoverableErrorCodes),
+		MaxRetryCount: rc.MaxRetryCount,
+		RetryInterval: rc.RetryInterval,
 	}
 }
 
@@ -146,15 +129,6 @@ func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Err
 		return
 	}
 
-	if !conn.isRecoverable(err) {
-		code := 0
-		if err != nil {
-			code = err.Code
-		}
-		Logger.Printf("Connection %s closed with non-recoverable error code %d, skipping reconnect.", parsedURL.Redacted(), code)
-		return
-	}
-
 	Logger.Printf("Initiating connection recovery for %s.", parsedURL.Redacted())
 	// Reconnect connection
 	if err := conn.Reconnect(); err != nil {
@@ -175,15 +149,6 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 
 	if ch.connection.IsClosed() {
 		Logger.Printf("Connection is closed, letting connection recovery handle channel %d.", ch.id)
-		return
-	}
-
-	if !ch.connection.isRecoverable(err) {
-		code := 0
-		if err != nil {
-			code = err.Code
-		}
-		Logger.Printf("Channel %d closed with non-recoverable error code %d, skipping reconnect.", ch.id, code)
 		return
 	}
 

@@ -147,9 +147,8 @@ type Connection struct {
 	destructed          bool       // true when the connection has been destructed (teardown is initiated or completed)
 	closeM              sync.Mutex // Mutex for connection close handshake: sending a single connection.close frame to the broker
 	closeInit           bool       // true when a connection close has been initiated (connection.close frame has been or is being sent)
-	sendM               sync.Mutex // conn writer mutex
-	m                   sync.Mutex // struct field mutex
-	recoveryErrorCodesM sync.Mutex // Mutex for protecting RecoverableErrorCodes updates and reads
+	sendM sync.Mutex // conn writer mutex
+	m     sync.Mutex // struct field mutex
 
 	conn io.ReadWriteCloser
 
@@ -342,8 +341,6 @@ func DialConfig(url string, config Config) (*Connection, error) {
 	if config.Recovery != nil {
 		if config.Recovery.ReconnectionConfig == nil {
 			config.Recovery.ReconnectionConfig = DefaultReconnectionConfig.Clone()
-		} else if config.Recovery.ReconnectionConfig.RecoverableErrorCodes == nil {
-			config.Recovery.ReconnectionConfig.RecoverableErrorCodes = cloneRecoverableErrorCodes(defaultRecoverableErrorCodes)
 		}
 		if config.Recovery.ConnectionRecovery == nil {
 			config.Recovery.ConnectionRecovery = &DefaultConnectionRecovery{}
@@ -1646,8 +1643,7 @@ func (c *Connection) IsRecoveryEnabled() bool {
 	}
 	return c.Config.Recovery != nil &&
 		c.Config.Recovery.ReconnectionConfig != nil &&
-		c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0 &&
-		len(c.GetRecoverableErrorCodes()) > 0
+		c.Config.Recovery.ReconnectionConfig.MaxRetryCount > 0
 }
 
 // IsTopologyRecoveryEnabled checks if the topology recovery is enabled.
@@ -1682,38 +1678,6 @@ func (c *Connection) IsConnectionRecoveryEnabled() bool {
 	return c.IsRecoveryEnabled() && c.Config.Recovery.ConnectionRecovery != nil
 }
 
-// isRecoverable returns true if the given error is recoverable based on RecoverableErrorCodes.
-func (c *Connection) isRecoverable(err *Error) bool {
-	if !c.IsRecoveryEnabled() {
-		return false
-	}
-	if err == nil {
-		return true
-	}
-	// for _, code := range c.GetRecoverableErrorCodes() {
-	// 	if err.Code == code {
-	// 		return true
-	// 	}
-	// }
-	// return false
-
-	return true
-}
-
-// GetRecoverableErrorCodes returns a copy of the recoverable error codes.
-func (c *Connection) GetRecoverableErrorCodes() []int {
-	if c == nil {
-		return nil
-	}
-	c.recoveryErrorCodesM.Lock()
-	defer c.recoveryErrorCodesM.Unlock()
-	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
-		return nil
-	}
-
-	return cloneRecoverableErrorCodes(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes)
-}
-
 // MaxRetryCount returns the maximum number of retries if recovery is enabled, otherwise returns 0.
 func (c *Connection) MaxRetryCount() int {
 	if c.IsRecoveryEnabled() {
@@ -1728,34 +1692,6 @@ func (c *Connection) RetryInterval() time.Duration {
 		return c.Config.Recovery.ReconnectionConfig.RetryInterval
 	}
 	return 0
-}
-
-// SetRecoverableErrorCodes sets the list of error codes that trigger recovery.
-func (c *Connection) SetRecoverableErrorCodes(codes []int) error {
-	if c == nil {
-		return ErrClosed
-	}
-	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
-		return ErrRecoveryNotEnabled
-	}
-	c.recoveryErrorCodesM.Lock()
-	defer c.recoveryErrorCodesM.Unlock()
-	c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes = codes
-	return nil
-}
-
-// AddRecoverableErrorCodes adds one or more error codes to the list of recoverable error codes.
-func (c *Connection) AddRecoverableErrorCodes(codes ...int) error {
-	if c == nil {
-		return ErrClosed
-	}
-	if c.Config.Recovery == nil || c.Config.Recovery.ReconnectionConfig == nil {
-		return ErrRecoveryNotEnabled
-	}
-	c.recoveryErrorCodesM.Lock()
-	defer c.recoveryErrorCodesM.Unlock()
-	c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes = append(c.Config.Recovery.ReconnectionConfig.RecoverableErrorCodes, codes...)
-	return nil
 }
 
 // channelTopology returns the TopologyConfiguration for the given channel,
