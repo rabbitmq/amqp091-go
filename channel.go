@@ -305,8 +305,13 @@ func (ch *Channel) shutdown(e *Error) {
 			close(c)
 		}
 
+		for _, c := range ch.recoveryCancels {
+			close(c)
+		}
+
 		// Set the slices to nil to prevent the dispatch() range from sending on
 		// the now closed channels after we release the notifyM mutex
+		ch.recoveryCancels = nil
 		ch.flows = nil
 		ch.closes = nil
 		ch.returns = nil
