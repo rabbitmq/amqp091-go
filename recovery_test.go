@@ -2378,8 +2378,8 @@ func TestConnectionRecoveryAutoDeleteTopologyForgotten(t *testing.T) {
 	t.Logf("Confirmed auto-delete exchange %q was NOT re-declared during recovery", adQueueExchange)
 }
 
-// TestConnectionRecoveryAutoDeleteExchangeCascade verifies three additional cascade
-// scenarios for auto-delete exchange forgetting that go beyond a simple QueueUnbind:
+// TestConnectionRecoveryAutoDeleteExchangeCascade verifies four cascade scenarios
+// for auto-delete exchange forgetting that go beyond a simple QueueUnbind:
 //
 //  1. Explicit QueueDelete removes the queue's bindings; the source auto-delete
 //     exchange is cascade-forgotten because it now has no bindings.
@@ -2391,6 +2391,10 @@ func TestConnectionRecoveryAutoDeleteTopologyForgotten(t *testing.T) {
 //     the last consumer cascade-forgets the queue, then innerExchange, then
 //     outerExchange, verified both in the topology store and on the broker after
 //     connection recovery.
+//
+//  4. ExchangeDelete of the destination exchange in an exchange-to-exchange binding
+//     cascade-forgets the auto-delete source exchange when no other bindings remain
+//     sourced from it.
 func TestConnectionRecoveryAutoDeleteExchangeCascade(t *testing.T) {
 	connectionName := "test-connection-recovery-auto-delete-exchange-cascade"
 
@@ -2628,4 +2632,46 @@ func TestConnectionRecoveryAutoDeleteExchangeCascade(t *testing.T) {
 		}
 		t.Logf("s3: confirmed %s was NOT re-declared during recovery", ck.name)
 	}
+
+	// -----------------------------------------------------------------------
+	// Scenario 4 — ExchangeDelete of destination cascades to auto-delete source
+	//
+	// Explicitly deleting the destination exchange of an exchange-to-exchange
+	// binding must cascade-forget the auto-delete source exchange from the
+	// topology store when no other bindings remain sourced from it.
+	// -----------------------------------------------------------------------
+
+	s4Source := "test_cascade_s4_source_exchange"
+	s4Dest := "test_cascade_s4_dest_exchange"
+
+	if err := ch.ExchangeDeclare(s4Source, "fanout", false, true, false, false, nil); err != nil {
+		t.Fatalf("s4 source ExchangeDeclare failed: %v", err)
+	}
+	// s4Source is auto-delete: the broker removes it when its last binding is gone,
+	// so no explicit cleanup defer is needed.
+	if err := ch.ExchangeDeclare(s4Dest, "direct", false, false, false, false, nil); err != nil {
+		t.Fatalf("s4 dest ExchangeDeclare failed: %v", err)
+	}
+	// s4Dest is deleted in the test body below; no defer needed.
+
+	if err := ch.ExchangeBind(s4Dest, "", s4Source, false, nil); err != nil {
+		t.Fatalf("s4 ExchangeBind (source→dest) failed: %v", err)
+	}
+
+	// Verify source exchange is tracked before the delete.
+	if _, found := ch.TopologyConfiguration(true).Exchanges[s4Source]; !found {
+		t.Fatalf("s4: expected source exchange %q to be tracked before ExchangeDelete of destination", s4Source)
+	}
+
+	// Explicitly delete the destination exchange. removeExchangeLocked collects
+	// s4Source as a cascade candidate (it sourced a binding pointing to the deleted
+	// exchange), and maybeDeleteRecordedAutoDeleteExchange must then forget it
+	// because no bindings remain sourced from it.
+	if err := ch.ExchangeDelete(s4Dest, false, false); err != nil {
+		t.Fatalf("s4 ExchangeDelete dest failed: %v", err)
+	}
+	if _, found := ch.TopologyConfiguration(true).Exchanges[s4Source]; found {
+		t.Fatalf("s4: auto-delete source exchange %q must be forgotten after ExchangeDelete removed its only e2e binding, but it is still tracked", s4Source)
+	}
+	t.Logf("Scenario 4 OK: source exchange %q cascade-forgotten after ExchangeDelete of destination %q", s4Source, s4Dest)
 }
