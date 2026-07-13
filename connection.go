@@ -1780,18 +1780,21 @@ func (c *Connection) recordExchange(channelID uint16, ec ExchangeConfig) {
 	c.channelTopology(channelID).Exchanges[ec.Name] = ec
 }
 
-func (c *Connection) removeExchange(name string) {
+// removeExchange removes an exchange and its bindings from the topology store.
+// It returns the exchange names that were sources in exchange-to-exchange bindings
+// pointing TO the deleted exchange — these are candidates for auto-delete cascade.
+func (c *Connection) removeExchange(name string) []string {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
 
 	if c.topologyConfiguration == nil {
-		return
+		return nil
 	}
-
+	var cascadeSources []string
 	for _, config := range c.topologyConfiguration {
 		delete(config.Exchanges, name)
 
-		// Clean up related bindings in-place (0 allocations)
+		// Clean up related queue bindings in-place (0 allocations)
 		if config.Bindings != nil {
 			oldBindings := config.Bindings
 			active := config.Bindings[:0]
@@ -1811,6 +1814,9 @@ func (c *Connection) removeExchange(name string) {
 			for _, eb := range oldExchangeBindings {
 				if eb.Destination != name && eb.Source != name {
 					active = append(active, eb)
+				} else if eb.Destination == name {
+					// This exchange was the destination; its source may now be auto-deletable.
+					cascadeSources = append(cascadeSources, eb.Source)
 				}
 			}
 			for i := len(active); i < len(oldExchangeBindings); i++ {
@@ -1819,6 +1825,58 @@ func (c *Connection) removeExchange(name string) {
 			config.ExchangeBindings = active
 		}
 	}
+	return cascadeSources
+}
+
+// deleteRecordedExchange removes an exchange from tracking and cascades to any
+// auto-delete exchange that sourced an exchange-to-exchange binding pointing to it.
+func (c *Connection) deleteRecordedExchange(name string) {
+	for _, src := range c.removeExchange(name) {
+		c.maybeDeleteRecordedAutoDeleteExchange(src)
+	}
+}
+
+// maybeDeleteRecordedAutoDeleteExchange forgets an exchange from the topology store
+// when it is auto-delete and all bindings sourced from it have been removed.
+func (c *Connection) maybeDeleteRecordedAutoDeleteExchange(exchangeName string) {
+	if !c.IsTopologyRecoveryEnabled() || exchangeName == "" {
+		return
+	}
+
+	c.topologyM.Lock()
+	isAutoDelete := false
+	hasBindings := false
+	if c.topologyConfiguration != nil {
+		for _, cfg := range c.topologyConfiguration {
+			if ec, ok := cfg.Exchanges[exchangeName]; ok && ec.AutoDelete {
+				isAutoDelete = true
+			}
+			for _, b := range cfg.Bindings {
+				if b.Exchange == exchangeName {
+					hasBindings = true
+					break
+				}
+			}
+			if !hasBindings {
+				for _, eb := range cfg.ExchangeBindings {
+					if eb.Source == exchangeName {
+						hasBindings = true
+						break
+					}
+				}
+			}
+			if hasBindings {
+				break
+			}
+		}
+	}
+	c.topologyM.Unlock()
+
+	if !isAutoDelete || hasBindings {
+		return
+	}
+
+	c.deleteRecordedExchange(exchangeName)
 }
 
 func (c *Connection) recordQueue(channelID uint16, qc QueueConfig) {
@@ -1827,14 +1885,17 @@ func (c *Connection) recordQueue(channelID uint16, qc QueueConfig) {
 	c.channelTopology(channelID).Queues[qc.ActualName] = qc
 }
 
-func (c *Connection) removeQueue(name string) {
+// removeQueue removes a queue and its bindings from the topology store.
+// It returns the exchange names that sourced bindings pointing to this queue —
+// these are candidates for auto-delete cascade.
+func (c *Connection) removeQueue(name string) []string {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
 
 	if c.topologyConfiguration == nil {
-		return
+		return nil
 	}
-
+	var sources []string
 	for _, config := range c.topologyConfiguration {
 		delete(config.Queues, name)
 
@@ -1845,6 +1906,8 @@ func (c *Connection) removeQueue(name string) {
 			for _, b := range oldBindings {
 				if b.Queue != name {
 					active = append(active, b)
+				} else {
+					sources = append(sources, b.Exchange)
 				}
 			}
 			for i := len(active); i < len(oldBindings); i++ {
@@ -1853,6 +1916,56 @@ func (c *Connection) removeQueue(name string) {
 			config.Bindings = active
 		}
 	}
+	return sources
+}
+
+// deleteRecordedQueue removes a queue from tracking and cascades to any auto-delete
+// exchange that sourced a binding pointing to it.
+func (c *Connection) deleteRecordedQueue(name string) {
+	for _, src := range c.removeQueue(name) {
+		c.maybeDeleteRecordedAutoDeleteExchange(src)
+	}
+}
+
+// maybeDeleteRecordedAutoDeleteQueue forgets a queue from the topology store when
+// it is auto-delete and all its consumers on this connection have been cancelled.
+func (c *Connection) maybeDeleteRecordedAutoDeleteQueue(queueName string) {
+	if !c.IsTopologyRecoveryEnabled() {
+		return
+	}
+
+	// Fast path: bail early if not tracked as auto-delete.
+	c.topologyM.Lock()
+	isAutoDelete := false
+	if c.topologyConfiguration != nil {
+		for _, cfg := range c.topologyConfiguration {
+			if qc, ok := cfg.Queues[queueName]; ok && qc.AutoDelete {
+				isAutoDelete = true
+				break
+			}
+		}
+	}
+	c.topologyM.Unlock()
+	if !isAutoDelete {
+		return
+	}
+
+	// Check whether any channel still has a consumer on this queue.
+	c.m.Lock()
+	channels := make([]*Channel, 0, len(c.channels))
+	for _, ch := range c.channels {
+		channels = append(channels, ch)
+	}
+	c.m.Unlock()
+
+	for _, ch := range channels {
+		if ch.consumers.hasConsumerForQueue(queueName) {
+			return
+		}
+	}
+
+	// No consumers remain; remove the queue and cascade.
+	c.deleteRecordedQueue(queueName)
 }
 
 func (c *Connection) recordBinding(channelID uint16, bc BindingConfig) {
