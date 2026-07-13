@@ -255,7 +255,6 @@ func (ch *Channel) shutdown(e *Error) {
 
 	// Broadcast abnormal shutdown
 	if e != nil {
-		closeCh := ch.close // capture before shutdown closes it; used as abort signal
 		for _, c := range ch.closes {
 			select {
 			case c <- e:
@@ -264,19 +263,15 @@ func (ch *Channel) shutdown(e *Error) {
 				// the shutdown sequence. The goroutine holds notifyM.RLock() for the
 				// duration of the send, which is mutually exclusive with cleanup()'s
 				// notifyM.Lock(), preventing a concurrent send+close data race.
-				// shutdown() holds notifyM.Lock() right now, so the goroutine is blocked
-				// on RLock until shutdown() closes ch.close (the abort) and returns —
-				// guaranteeing <-done is always ready when the goroutine first runs.
-				go func(c chan *Error, e *Error, done <-chan struct{}) {
+				go func(c chan *Error, e *Error) {
 					defer func() { _ = recover() }()
 					ch.notifyM.RLock()
 					defer ch.notifyM.RUnlock()
 					select {
 					case c <- e:
-					case <-done:
 					case <-time.After(5 * time.Second):
 					}
-				}(c, e, closeCh)
+				}(c, e)
 			}
 		}
 		// Notify RPC if we're selecting

@@ -794,7 +794,6 @@ func (c *Connection) shutdown(err *Error) {
 	defer c.notifyM.Unlock()
 
 	if err != nil {
-		errsCh := c.errors // capture before shutdown closes it; used as abort signal
 		for _, listener := range c.closes {
 			select {
 			case listener <- err:
@@ -803,19 +802,15 @@ func (c *Connection) shutdown(err *Error) {
 				// the shutdown sequence. The goroutine holds notifyM.RLock() for the
 				// duration of the send, which is mutually exclusive with cleanup()'s
 				// notifyM.Lock(), preventing a concurrent send+close data race.
-				// shutdown() holds notifyM.Lock() right now, so the goroutine blocks on
-				// RLock() until shutdown() closes c.errors (the abort) and returns —
-				// guaranteeing <-done is always ready when the goroutine first runs.
-				go func(listener chan *Error, err *Error, done <-chan *Error) {
+				go func(listener chan *Error, err *Error) {
 					defer func() { _ = recover() }()
 					c.notifyM.RLock()
 					defer c.notifyM.RUnlock()
 					select {
 					case listener <- err:
-					case <-done:
 					case <-time.After(5 * time.Second):
 					}
-				}(listener, err, errsCh)
+				}(listener, err)
 			}
 		}
 
@@ -976,10 +971,7 @@ func (c *Connection) reader(r io.Reader) {
 	frames := &reader{buf}
 	conn, haveDeadliner := r.(readDeadliner)
 
-	// Capture c.rpc now so the defer closes this connection's channel, not a
-	// replacement created by resetState() during a concurrent reconnection.
-	rpc := c.rpc
-	defer close(rpc)
+	defer close(c.rpc)
 
 	for {
 		frame, err := frames.ReadFrame()
