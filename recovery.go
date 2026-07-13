@@ -169,8 +169,9 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 		return
 	}
 
-	if ch.connection.IsClosed() {
-		Logger.Printf("Connection is closed, letting connection recovery handle channel %d.", ch.id)
+	// Guard against concurrent recovery loops if the connection is already reconnecting
+	if ch.connection.IsClosed() || ch.connection.lifeCycle.State() == StateReconnecting {
+		Logger.Printf("Connection is closed or reconnecting, letting connection recovery handle channel %d.", ch.id)
 		return
 	}
 
