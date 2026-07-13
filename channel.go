@@ -507,10 +507,14 @@ func (ch *Channel) dispatch(msg message) {
 		}
 
 	case *basicCancel:
+		queueName, _ := ch.consumers.queueForTag(m.ConsumerTag)
 		ch.notifyM.RLock()
 		notifyAll(ch.cancels, m.ConsumerTag)
 		ch.notifyM.RUnlock()
 		ch.consumers.cancel(m.ConsumerTag)
+		if queueName != "" {
+			ch.connection.maybeDeleteRecordedAutoDeleteQueue(queueName)
+		}
 
 	case *basicReturn:
 		ret := newReturn(*m)
@@ -971,6 +975,9 @@ require an acknowledgment, otherwise they will arrive and be dropped in the
 client without an ack, and will not be redelivered to other consumers.
 */
 func (ch *Channel) Cancel(consumer string, noWait bool) error {
+	// Look up the queue name before cancelling so we can check auto-delete after.
+	queueName, _ := ch.consumers.queueForTag(consumer)
+
 	req := &basicCancel{
 		ConsumerTag: consumer,
 		NoWait:      noWait,
@@ -986,6 +993,10 @@ func (ch *Channel) Cancel(consumer string, noWait bool) error {
 	} else {
 		// Potentially could drop deliveries in flight
 		ch.consumers.cancel(consumer)
+	}
+
+	if queueName != "" {
+		ch.connection.maybeDeleteRecordedAutoDeleteQueue(queueName)
 	}
 
 	return nil
@@ -1256,6 +1267,7 @@ func (ch *Channel) QueueUnbind(name, key, exchange string, args Table) error {
 			Exchange: exchange,
 			Args:     args,
 		})
+		ch.connection.maybeDeleteRecordedAutoDeleteExchange(exchange)
 	}
 	return err
 }
@@ -1311,7 +1323,7 @@ func (ch *Channel) QueueDelete(name string, ifUnused, ifEmpty, noWait bool) (int
 
 	err := ch.call(req, res)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.connection.removeQueue(name)
+		ch.connection.deleteRecordedQueue(name)
 		ch.consumers.cancelByQueue(name)
 	}
 
@@ -1679,7 +1691,7 @@ func (ch *Channel) ExchangeDelete(name string, ifUnused, noWait bool) error {
 		&exchangeDeleteOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.connection.removeExchange(name)
+		ch.connection.deleteRecordedExchange(name)
 	}
 	return err
 }
@@ -1779,6 +1791,7 @@ func (ch *Channel) ExchangeUnbind(destination, key, source string, noWait bool, 
 			NoWait:      noWait,
 			Args:        args,
 		})
+		ch.connection.maybeDeleteRecordedAutoDeleteExchange(source)
 	}
 	return err
 }

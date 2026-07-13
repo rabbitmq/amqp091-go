@@ -2167,3 +2167,511 @@ closed:
 	}
 	t.Log("Recovery exhaustion completed without panicking on listener cleanup")
 }
+
+// TestConnectionRecoveryAutoDeleteTopologyForgotten verifies "forget on auto-delete" behaviour:
+//
+//  1. An auto-delete queue is forgotten from tracking only when its LAST consumer
+//     is cancelled.  Cancelling the first of two consumers must keep the queue tracked.
+//
+//  2. An auto-delete exchange is forgotten from tracking when its last queue-binding
+//     is removed via QueueUnbind.
+//
+//  3. After connection recovery, neither the forgotten queue nor the forgotten exchange
+//     are re-declared on the broker — a passive declare returns NotFound.
+func TestConnectionRecoveryAutoDeleteTopologyForgotten(t *testing.T) {
+	connectionName := "test-connection-recovery-auto-delete-forgotten"
+
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	// -----------------------------------------------------------------------
+	// Part 1 — auto-delete queue: forgotten only after the LAST consumer cancel
+	// -----------------------------------------------------------------------
+
+	adQueueExchange := "test_auto_delete_queue_exchange"
+	err = ch.ExchangeDeclare(adQueueExchange, "direct", false, true, false, false, nil)
+	if err != nil {
+		t.Fatalf("ExchangeDeclare failed: %v", err)
+	}
+	defer func() { _ = ch.ExchangeDelete(adQueueExchange, false, false) }()
+
+	adQueue := "test_auto_delete_queue"
+	_, err = ch.QueueDeclare(adQueue, false, true, true, false, nil)
+	if err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+
+	err = ch.QueueBind(adQueue, "ad-key", adQueueExchange, false, nil)
+	if err != nil {
+		t.Fatalf("QueueBind failed: %v", err)
+	}
+
+	// Register two consumers.
+	_, err = ch.Consume(adQueue, "consumer-ad-1", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume (consumer 1) failed: %v", err)
+	}
+	_, err = ch.Consume(adQueue, "consumer-ad-2", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume (consumer 2) failed: %v", err)
+	}
+
+	// Cancel the first consumer — queue must still be tracked.
+	if err := ch.Cancel("consumer-ad-1", false); err != nil {
+		t.Fatalf("Cancel consumer-ad-1 failed: %v", err)
+	}
+	topology := ch.TopologyConfiguration(true)
+	if _, found := topology.Queues[adQueue]; !found {
+		t.Fatalf("Expected auto-delete queue %q to remain tracked after first consumer cancel (second still active)", adQueue)
+	}
+	t.Logf("After first cancel: queue %q is correctly still tracked", adQueue)
+
+	// Cancel the second (last) consumer — queue AND its binding must be forgotten.
+	if err := ch.Cancel("consumer-ad-2", false); err != nil {
+		t.Fatalf("Cancel consumer-ad-2 failed: %v", err)
+	}
+	topology = ch.TopologyConfiguration(true)
+	if _, found := topology.Queues[adQueue]; found {
+		t.Fatalf("Expected auto-delete queue %q to be forgotten after last consumer cancel, but it is still tracked", adQueue)
+	}
+	t.Logf("After last cancel: queue %q is correctly forgotten", adQueue)
+
+	// The exchange sourced a binding to the (now-gone) queue; it must also be forgotten.
+	if _, found := topology.Exchanges[adQueueExchange]; found {
+		t.Fatalf("Expected auto-delete exchange %q to be forgotten after its last binding was removed, but it is still tracked", adQueueExchange)
+	}
+	t.Logf("Auto-delete exchange %q was correctly cascade-forgotten", adQueueExchange)
+
+	// -----------------------------------------------------------------------
+	// Part 2 — auto-delete exchange: forgotten via QueueUnbind
+	// -----------------------------------------------------------------------
+
+	adExchange := "test_auto_delete_exchange_unbind"
+	err = ch.ExchangeDeclare(adExchange, "direct", false, true, false, false, nil)
+	if err != nil {
+		t.Fatalf("ExchangeDeclare (ad exchange) failed: %v", err)
+	}
+	defer func() { _ = ch.ExchangeDelete(adExchange, false, false) }()
+
+	// Use a durable, non-auto-delete queue so only the exchange is the auto-delete entity.
+	durableQueue := "test_auto_delete_exchange_durable_q"
+	_, err = ch.QueueDeclare(durableQueue, true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("QueueDeclare (durable) failed: %v", err)
+	}
+	defer func() { _, _ = ch.QueueDelete(durableQueue, false, false, false) }()
+
+	err = ch.QueueBind(durableQueue, "unbind-key", adExchange, false, nil)
+	if err != nil {
+		t.Fatalf("QueueBind failed: %v", err)
+	}
+
+	// Confirm the exchange is tracked pre-unbind.
+	topology = ch.TopologyConfiguration(true)
+	if _, found := topology.Exchanges[adExchange]; !found {
+		t.Fatalf("Expected auto-delete exchange %q to be tracked before unbind", adExchange)
+	}
+
+	// Remove the binding — exchange should be forgotten immediately.
+	err = ch.QueueUnbind(durableQueue, "unbind-key", adExchange, nil)
+	if err != nil {
+		t.Fatalf("QueueUnbind failed: %v", err)
+	}
+	topology = ch.TopologyConfiguration(true)
+	if _, found := topology.Exchanges[adExchange]; found {
+		t.Fatalf("Expected auto-delete exchange %q to be forgotten after last QueueUnbind, but it is still tracked", adExchange)
+	}
+	t.Logf("Auto-delete exchange %q correctly forgotten after QueueUnbind", adExchange)
+
+	// -----------------------------------------------------------------------
+	// Part 3 — recovery must NOT re-declare forgotten entities on the broker
+	// -----------------------------------------------------------------------
+
+	// Declare a surviving entity so we have something to confirm recovery ran.
+	survivorQueue := "test_auto_delete_forgotten_survivor"
+	_, err = ch.QueueDeclare(survivorQueue, false, false, true, false, nil)
+	if err != nil {
+		t.Fatalf("QueueDeclare (survivor) failed: %v", err)
+	}
+	survivorMsgs, err := ch.Consume(survivorQueue, "consumer-survivor", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume (survivor) failed: %v", err)
+	}
+
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+	chanStateChanged := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(chanStateChanged)
+
+	dropConnection(t, connectionName)
+
+	waitForConnectionOpen(t, stateChanged)
+	waitForChannelOpen(t, chanStateChanged)
+
+	// Confirm recovery ran: publish to the survivor queue and wait for delivery.
+	if err := ch.PublishWithContext(
+		context.Background(),
+		"", survivorQueue, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("recovery-probe")},
+	); err != nil {
+		t.Fatalf("publish to survivor queue post-recovery failed: %v", err)
+	}
+	select {
+	case msg, ok := <-survivorMsgs:
+		if !ok {
+			t.Fatalf("survivor consumer channel closed after recovery")
+		}
+		if string(msg.Body) != "recovery-probe" {
+			t.Fatalf("Expected 'recovery-probe', got %q", string(msg.Body))
+		}
+		t.Logf("Survivor consumer received post-recovery message: %s", string(msg.Body))
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Timeout waiting for post-recovery message on survivor queue")
+	}
+
+	// The auto-delete queue and exchange were forgotten before the drop, so recovery
+	// must not re-declare them.  Use fresh throwaway channels for passive declares
+	// (a failed passive declare closes its channel).
+	checkQCh, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("verification channel for queue check failed: %v", err)
+	}
+	defer checkQCh.Close()
+	_, err = checkQCh.QueueDeclarePassive(adQueue, false, true, true, false, nil)
+	if err == nil {
+		t.Fatalf("Expected auto-delete queue %q to be absent after recovery (was forgotten), but it exists", adQueue)
+	}
+	amqpErr, ok := err.(*Error)
+	if !ok || amqpErr.Code != NotFound {
+		t.Fatalf("Expected NotFound (404) for absent auto-delete queue, got: %v", err)
+	}
+	t.Logf("Confirmed auto-delete queue %q was NOT re-declared during recovery", adQueue)
+
+	checkExCh, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("verification channel for exchange check failed: %v", err)
+	}
+	defer checkExCh.Close()
+	err = checkExCh.ExchangeDeclarePassive(adQueueExchange, "direct", false, true, false, false, nil)
+	if err == nil {
+		t.Fatalf("Expected auto-delete exchange %q to be absent after recovery (was forgotten), but it exists", adQueueExchange)
+	}
+	amqpErr, ok = err.(*Error)
+	if !ok || amqpErr.Code != NotFound {
+		t.Fatalf("Expected NotFound (404) for absent auto-delete exchange, got: %v", err)
+	}
+	t.Logf("Confirmed auto-delete exchange %q was NOT re-declared during recovery", adQueueExchange)
+}
+
+// TestConnectionRecoveryAutoDeleteExchangeCascade verifies four cascade scenarios
+// for auto-delete exchange forgetting that go beyond a simple QueueUnbind:
+//
+//  1. Explicit QueueDelete removes the queue's bindings; the source auto-delete
+//     exchange is cascade-forgotten because it now has no bindings.
+//
+//  2. ExchangeUnbind on an exchange-to-exchange binding cascade-forgets the source
+//     auto-delete exchange when no bindings remain sourced from it.
+//
+//  3. Full chain outerExchange→innerExchange→queue with one consumer: cancelling
+//     the last consumer cascade-forgets the queue, then innerExchange, then
+//     outerExchange, verified both in the topology store and on the broker after
+//     connection recovery.
+//
+//  4. ExchangeDelete of the destination exchange in an exchange-to-exchange binding
+//     cascade-forgets the auto-delete source exchange when no other bindings remain
+//     sourced from it.
+func TestConnectionRecoveryAutoDeleteExchangeCascade(t *testing.T) {
+	connectionName := "test-connection-recovery-auto-delete-exchange-cascade"
+
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	// -----------------------------------------------------------------------
+	// Scenario 1 — QueueDelete cascades to auto-delete source exchange
+	// -----------------------------------------------------------------------
+
+	s1Exchange := "test_cascade_s1_exchange"
+	if err := ch.ExchangeDeclare(s1Exchange, "direct", false, true, false, false, nil); err != nil {
+		t.Fatalf("s1 ExchangeDeclare failed: %v", err)
+	}
+	defer func() { _ = ch.ExchangeDelete(s1Exchange, false, false) }()
+
+	// Durable queue so that QueueDelete is an explicit action (not auto-delete lifecycle).
+	s1Queue := "test_cascade_s1_queue"
+	if _, err := ch.QueueDeclare(s1Queue, true, false, false, false, nil); err != nil {
+		t.Fatalf("s1 QueueDeclare failed: %v", err)
+	}
+	if err := ch.QueueBind(s1Queue, "s1-key", s1Exchange, false, nil); err != nil {
+		t.Fatalf("s1 QueueBind failed: %v", err)
+	}
+
+	// Verify exchange is tracked before the delete.
+	if _, found := ch.TopologyConfiguration(true).Exchanges[s1Exchange]; !found {
+		t.Fatalf("s1: expected exchange %q to be tracked before QueueDelete", s1Exchange)
+	}
+
+	// Explicitly delete the queue — this removes its binding and must cascade-forget
+	// the now-binding-free auto-delete exchange.
+	if _, err := ch.QueueDelete(s1Queue, false, false, false); err != nil {
+		t.Fatalf("s1 QueueDelete failed: %v", err)
+	}
+	if _, found := ch.TopologyConfiguration(true).Exchanges[s1Exchange]; found {
+		t.Fatalf("s1: auto-delete exchange %q must be forgotten after QueueDelete removed its last binding, but it is still tracked", s1Exchange)
+	}
+	t.Logf("Scenario 1 OK: exchange %q cascade-forgotten after QueueDelete", s1Exchange)
+
+	// -----------------------------------------------------------------------
+	// Scenario 2 — ExchangeUnbind (exchange-to-exchange) cascades to source
+	// -----------------------------------------------------------------------
+
+	s2Source := "test_cascade_s2_source_exchange"
+	s2Dest := "test_cascade_s2_dest_exchange"
+	if err := ch.ExchangeDeclare(s2Source, "fanout", false, true, false, false, nil); err != nil {
+		t.Fatalf("s2 source ExchangeDeclare failed: %v", err)
+	}
+	defer func() { _ = ch.ExchangeDelete(s2Source, false, false) }()
+	// Destination does not have to be auto-delete; only the source is checked.
+	if err := ch.ExchangeDeclare(s2Dest, "direct", true, false, false, false, nil); err != nil {
+		t.Fatalf("s2 dest ExchangeDeclare failed: %v", err)
+	}
+	defer func() { _ = ch.ExchangeDelete(s2Dest, false, false) }()
+
+	if err := ch.ExchangeBind(s2Dest, "", s2Source, false, nil); err != nil {
+		t.Fatalf("s2 ExchangeBind failed: %v", err)
+	}
+
+	// Verify source exchange is tracked before the unbind.
+	if _, found := ch.TopologyConfiguration(true).Exchanges[s2Source]; !found {
+		t.Fatalf("s2: expected source exchange %q to be tracked before ExchangeUnbind", s2Source)
+	}
+
+	if err := ch.ExchangeUnbind(s2Dest, "", s2Source, false, nil); err != nil {
+		t.Fatalf("s2 ExchangeUnbind failed: %v", err)
+	}
+	if _, found := ch.TopologyConfiguration(true).Exchanges[s2Source]; found {
+		t.Fatalf("s2: auto-delete source exchange %q must be forgotten after ExchangeUnbind removed its last binding, but it is still tracked", s2Source)
+	}
+	t.Logf("Scenario 2 OK: source exchange %q cascade-forgotten after ExchangeUnbind", s2Source)
+
+	// -----------------------------------------------------------------------
+	// Scenario 3 — full chain: outerExchange → innerExchange → queue → consumer
+	//
+	// Cancelling the last consumer must cascade-forget: queue → innerExchange →
+	// outerExchange, and recovery must not re-declare any of them.
+	// -----------------------------------------------------------------------
+
+	outerExchange := "test_cascade_s3_outer_exchange"
+	innerExchange := "test_cascade_s3_inner_exchange"
+	s3Queue := "test_cascade_s3_queue"
+
+	if err := ch.ExchangeDeclare(outerExchange, "fanout", false, true, false, false, nil); err != nil {
+		t.Fatalf("s3 outerExchange ExchangeDeclare failed: %v", err)
+	}
+	defer func() { _ = ch.ExchangeDelete(outerExchange, false, false) }()
+
+	if err := ch.ExchangeDeclare(innerExchange, "direct", false, true, false, false, nil); err != nil {
+		t.Fatalf("s3 innerExchange ExchangeDeclare failed: %v", err)
+	}
+	defer func() { _ = ch.ExchangeDelete(innerExchange, false, false) }()
+
+	// outerExchange → innerExchange
+	if err := ch.ExchangeBind(innerExchange, "", outerExchange, false, nil); err != nil {
+		t.Fatalf("s3 ExchangeBind (outer→inner) failed: %v", err)
+	}
+
+	// innerExchange → queue; exclusive+auto-delete satisfies RabbitMQ 3.12+.
+	if _, err := ch.QueueDeclare(s3Queue, false, true, true, false, nil); err != nil {
+		t.Fatalf("s3 QueueDeclare failed: %v", err)
+	}
+	if err := ch.QueueBind(s3Queue, "s3-key", innerExchange, false, nil); err != nil {
+		t.Fatalf("s3 QueueBind (inner→queue) failed: %v", err)
+	}
+
+	if _, err := ch.Consume(s3Queue, "consumer-s3", true, false, false, false, nil); err != nil {
+		t.Fatalf("s3 Consume failed: %v", err)
+	}
+
+	// Verify full chain is tracked before the cancel.
+	topo := ch.TopologyConfiguration(true)
+	for _, name := range []string{outerExchange, innerExchange} {
+		if _, found := topo.Exchanges[name]; !found {
+			t.Fatalf("s3: expected exchange %q to be tracked before consumer cancel", name)
+		}
+	}
+	if _, found := topo.Queues[s3Queue]; !found {
+		t.Fatalf("s3: expected queue %q to be tracked before consumer cancel", s3Queue)
+	}
+
+	// Cancel the only consumer — this must cascade-forget the queue, then
+	// innerExchange (its only binding is gone), then outerExchange (its only
+	// exchange-to-exchange binding is gone).
+	if err := ch.Cancel("consumer-s3", false); err != nil {
+		t.Fatalf("s3 Cancel failed: %v", err)
+	}
+
+	topo = ch.TopologyConfiguration(true)
+	if _, found := topo.Queues[s3Queue]; found {
+		t.Fatalf("s3: queue %q must be forgotten after last consumer cancel, but still tracked", s3Queue)
+	}
+	if _, found := topo.Exchanges[innerExchange]; found {
+		t.Fatalf("s3: innerExchange %q must be cascade-forgotten after queue was forgotten, but still tracked", innerExchange)
+	}
+	if _, found := topo.Exchanges[outerExchange]; found {
+		t.Fatalf("s3: outerExchange %q must be cascade-forgotten after innerExchange was forgotten, but still tracked", outerExchange)
+	}
+	t.Logf("Scenario 3 OK: full chain cascade-forgotten on last consumer cancel")
+
+	// Verify on the broker after connection recovery: none of the chain entities
+	// must be re-declared.  Use a surviving exclusive queue so we can confirm that
+	// recovery actually ran before checking the absent entities.
+	survivorQueue := "test_cascade_s3_survivor"
+	if _, err := ch.QueueDeclare(survivorQueue, false, false, true, false, nil); err != nil {
+		t.Fatalf("s3 survivor QueueDeclare failed: %v", err)
+	}
+	survivorMsgs, err := ch.Consume(survivorQueue, "consumer-s3-survivor", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("s3 survivor Consume failed: %v", err)
+	}
+
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+	chanStateChanged := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(chanStateChanged)
+
+	dropConnection(t, connectionName)
+	waitForConnectionOpen(t, stateChanged)
+	waitForChannelOpen(t, chanStateChanged)
+
+	// Confirm recovery ran via the survivor queue.
+	if err := ch.PublishWithContext(context.Background(), "", survivorQueue, false, false,
+		Publishing{ContentType: "text/plain", Body: []byte("s3-probe")}); err != nil {
+		t.Fatalf("s3 publish to survivor queue failed: %v", err)
+	}
+	select {
+	case msg, ok := <-survivorMsgs:
+		if !ok {
+			t.Fatalf("s3 survivor consumer channel closed after recovery")
+		}
+		if string(msg.Body) != "s3-probe" {
+			t.Fatalf("s3 survivor: expected 's3-probe', got %q", string(msg.Body))
+		}
+		t.Logf("s3 survivor received post-recovery message: %s", string(msg.Body))
+	case <-time.After(10 * time.Second):
+		t.Fatalf("s3: timeout waiting for post-recovery message on survivor queue")
+	}
+
+	// Each of the three cascade-forgotten entities must be absent on the broker.
+	type passiveCheck struct {
+		name string
+		fn   func(*Channel) error
+	}
+	checks := []passiveCheck{
+		{
+			name: "queue " + s3Queue,
+			fn: func(c *Channel) error {
+				_, err := c.QueueDeclarePassive(s3Queue, false, true, true, false, nil)
+				return err
+			},
+		},
+		{
+			name: "innerExchange " + innerExchange,
+			fn: func(c *Channel) error {
+				return c.ExchangeDeclarePassive(innerExchange, "direct", false, true, false, false, nil)
+			},
+		},
+		{
+			name: "outerExchange " + outerExchange,
+			fn: func(c *Channel) error {
+				return c.ExchangeDeclarePassive(outerExchange, "fanout", false, true, false, false, nil)
+			},
+		},
+	}
+	for _, ck := range checks {
+		verifyCh, err := conn.Channel()
+		if err != nil {
+			t.Fatalf("s3 verification channel failed: %v", err)
+		}
+		err = ck.fn(verifyCh)
+		verifyCh.Close()
+		if err == nil {
+			t.Fatalf("s3: expected %s to be absent after recovery (cascade-forgotten), but it exists", ck.name)
+		}
+		amqpErr, ok := err.(*Error)
+		if !ok || amqpErr.Code != NotFound {
+			t.Fatalf("s3: expected NotFound (404) for absent %s, got: %v", ck.name, err)
+		}
+		t.Logf("s3: confirmed %s was NOT re-declared during recovery", ck.name)
+	}
+
+	// -----------------------------------------------------------------------
+	// Scenario 4 — ExchangeDelete of destination cascades to auto-delete source
+	//
+	// Explicitly deleting the destination exchange of an exchange-to-exchange
+	// binding must cascade-forget the auto-delete source exchange from the
+	// topology store when no other bindings remain sourced from it.
+	// -----------------------------------------------------------------------
+
+	s4Source := "test_cascade_s4_source_exchange"
+	s4Dest := "test_cascade_s4_dest_exchange"
+
+	if err := ch.ExchangeDeclare(s4Source, "fanout", false, true, false, false, nil); err != nil {
+		t.Fatalf("s4 source ExchangeDeclare failed: %v", err)
+	}
+	// s4Source is auto-delete: the broker removes it when its last binding is gone,
+	// so no explicit cleanup defer is needed.
+	if err := ch.ExchangeDeclare(s4Dest, "direct", false, false, false, false, nil); err != nil {
+		t.Fatalf("s4 dest ExchangeDeclare failed: %v", err)
+	}
+	// s4Dest is deleted in the test body below; no defer needed.
+
+	if err := ch.ExchangeBind(s4Dest, "", s4Source, false, nil); err != nil {
+		t.Fatalf("s4 ExchangeBind (source→dest) failed: %v", err)
+	}
+
+	// Verify source exchange is tracked before the delete.
+	if _, found := ch.TopologyConfiguration(true).Exchanges[s4Source]; !found {
+		t.Fatalf("s4: expected source exchange %q to be tracked before ExchangeDelete of destination", s4Source)
+	}
+
+	// Explicitly delete the destination exchange. removeExchangeLocked collects
+	// s4Source as a cascade candidate (it sourced a binding pointing to the deleted
+	// exchange), and maybeDeleteRecordedAutoDeleteExchange must then forget it
+	// because no bindings remain sourced from it.
+	if err := ch.ExchangeDelete(s4Dest, false, false); err != nil {
+		t.Fatalf("s4 ExchangeDelete dest failed: %v", err)
+	}
+	if _, found := ch.TopologyConfiguration(true).Exchanges[s4Source]; found {
+		t.Fatalf("s4: auto-delete source exchange %q must be forgotten after ExchangeDelete removed its only e2e binding, but it is still tracked", s4Source)
+	}
+	t.Logf("Scenario 4 OK: source exchange %q cascade-forgotten after ExchangeDelete of destination %q", s4Source, s4Dest)
+}
