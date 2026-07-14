@@ -143,13 +143,14 @@ func (config *Config) setSASL(uri URI) error {
 // multiplexed on this channel.  There must always be active receivers for
 // every asynchronous message on this connection.
 type Connection struct {
-	destructorM         sync.Mutex // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
-	destructed          bool       // true when the connection has been destructed (teardown is initiated or completed)
-	closeM              sync.Mutex // Mutex for connection close handshake: sending a single connection.close frame to the broker
-	closeInit           bool       // true when a connection close has been initiated (connection.close frame has been or is being sent)
-	sendM               sync.Mutex // conn writer mutex
-	m                   sync.Mutex // struct field mutex
-	recoveryErrorCodesM sync.Mutex // Mutex for protecting RecoverableErrorCodes updates and reads
+	destructorM         sync.Mutex   // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
+	destructed          bool         // true when the connection has been destructed (teardown is initiated or completed)
+	closeM              sync.Mutex   // Mutex for connection close handshake: sending a single connection.close frame to the broker
+	closeInit           bool         // true when a connection close has been initiated (connection.close frame has been or is being sent)
+	sendM               sync.Mutex   // conn writer mutex
+	m                   sync.Mutex   // struct field mutex
+	recoveryErrorCodesM sync.Mutex   // Mutex for protecting RecoverableErrorCodes updates and reads
+	notifyM             sync.RWMutex // Mutex for notifying close/block listeners; mirrors Channel.notifyM
 
 	conn io.ReadWriteCloser
 
@@ -789,20 +790,25 @@ func (c *Connection) shutdown(err *Error) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
+	c.notifyM.Lock()
+	defer c.notifyM.Unlock()
+
 	if err != nil {
 		for _, listener := range c.closes {
 			select {
 			case listener <- err:
 			default:
-				// If blocked/full, send in a goroutine so we never deadlock the shutdown sequence
+				// Channel is full; deliver in a background goroutine so we never deadlock
+				// the shutdown sequence. The goroutine holds notifyM.RLock() for the
+				// duration of the send, which is mutually exclusive with cleanup()'s
+				// notifyM.Lock(), preventing a concurrent send+close data race.
 				go func(listener chan *Error, err *Error) {
-					defer func() {
-						_ = recover() // Gracefully ignore panics if the channel is closed concurrently
-					}()
+					defer func() { _ = recover() }()
+					c.notifyM.RLock()
+					defer c.notifyM.RUnlock()
 					select {
 					case listener <- err:
 					case <-time.After(5 * time.Second):
-						// Give up to avoid leaking the goroutine permanently
 					}
 				}(listener, err)
 			}
@@ -875,9 +881,15 @@ func (c *Connection) dispatch0(f frame) {
 			}
 			c.shutdown(newError(m.ReplyCode, m.ReplyText))
 		case *connectionBlocked:
-			notifyAll(c.blocks, Blocking{Active: true, Reason: m.Reason})
+			c.m.Lock()
+			blocks := c.blocks
+			c.m.Unlock()
+			notifyAll(blocks, Blocking{Active: true, Reason: m.Reason})
 		case *connectionUnblocked:
-			notifyAll(c.blocks, Blocking{Active: false})
+			c.m.Lock()
+			blocks := c.blocks
+			c.m.Unlock()
+			notifyAll(blocks, Blocking{Active: false})
 		default:
 			select {
 			case <-c.close:
@@ -1132,14 +1144,19 @@ func (c *Connection) call(req message, res ...message) error {
 		}
 	}
 
+	c.m.Lock()
+	errors := c.errors
+	rpc := c.rpc
+	c.m.Unlock()
+
 	var msg message
 	select {
-	case e, ok := <-c.errors:
+	case e, ok := <-errors:
 		if ok {
 			return e
 		}
 		return ErrClosed
-	case msg = <-c.rpc:
+	case msg = <-rpc:
 	}
 
 	// Try to match one of the result types
@@ -1418,6 +1435,9 @@ func negotiateFrameSize(client, server int) int {
 func (c *Connection) cleanup() {
 	c.m.Lock()
 	defer c.m.Unlock()
+
+	c.notifyM.Lock()
+	defer c.notifyM.Unlock()
 
 	for _, listener := range c.closes {
 		close(listener)
