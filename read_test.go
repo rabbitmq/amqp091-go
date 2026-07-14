@@ -7,8 +7,10 @@ package amqp091
 
 import (
 	"bytes"
+	"encoding/binary"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -24,10 +26,50 @@ import (
 // padding bytes before the frame-end octet.
 func TestParseHeaderFrameConsumesPaddingBytes(t *testing.T) {
 	frame := "\x02\x00\x01\x00\x00\x00\x12\x00\x3c\x00\x00\x00\x00\x00\x00\x00\x00\x0a\x54\x00\x00\x00\x00\x00\x00\xce"
-	r := reader{strings.NewReader(frame)}
+	r := reader{r: strings.NewReader(frame)}
 	_, err := r.ReadFrame()
 	if err != nil {
 		t.Fatalf("expected no error reading header frame, got: %v", err)
+	}
+}
+
+// TestReadFrameRejectsOversizedFrame verifies that a frame whose declared
+// size exceeds the negotiated frame_max is rejected before its payload is
+// allocated or read, preventing a malicious server from forcing large
+// allocations by lying about a frame's size in the frame header.
+func TestReadFrameRejectsOversizedFrame(t *testing.T) {
+	const negotiatedMax = 4096 // total frame size, including header and frame-end byte
+
+	header := make([]byte, 7)
+	header[0] = frameBody
+	binary.BigEndian.PutUint16(header[1:3], 1)
+	binary.BigEndian.PutUint32(header[3:7], negotiatedMax) // payload alone already exceeds the limit
+
+	var maxFrameSize atomic.Uint32
+	maxFrameSize.Store(negotiatedMax)
+
+	r := reader{r: bytes.NewReader(header), maxFrameSize: &maxFrameSize}
+	frame, err := r.ReadFrame()
+	if err != ErrFrameTooLarge {
+		t.Fatalf("expected ErrFrameTooLarge, got frame=%#v err=%v", frame, err)
+	}
+}
+
+// TestReadFrameAllowsUnlimitedWhenNegotiatedUnbounded verifies that a nil or
+// zero-valued maxFrameSize (frame_max negotiated as unlimited, or not yet
+// negotiated) does not reject frames, preserving prior behavior.
+func TestReadFrameAllowsUnlimitedWhenNegotiatedUnbounded(t *testing.T) {
+	header := make([]byte, 7)
+	header[0] = frameBody
+	binary.BigEndian.PutUint16(header[1:3], 1)
+	binary.BigEndian.PutUint32(header[3:7], 3)
+
+	buf := append(header, []byte("abc")...)
+	buf = append(buf, frameEnd)
+
+	r := reader{r: bytes.NewReader(buf)}
+	if _, err := r.ReadFrame(); err != nil {
+		t.Fatalf("expected no error with nil maxFrameSize, got: %v", err)
 	}
 }
 
@@ -43,7 +85,7 @@ func TestGoFuzzCrashers(t *testing.T) {
 	}
 
 	for idx, testStr := range testData {
-		r := reader{strings.NewReader(testStr)}
+		r := reader{r: strings.NewReader(testStr)}
 		frame, err := r.ReadFrame()
 		if err != nil && frame != nil {
 			t.Errorf("%d. frame is not nil: %#v err = %v", idx, frame, err)

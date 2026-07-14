@@ -54,6 +54,12 @@ func (r *reader) ReadFrame() (frame frame, err error) {
 	channel := binary.BigEndian.Uint16(scratch[1:3])
 	size := binary.BigEndian.Uint32(scratch[3:7])
 
+	if r.maxFrameSize != nil {
+		if max := r.maxFrameSize.Load(); max > 0 && uint64(size)+frameHeaderSize > uint64(max) {
+			return nil, ErrFrameTooLarge
+		}
+	}
+
 	switch typ {
 	case frameMethod:
 		if frame, err = r.parseMethodFrame(channel, size); err != nil {
