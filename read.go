@@ -54,6 +54,15 @@ func (r *reader) ReadFrame() (frame frame, err error) {
 	channel := binary.BigEndian.Uint16(scratch[1:3])
 	size := binary.BigEndian.Uint32(scratch[3:7])
 
+	if r.maxFrameSize != nil {
+		// max-frameHeaderSize is safe from underflow only because maxFrameSize,
+		// whenever nonzero, is always negotiateFrameSize's floor (frameMinSize,
+		// 4096) or higher — see the Store call at Connection.openTune.
+		if max := r.maxFrameSize.Load(); max > 0 && size > (max-frameHeaderSize) {
+			return nil, ErrFrameTooLarge
+		}
+	}
+
 	switch typ {
 	case frameMethod:
 		if frame, err = r.parseMethodFrame(channel, size); err != nil {

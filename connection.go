@@ -184,6 +184,11 @@ type Connection struct {
 
 	closed atomic.Bool // Will be true if the connection is closed, false otherwise.
 
+	// maxFrameSize mirrors Config.FrameSize once negotiated via connection.tune,
+	// letting the reader goroutine reject over-sized frames before allocating
+	// memory for them. 0 means no limit is enforced yet (or none was negotiated).
+	maxFrameSize atomic.Uint32
+
 	reconnecting sync.Mutex // Mutex for protecting reconnect/recovery operations to ensure serialization and prevent race conditions.
 	lifeCycle    *lifeCycle // The current state of the connection.
 
@@ -968,7 +973,7 @@ func (c *Connection) dispatchClosed(f frame) {
 // handle on channel 0 (the connection channel).
 func (c *Connection) reader(r io.Reader) {
 	buf := bufio.NewReader(r)
-	frames := &reader{buf}
+	frames := &reader{r: buf, maxFrameSize: &c.maxFrameSize}
 	conn, haveDeadliner := r.(readDeadliner)
 
 	defer close(c.rpc)
@@ -1277,6 +1282,11 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	// minimum floor of frameMinSize (4096 bytes) to prevent malicious servers
 	// from forcing extreme fragmentation and CPU overhead.
 	c.Config.FrameSize = negotiateFrameSize(config.FrameSize, int(tune.FrameMax))
+	// This is the only place maxFrameSize is written. reader.ReadFrame relies on
+	// any nonzero value here being >= frameMinSize (negotiateFrameSize's floor)
+	// to safely subtract frameHeaderSize without underflow — keep it that way if
+	// another write path is ever added.
+	c.maxFrameSize.Store(uint32(c.Config.FrameSize))
 
 	// Save this off for resetDeadline()
 	c.Config.Heartbeat = time.Second * time.Duration(pick(
