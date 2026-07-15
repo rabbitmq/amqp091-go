@@ -1282,6 +1282,10 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	// minimum floor of frameMinSize (4096 bytes) to prevent malicious servers
 	// from forcing extreme fragmentation and CPU overhead.
 	c.Config.FrameSize = negotiateFrameSize(config.FrameSize, int(tune.FrameMax))
+	// This is the only place maxFrameSize is written. reader.ReadFrame relies on
+	// any nonzero value here being >= frameMinSize (negotiateFrameSize's floor)
+	// to safely subtract frameHeaderSize without underflow — keep it that way if
+	// another write path is ever added.
 	c.maxFrameSize.Store(uint32(c.Config.FrameSize))
 
 	// Save this off for resetDeadline()

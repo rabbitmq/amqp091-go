@@ -73,6 +73,30 @@ func TestReadFrameAllowsUnlimitedWhenNegotiatedUnbounded(t *testing.T) {
 	}
 }
 
+// TestReadFrameAllowsAnySizeWhenMaxFrameSizeIsZero verifies that a non-nil
+// maxFrameSize storing 0 (frame_max explicitly negotiated as unlimited, per
+// negotiateFrameSize when both client and server request 0) does not reject
+// frames, regardless of declared size.
+func TestReadFrameAllowsAnySizeWhenMaxFrameSizeIsZero(t *testing.T) {
+	const declaredSize = 1 << 20 // far larger than any realistic negotiated frame_max
+
+	header := make([]byte, 7)
+	header[0] = frameBody
+	binary.BigEndian.PutUint16(header[1:3], 1)
+	binary.BigEndian.PutUint32(header[3:7], declaredSize)
+
+	payload := make([]byte, declaredSize)
+	buf := append(header, payload...)
+	buf = append(buf, frameEnd)
+
+	var maxFrameSize atomic.Uint32 // zero value: unlimited
+
+	r := reader{r: bytes.NewReader(buf), maxFrameSize: &maxFrameSize}
+	if _, err := r.ReadFrame(); err != nil {
+		t.Fatalf("expected no error with maxFrameSize == 0, got: %v", err)
+	}
+}
+
 func TestGoFuzzCrashers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("excessive allocation")
