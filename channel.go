@@ -114,6 +114,14 @@ type Channel struct {
 	reconnecting sync.Mutex // Mutex for reconnecting channel.
 	lifeCycle    *lifeCycle // The current state of the channel.
 
+	// recoveringTopology is true while a recoverConnectionTopology pass owns
+	// this channel's reopen/redeclare sequence. watchChannel's NotifyClose
+	// listener checks this to avoid starting a redundant, competing
+	// Reconnect+RecoverTopology pass when a broker soft error (e.g. a
+	// PRECONDITION_FAILED from an entity the in-flight pass is already
+	// handling) closes the channel out from under it.
+	recoveringTopology atomic.Bool
+
 	recoveryCancels []chan struct{} // listeners for channel recovery cancellation
 }
 
@@ -254,25 +262,38 @@ func (ch *Channel) shutdown(e *Error) {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
-	// Broadcast abnormal shutdown
+	// Broadcast abnormal shutdown.
 	if e != nil {
-		for _, c := range ch.closes {
-			select {
-			case c <- e:
-			default:
-				// Channel is full; deliver in a background goroutine so we never deadlock
-				// the shutdown sequence. The goroutine holds notifyM.RLock() for the
-				// duration of the send, which is mutually exclusive with cleanup()'s
-				// notifyM.Lock(), preventing a concurrent send+close data race.
-				go func(c chan *Error, e *Error) {
-					defer func() { _ = recover() }()
-					ch.notifyM.RLock()
-					defer ch.notifyM.RUnlock()
-					select {
-					case c <- e:
-					case <-time.After(5 * time.Second):
-					}
-				}(c, e)
+		// While an in-flight topology-recovery pass owns this channel
+		// (ch.recoveringTopology), skip notifying external NotifyClose
+		// listeners (including watchChannel's): reopenChannelIfClosed is
+		// already reopening the channel in-band for this exact soft error,
+		// so a listener would otherwise start a redundant, competing
+		// recovery pass. This must happen here rather than only in the
+		// listener, because a full listener channel defers delivery up to
+		// notifyTimeout in the background goroutine below, by which time
+		// recoveringTopology may have already cleared — suppressing at the
+		// source avoids that race. ch.errors is unaffected: ch.call() (used
+		// by the in-band redeclare itself) depends on it to return promptly.
+		if !ch.recoveringTopology.Load() {
+			for _, c := range ch.closes {
+				select {
+				case c <- e:
+				default:
+					// Channel is full; deliver in a background goroutine so we never deadlock
+					// the shutdown sequence. The goroutine holds notifyM.RLock() for the
+					// duration of the send, which is mutually exclusive with cleanup()'s
+					// notifyM.Lock(), preventing a concurrent send+close data race.
+					go func(c chan *Error, e *Error) {
+						defer func() { _ = recover() }()
+						ch.notifyM.RLock()
+						defer ch.notifyM.RUnlock()
+						select {
+						case c <- e:
+						case <-time.After(5 * time.Second):
+						}
+					}(c, e)
+				}
 			}
 		}
 		// Notify RPC if we're selecting

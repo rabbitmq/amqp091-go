@@ -2206,6 +2206,19 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 		channelMap[ch.id] = ch
 	}
 
+	// Mark every channel this pass owns so watchChannel's NotifyClose listener
+	// (registered once, for the channel's lifetime) won't start a redundant,
+	// competing Reconnect+RecoverTopology pass if a broker soft error closes
+	// the channel while this pass is already reopening/redeclaring it below.
+	for _, ch := range channels {
+		ch.recoveringTopology.Store(true)
+	}
+	defer func() {
+		for _, ch := range channels {
+			ch.recoveringTopology.Store(false)
+		}
+	}()
+
 	// When only transient topology should be recovered, filter the snapshot down
 	// to auto-delete exchanges and exclusive/auto-delete queues (and their
 	// bindings). The global transient sets are built by scanning every channel

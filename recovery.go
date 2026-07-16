@@ -284,6 +284,15 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 		return
 	}
 
+	// Guard against a redundant, competing recovery pass: an in-flight
+	// recoverConnectionTopology call already owns this channel's
+	// reopen/redeclare sequence and will reopen it itself (see
+	// reopenChannelIfClosed) if a broker soft error closes it here.
+	if ch.recoveringTopology.Load() {
+		Logger.Printf("Channel %d topology recovery already in progress, skipping redundant reconnect.", ch.id)
+		return
+	}
+
 	Logger.Printf("Initiating channel %d recovery", ch.id)
 	// Reconnect channel
 	if err := ch.Reconnect(); err != nil {
