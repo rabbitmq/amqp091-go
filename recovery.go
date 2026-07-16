@@ -4,7 +4,6 @@
 package amqp091
 
 import (
-	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -265,9 +264,7 @@ func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Err
 	// Reconnect connection
 	if err := conn.Reconnect(); err != nil {
 		Logger.Printf("Connection %s recovery failed: %v.", parsedURL.Redacted(), err)
-		var amqpErr *Error
-		errors.As(err, &amqpErr)
-		conn.cleanup(amqpErr)
+		conn.cleanup(err)
 	}
 }
 
@@ -287,7 +284,7 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 	// Guard against a redundant, competing recovery pass: an in-flight
 	// recoverConnectionTopology call already owns this channel's
 	// reopen/redeclare sequence and will reopen it itself (see
-	// reopenChannelIfClosed) if a broker soft error closes it here.
+	// Channel.reopenIfClosed) if a broker soft error closes it here.
 	if ch.recoveringTopology.Load() {
 		Logger.Printf("Channel %d topology recovery already in progress, skipping redundant reconnect.", ch.id)
 		return
@@ -297,9 +294,8 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 	// Reconnect channel
 	if err := ch.Reconnect(); err != nil {
 		Logger.Printf("Channel %d recovery failed: %v.", ch.id, err)
-		var amqpErr *Error
-		errors.As(err, &amqpErr)
-		ch.cleanup(amqpErr)
+		ch.cleanup(err)
+		ch.connection.releaseChannel(ch)
 	}
 }
 

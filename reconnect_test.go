@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -102,6 +103,9 @@ func ExampleConnection_reconnect() {
 				go conn.Close()
 			}
 		}
+		// Give the final connection's background goroutines a moment to
+		// finish winding down asynchronously before the test exits.
+		time.Sleep(100 * time.Millisecond)
 	} else {
 		// pass with expected output when not running in an integration
 		// environment.

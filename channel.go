@@ -266,7 +266,7 @@ func (ch *Channel) shutdown(e *Error) {
 	if e != nil {
 		// While an in-flight topology-recovery pass owns this channel
 		// (ch.recoveringTopology), skip notifying external NotifyClose
-		// listeners (including watchChannel's): reopenChannelIfClosed is
+		// listeners (including watchChannel's): Channel.reopenIfClosed is
 		// already reopening the channel in-band for this exact soft error,
 		// so a listener would otherwise start a redundant, competing
 		// recovery pass. This must happen here rather than only in the
@@ -344,7 +344,7 @@ func (ch *Channel) shutdown(e *Error) {
 
 		var err error
 		if e != nil {
-			err = fmt.Errorf("%w", e) // preserve the original error type for assertions
+			err = fmt.Errorf("channel shutdown error: %w", e) // errors.As(err, &target) still unwraps to *Error
 		}
 		ch.lifeCycle.SetState(StateClosed, err)
 	} else {
@@ -2218,7 +2218,7 @@ func (ch *Channel) GetNextPublishSeqNo() uint64 {
 }
 
 // cleanup closes all the channels and the confirms.
-func (ch *Channel) cleanup(e *Error) {
+func (ch *Channel) cleanup(e error) {
 	ch.setClosed() // Ensure ch.IsClosed() returns true globally
 
 	// If it returns false, it means cleanedUp was already true (cleanup already ran).
@@ -2272,7 +2272,7 @@ func (ch *Channel) cleanup(e *Error) {
 
 	var err error
 	if e != nil {
-		err = fmt.Errorf("%w", e)
+		err = fmt.Errorf("channel cleanup error: %w", e)
 	}
 
 	ch.lifeCycle.SetState(StateClosed, err)
@@ -2318,7 +2318,7 @@ func (ch *Channel) Reconnect() error {
 
 // openChannelSession resets client-side state, opens a fresh broker channel,
 // and restores QoS/Confirm configuration. It is the shared single-attempt core
-// used by both reconnectChannel (retry loop) and reopenChannelIfClosed (topology
+// used by both reconnectChannel (retry loop) and reopenIfClosed (topology
 // recovery). The caller must hold ch.reconnecting and manage lifecycle transitions.
 //
 // openSucceeded is true when ch.open() completed — the caller needs this to decide
@@ -2339,6 +2339,44 @@ func (ch *Channel) openChannelSession() (openSucceeded bool, err error) {
 
 	// 3. Perform QoS and Confirms setup.
 	return true, ch.setupChannelBasic()
+}
+
+// reopenIfClosed reopens a channel that was closed as a side-effect of a
+// broker soft error (e.g. PRECONDITION_FAILED / 406) during topology recovery.
+func (ch *Channel) reopenIfClosed() {
+	// Fast path: skip the mutex entirely for the common case where the channel
+	// is already open. Avoids blocking on ch.reconnecting for every entity in
+	// a healthy recovery where no reopen is needed.
+	if !ch.IsClosed() {
+		return
+	}
+
+	ch.reconnecting.Lock()
+	defer ch.reconnecting.Unlock()
+
+	// Re-check under lock: a concurrent watchChannel goroutine may have already
+	// reopened the channel via reconnectChannel between the fast-path check above
+	// and acquiring the lock.
+	if !ch.IsClosed() {
+		return
+	}
+
+	Logger.Printf("topology recovery: channel %d closed by broker soft error; reopening for remaining entities", ch.id)
+	ch.lifeCycle.SetState(StateReconnecting, nil)
+
+	// Make sure the channel id is registered before sending channel.open.
+	ch.connection.reregisterChannel(ch)
+
+	if opened, err := ch.openChannelSession(); err != nil {
+		Logger.Printf("topology recovery: failed to reopen channel %d: %v", ch.id, err)
+		if opened {
+			_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Topology recovery"}, &channelCloseOk{})
+		}
+		ch.setClosed()
+		return
+	}
+
+	ch.lifeCycle.SetState(StateOpen, nil)
 }
 
 // reconnectChannel opens a fresh channel on the broker and performs basic setup (QoS, Confirms).

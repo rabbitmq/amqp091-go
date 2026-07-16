@@ -855,7 +855,7 @@ func (c *Connection) shutdown(err *Error) {
 
 		var e error
 		if err != nil {
-			e = fmt.Errorf("%w", err) // preserve the original error type for assertions
+			e = fmt.Errorf("connection shutdown error: %w", err) // errors.As(e, &target) still unwraps to *Error
 		}
 		c.lifeCycle.SetState(StateClosed, e)
 	}
@@ -1095,6 +1095,19 @@ func (c *Connection) releaseChannel(ch *Channel) {
 	}
 }
 
+// reregisterChannel re-adds a channel to the registry if it is missing, without
+// allocating a new id. Used by Channel.reopenIfClosed to restore a channel that
+// topology recovery kept around (see closeChannel) after a broker soft error.
+func (c *Connection) reregisterChannel(ch *Channel) {
+	c.m.Lock()
+	defer c.m.Unlock()
+
+	if _, present := c.channels[ch.id]; !present && c.allocator != nil {
+		c.channels[ch.id] = ch
+		c.allocator.reserve(int(ch.id))
+	}
+}
+
 // openChannel allocates and opens a channel, must be paired with closeChannel
 func (c *Connection) openChannel() (*Channel, error) {
 	ch, err := c.allocateChannel()
@@ -1122,7 +1135,7 @@ func (c *Connection) openChannel() (*Channel, error) {
 func (c *Connection) closeChannel(ch *Channel, e *Error) {
 	// If we are actively recovering topology, do NOT purge the channel from memory yet.
 	// We keep it in c.channels so that:
-	//   1. reopenChannelIfClosed can find and reuse it if we skip-and-continue.
+	//   1. Channel.reopenIfClosed can find and reuse it if we skip-and-continue.
 	//   2. connection.cleanup can access it to force a full shutdown if recovery fails completely.
 	if e == nil || !c.IsRecoveryEnabled() {
 		c.releaseChannel(ch)
@@ -1445,7 +1458,7 @@ func negotiateFrameSize(client, server int) int {
 }
 
 // cleanup releases registered resources and performs final teardown of the connection.
-func (c *Connection) cleanup(err *Error) {
+func (c *Connection) cleanup(err error) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
@@ -1479,7 +1492,7 @@ func (c *Connection) cleanup(err *Error) {
 
 	var e error
 	if err != nil {
-		e = fmt.Errorf("%w", err)
+		e = fmt.Errorf("connection cleanup error: %w", err)
 	}
 
 	c.lifeCycle.SetState(StateClosed, e)
@@ -2201,23 +2214,17 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 	c.topologyM.Unlock()
 
 	// Build a channel-ID → Channel map for O(1) lookup during the recovery loops.
+	// Mark each channel as owned by this pass so watchChannel's
+	// NotifyClose listener (registered once, for the channel's lifetime) won't
+	// start a redundant, competing Reconnect+RecoverTopology pass if a broker
+	// soft error closes the channel while this pass is already
+	// reopening/redeclaring it below.
 	channelMap := make(map[uint16]*Channel, len(channels))
 	for _, ch := range channels {
 		channelMap[ch.id] = ch
-	}
-
-	// Mark every channel this pass owns so watchChannel's NotifyClose listener
-	// (registered once, for the channel's lifetime) won't start a redundant,
-	// competing Reconnect+RecoverTopology pass if a broker soft error closes
-	// the channel while this pass is already reopening/redeclaring it below.
-	for _, ch := range channels {
 		ch.recoveringTopology.Store(true)
+		defer ch.recoveringTopology.Store(false)
 	}
-	defer func() {
-		for _, ch := range channels {
-			ch.recoveringTopology.Store(false)
-		}
-	}()
 
 	// When only transient topology should be recovered, filter the snapshot down
 	// to auto-delete exchanges and exclusive/auto-delete queues (and their
@@ -2261,50 +2268,6 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 		return false, fmt.Errorf("%w", e)
 	}
 
-	// reopenChannelIfClosed reopens a channel that was closed as a side-effect of a
-	// broker soft error (e.g. PRECONDITION_FAILED / 406) during topology recovery.
-	reopenChannelIfClosed := func(ch *Channel) {
-		// Fast path: skip the mutex entirely for the common case where the channel
-		// is already open. Avoids blocking on ch.reconnecting for every entity in
-		// a healthy recovery where no reopen is needed.
-		if !ch.IsClosed() {
-			return
-		}
-
-		ch.reconnecting.Lock()
-		defer ch.reconnecting.Unlock()
-
-		// Re-check under lock: a concurrent watchChannel goroutine may have already
-		// reopened the channel via reconnectChannel between the fast-path check above
-		// and acquiring the lock.
-		if !ch.IsClosed() {
-			return
-		}
-
-		Logger.Printf("topology recovery: channel %d closed by broker soft error; reopening for remaining entities", ch.id)
-		ch.lifeCycle.SetState(StateReconnecting, nil)
-
-		// Make sure the channel id is registered in c.channels.
-		// Re-register the channel in c.channels before sending channel.open.
-		c.m.Lock()
-		if _, present := c.channels[ch.id]; !present && c.allocator != nil {
-			c.channels[ch.id] = ch
-			c.allocator.reserve(int(ch.id))
-		}
-		c.m.Unlock()
-
-		if opened, err := ch.openChannelSession(); err != nil {
-			Logger.Printf("topology recovery: failed to reopen channel %d: %v", ch.id, err)
-			if opened {
-				_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Topology recovery"}, &channelCloseOk{})
-			}
-			ch.setClosed()
-			return
-		}
-
-		ch.lifeCycle.SetState(StateOpen, nil)
-	}
-
 	// 1. Recover exchanges across all channels.
 	for chID, config := range topologyMap {
 		ch, ok := channelMap[chID]
@@ -2318,7 +2281,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				if cont, fatal := skipOrAbort(e); !cont {
 					return skipped, fatal
 				}
-				reopenChannelIfClosed(ch)
+				ch.reopenIfClosed()
 			}
 		}
 	}
@@ -2356,7 +2319,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				if cont, fatal := skipOrAbort(e); !cont {
 					return skipped, fatal
 				}
-				reopenChannelIfClosed(ch)
+				ch.reopenIfClosed()
 				continue
 			}
 
@@ -2432,7 +2395,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				if cont, fatal := skipOrAbort(e); !cont {
 					return skipped, fatal
 				}
-				reopenChannelIfClosed(ch)
+				ch.reopenIfClosed()
 			}
 		}
 	}
@@ -2450,7 +2413,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				if cont, fatal := skipOrAbort(e); !cont {
 					return skipped, fatal
 				}
-				reopenChannelIfClosed(ch)
+				ch.reopenIfClosed()
 			}
 		}
 	}
@@ -2488,7 +2451,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				if cont, fatal := skipOrAbort(e); !cont {
 					return skipped, fatal
 				}
-				reopenChannelIfClosed(ch)
+				ch.reopenIfClosed()
 			}
 		}
 	}
