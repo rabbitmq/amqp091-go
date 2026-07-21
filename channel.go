@@ -63,6 +63,7 @@ should be discarded and a new channel established.
 type Channel struct {
 	destructorM sync.Mutex   // Mutex for destroying the channel.
 	destructed  bool         // Will be true if the channel has been destroyed, false otherwise.
+	cleanedUp   atomic.Bool  // Thread-safe atomic boolean to track final cleanup status
 	m           sync.Mutex   // Mutex for the channel.
 	notifyM     sync.RWMutex // Mutex for the notify state.
 
@@ -112,6 +113,14 @@ type Channel struct {
 
 	reconnecting sync.Mutex // Mutex for reconnecting channel.
 	lifeCycle    *lifeCycle // The current state of the channel.
+
+	// recoveringTopology is true while a recoverConnectionTopology pass owns
+	// this channel's reopen/redeclare sequence. watchChannel's NotifyClose
+	// listener checks this to avoid starting a redundant, competing
+	// Reconnect+RecoverTopology pass when a broker soft error (e.g. a
+	// PRECONDITION_FAILED from an entity the in-flight pass is already
+	// handling) closes the channel out from under it.
+	recoveringTopology atomic.Bool
 
 	recoveryCancels []chan struct{} // listeners for channel recovery cancellation
 }
@@ -253,25 +262,38 @@ func (ch *Channel) shutdown(e *Error) {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
-	// Broadcast abnormal shutdown
+	// Broadcast abnormal shutdown.
 	if e != nil {
-		for _, c := range ch.closes {
-			select {
-			case c <- e:
-			default:
-				// Channel is full; deliver in a background goroutine so we never deadlock
-				// the shutdown sequence. The goroutine holds notifyM.RLock() for the
-				// duration of the send, which is mutually exclusive with cleanup()'s
-				// notifyM.Lock(), preventing a concurrent send+close data race.
-				go func(c chan *Error, e *Error) {
-					defer func() { _ = recover() }()
-					ch.notifyM.RLock()
-					defer ch.notifyM.RUnlock()
-					select {
-					case c <- e:
-					case <-time.After(5 * time.Second):
-					}
-				}(c, e)
+		// While an in-flight topology-recovery pass owns this channel
+		// (ch.recoveringTopology), skip notifying external NotifyClose
+		// listeners (including watchChannel's): Channel.reopenIfClosed is
+		// already reopening the channel in-band for this exact soft error,
+		// so a listener would otherwise start a redundant, competing
+		// recovery pass. This must happen here rather than only in the
+		// listener, because a full listener channel defers delivery up to
+		// notifyTimeout in the background goroutine below, by which time
+		// recoveringTopology may have already cleared — suppressing at the
+		// source avoids that race. ch.errors is unaffected: ch.call() (used
+		// by the in-band redeclare itself) depends on it to return promptly.
+		if !ch.recoveringTopology.Load() {
+			for _, c := range ch.closes {
+				select {
+				case c <- e:
+				default:
+					// Channel is full; deliver in a background goroutine so we never deadlock
+					// the shutdown sequence. The goroutine holds notifyM.RLock() for the
+					// duration of the send, which is mutually exclusive with cleanup()'s
+					// notifyM.Lock(), preventing a concurrent send+close data race.
+					go func(c chan *Error, e *Error) {
+						defer func() { _ = recover() }()
+						ch.notifyM.RLock()
+						defer ch.notifyM.RUnlock()
+						select {
+						case c <- e:
+						case <-time.After(5 * time.Second):
+						}
+					}(c, e)
+				}
 			}
 		}
 		// Notify RPC if we're selecting
@@ -281,7 +303,7 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 	}
 
-	if e == nil || !ch.connection.IsRecoveryEnabled() || !ch.connection.isRecoverable(e) {
+	if e == nil || !ch.connection.IsRecoveryEnabled() {
 		ch.consumers.close()
 
 		for _, c := range ch.closes {
@@ -322,7 +344,7 @@ func (ch *Channel) shutdown(e *Error) {
 
 		var err error
 		if e != nil {
-			err = fmt.Errorf("%w", e) // preserve the original error type for assertions
+			err = fmt.Errorf("channel shutdown error: %w", e) // errors.As(err, &target) still unwraps to *Error
 		}
 		ch.lifeCycle.SetState(StateClosed, err)
 	} else {
@@ -2196,7 +2218,18 @@ func (ch *Channel) GetNextPublishSeqNo() uint64 {
 }
 
 // cleanup closes all the channels and the confirms.
-func (ch *Channel) cleanup() {
+func (ch *Channel) cleanup(e error) {
+	ch.setClosed() // Ensure ch.IsClosed() returns true globally
+
+	// If it returns false, it means cleanedUp was already true (cleanup already ran).
+	if !ch.cleanedUp.CompareAndSwap(false, true) {
+		return
+	}
+
+	ch.destructorM.Lock()
+	ch.destructed = true // Lock out any future transport shutdowns as well
+	ch.destructorM.Unlock()
+
 	ch.m.Lock()
 	defer ch.m.Unlock()
 
@@ -2236,6 +2269,13 @@ func (ch *Channel) cleanup() {
 	}
 
 	ch.noNotify = true
+
+	var err error
+	if e != nil {
+		err = fmt.Errorf("channel cleanup error: %w", e)
+	}
+
+	ch.lifeCycle.SetState(StateClosed, err)
 }
 
 // watchChannel watches the channel for close events and triggers recovery if needed.
@@ -2263,13 +2303,80 @@ func (ch *Channel) Reconnect() error {
 
 	// Recover topology for this channel
 	if ch.connection.IsTopologyRecoveryEnabled() {
-		if err := ch.connection.Config.Recovery.TopologyRecovery.RecoverTopology(ch.connection, []*Channel{ch}); err != nil {
+		skippedTopologyEntities, err := ch.connection.Config.Recovery.TopologyRecovery.RecoverTopology(ch.connection, []*Channel{ch})
+		if err != nil {
 			Logger.Printf("Channel %d recovery topology error: %v", ch.id, err)
 			return err
+		}
+		for _, e := range skippedTopologyEntities {
+			Logger.Printf("Channel %d topology recovery skipped entity: %v", ch.id, e)
 		}
 	}
 
 	return nil
+}
+
+// openChannelSession resets client-side state, opens a fresh broker channel,
+// and restores QoS/Confirm configuration. It is the shared single-attempt core
+// used by both reconnectChannel (retry loop) and reopenIfClosed (topology
+// recovery). The caller must hold ch.reconnecting and manage lifecycle transitions.
+//
+// openSucceeded is true when ch.open() completed — the caller needs this to decide
+// whether to send a channel.close courtesy frame to the broker before the next
+// retry (meaningful only when open succeeded but setup then failed).
+func (ch *Channel) openChannelSession() (openSucceeded bool, err error) {
+	// 1. Reset client-side state
+	ch.destructorM.Lock()
+	ch.m.Lock()
+	ch.resetState()
+	ch.m.Unlock()
+	ch.destructorM.Unlock()
+
+	// 2. Open a fresh channel on the broker
+	if err = ch.open(); err != nil {
+		return false, err
+	}
+
+	// 3. Perform QoS and Confirms setup.
+	return true, ch.setupChannelBasic()
+}
+
+// reopenIfClosed reopens a channel that was closed as a side-effect of a
+// broker soft error (e.g. PRECONDITION_FAILED / 406) during topology recovery.
+func (ch *Channel) reopenIfClosed() {
+	// Fast path: skip the mutex entirely for the common case where the channel
+	// is already open. Avoids blocking on ch.reconnecting for every entity in
+	// a healthy recovery where no reopen is needed.
+	if !ch.IsClosed() {
+		return
+	}
+
+	ch.reconnecting.Lock()
+	defer ch.reconnecting.Unlock()
+
+	// Re-check under lock: a concurrent watchChannel goroutine may have already
+	// reopened the channel via reconnectChannel between the fast-path check above
+	// and acquiring the lock.
+	if !ch.IsClosed() {
+		return
+	}
+
+	Logger.Printf("topology recovery: channel %d closed by broker soft error; reopening for remaining entities", ch.id)
+	ch.lifeCycle.SetState(StateReconnecting, nil)
+
+	// Make sure the channel id is registered before sending channel.open.
+	ch.connection.reregisterChannel(ch)
+
+	if opened, err := ch.openChannelSession(); err != nil {
+		Logger.Printf("topology recovery: failed to reopen channel %d: %v", ch.id, err)
+		if opened {
+			_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Topology recovery"}, &channelCloseOk{})
+		}
+		ch.setClosed()
+		return
+	}
+
+	ch.lifeCycle.SetState(StateOpen, nil)
 }
 
 // reconnectChannel opens a fresh channel on the broker and performs basic setup (QoS, Confirms).
@@ -2290,7 +2397,10 @@ func (ch *Channel) reconnectChannel() error {
 
 	cancelCh := ch.NotifyRecoveryCancel(make(chan struct{}))
 
-	var err error
+	var (
+		err    error
+		opened bool
+	)
 	for i := 0; i < ch.connection.MaxRetryCount(); i++ {
 		// Exit early if Close() was already called
 		select {
@@ -2313,24 +2423,16 @@ func (ch *Channel) reconnectChannel() error {
 			}
 		}
 
-		// 1. Reset client-side state
-		ch.destructorM.Lock()
-		ch.m.Lock()
-		ch.resetState()
-		ch.m.Unlock()
-		ch.destructorM.Unlock()
-
-		// 2. Open a fresh channel on the broker
-		if err = ch.open(); err != nil {
-			Logger.Printf("Channel %d recovery open error: %v", ch.id, err)
-			continue
-		}
-
-		// 3. Perform QoS and Confirms setup.
-		if err = ch.setupChannelBasic(); err != nil {
-			Logger.Printf("Channel %d setup failed: %v, closing and retrying...", ch.id, err)
-			ch.setClosed()
-			_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Recovery retry"}, &channelCloseOk{})
+		opened, err = ch.openChannelSession()
+		if err != nil {
+			Logger.Printf("Channel %d recovery attempt %d failed: %v", ch.id, i+1, err)
+			if opened {
+				// open() succeeded but setupChannelBasic() failed:
+				// gracefully close the broker-side session before the next attempt.
+				// channelClose must be sent before setClosed()
+				_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Recovery retry"}, &channelCloseOk{})
+				ch.setClosed()
+			}
 			continue
 		}
 
@@ -2341,7 +2443,6 @@ func (ch *Channel) reconnectChannel() error {
 
 	Logger.Printf("Channel %d recovery exhausted all %d retries", ch.id, ch.connection.MaxRetryCount())
 	ch.setClosed()
-	ch.lifeCycle.SetState(StateClosed, err)
 	return err
 }
 
