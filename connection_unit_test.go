@@ -124,9 +124,8 @@ func TestReconnectRestoresSASLCredentials(t *testing.T) {
 			SASL: []Authentication{pa},
 			Recovery: &Recovery{
 				ReconnectionConfig: &ReconnectionConfig{
-					MaxRetryCount:         1,
-					RetryInterval:         1 * time.Millisecond,
-					RecoverableErrorCodes: []int{320}, // some recoverable code
+					MaxRetryCount: 1,
+					RetryInterval: 1 * time.Millisecond,
 				},
 			},
 			Dial: func(network, addr string) (net.Conn, error) {

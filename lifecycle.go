@@ -38,7 +38,15 @@ func (s LifeCycleState) String() string {
 type StateChanged struct {
 	From LifeCycleState
 	To   LifeCycleState
-	Err  error // Stores the error when transitioning to StateClosed
+
+	// Err is set only on the →StateClosed transition and carries the fatal error
+	// that ended recovery (exhausted retries, non-recoverable error, etc.).
+	Err error
+
+	// SkippedTopologyEntities is set only on the StateReconnecting→StateOpen transition when
+	// one or more topology entities were skipped via Recovery.OnTopologyEntityError.
+	// Nil on all other transitions and when all entities recovered successfully.
+	SkippedTopologyEntities []TopologyRecoveryEntity
 }
 
 func (s StateChanged) String() string {
@@ -113,6 +121,32 @@ func (l *lifeCycle) SetState(value LifeCycleState, err error) {
 		Err:  err,
 	}
 
+	for _, listener := range l.listeners {
+		listener.enqueue(sc)
+		if !listener.sending {
+			listener.sending = true
+			go l.deliverToListener(listener)
+		}
+	}
+}
+
+// setStateOpen transitions to StateOpen and attaches any topology entities that
+// were skipped during recovery. Called only from Connection.Reconnect.
+func (l *lifeCycle) setStateOpen(skippedTopologyEntities []TopologyRecoveryEntity) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	if l.state == StateOpen {
+		return
+	}
+	oldState := l.state
+	l.state = StateOpen
+	sc := &StateChanged{
+		From: oldState,
+		To:   StateOpen,
+	}
+	if len(skippedTopologyEntities) != 0 {
+		sc.SkippedTopologyEntities = skippedTopologyEntities
+	}
 	for _, listener := range l.listeners {
 		listener.enqueue(sc)
 		if !listener.sending {

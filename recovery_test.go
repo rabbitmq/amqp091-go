@@ -8,6 +8,7 @@ package amqp091
 import (
 	"context"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -360,46 +361,6 @@ func waitForChannelOpen(t *testing.T, chanStateChanged chan *StateChanged) {
 	}
 }
 
-func waitForChannelClose(t *testing.T, chanStateChanged chan *StateChanged, chanID int, reason string) {
-	var chanClosedSeen bool
-	var chanReconnectingSeen bool
-	var chanOpenSeen bool
-
-	loopDeadline := time.After(3 * time.Second)
-	for {
-		select {
-		case sc, ok := <-chanStateChanged:
-			if !ok {
-				if !chanClosedSeen {
-					t.Fatalf("Expected Channel %d to transition to StateClosed before channel closed", chanID)
-				}
-				if chanReconnectingSeen || chanOpenSeen {
-					t.Fatalf("Channel %d recovery was triggered for %s!", chanID, reason)
-				}
-				return
-			}
-			t.Logf("Channel %d state changed: %s", chanID, sc)
-			if sc.To == StateClosed {
-				chanClosedSeen = true
-			}
-			if sc.To == StateReconnecting {
-				chanReconnectingSeen = true
-			}
-			if sc.To == StateOpen {
-				chanOpenSeen = true
-			}
-		case <-loopDeadline:
-			if !chanClosedSeen {
-				t.Fatalf("Expected Channel %d to transition to StateClosed", chanID)
-			}
-			if chanReconnectingSeen || chanOpenSeen {
-				t.Fatalf("Channel %d recovery was triggered for %s!", chanID, reason)
-			}
-			return
-		}
-	}
-}
-
 func waitForStateChangeClose(t *testing.T, ch chan *StateChanged, name, listenerName string) {
 	done := make(chan struct{})
 	go func() {
@@ -413,144 +374,6 @@ func waitForStateChangeClose(t *testing.T, ch chan *StateChanged, name, listener
 	case <-time.After(5 * time.Second):
 		t.Fatalf("Timeout waiting for state change channel for %s %s to close", name, listenerName)
 	}
-}
-
-// TestConnectionRecoveryNonRecoverableChannelClose tests that channel recovery is NOT triggered
-// when a channel is closed due to soft exceptions (errors not present in RecoverableErrorCodes).
-// It verifies both PRECONDITION_FAILED (406) and RESOURCE_LOCKED (405) leave the connection open,
-// transition the channel to StateClosed, and do not trigger automatic recovery.
-func TestConnectionRecoveryNonRecoverableChannelClose(t *testing.T) {
-	connectionName := "test-non-recoverable-channel-close"
-	properties := NewConnectionProperties()
-	properties.SetClientConnectionName(connectionName)
-	conn, err := DialConfig(amqpURL, Config{
-		Recovery:   &Recovery{},
-		Locale:     defaultLocale,
-		Properties: properties,
-	})
-	if err != nil {
-		t.Fatalf("DialConfig failed: %v", err)
-	}
-	defer conn.Close()
-
-	// --- 1. Test PRECONDITION_FAILED (406) using a durable mismatch on a non-exclusive queue ---
-	ch1, err := conn.Channel()
-	if err != nil {
-		t.Fatalf("First Channel creation failed: %v", err)
-	}
-	defer ch1.Close()
-
-	chanStateChanged1 := make(chan *StateChanged, 10)
-	ch1.NotifyStateChange(chanStateChanged1)
-
-	queueNamePrecondition := "precondition_failed_test_queue"
-	_, _ = ch1.QueueDelete(queueNamePrecondition, false, false, false)
-
-	// Declare non-exclusive queue as durable: true
-	_, err = ch1.QueueDeclare(
-		queueNamePrecondition,
-		true,  // durable
-		false, // auto-delete
-		false, // exclusive
-		false, // no-wait
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("QueueDeclare durable:true failed: %v", err)
-	}
-	defer func() {
-		// Clean up queue using a fresh channel since ch1 will be closed
-		if !conn.IsClosed() {
-			if cleanCh, err := conn.Channel(); err == nil {
-				_, _ = cleanCh.QueueDelete(queueNamePrecondition, false, false, false)
-				cleanCh.Close()
-			}
-		}
-	}()
-
-	// Declare again on SAME channel with durable: false (PreconditionFailed)
-	_, err = ch1.QueueDeclare(
-		queueNamePrecondition,
-		false, // durable (mismatched)
-		false, // auto-delete
-		false, // exclusive
-		false, // no-wait
-		nil,
-	)
-	if err == nil {
-		t.Fatalf("Expected PreconditionFailed error but second QueueDeclare succeeded")
-	}
-
-	amqpErr, ok := err.(*Error)
-	if !ok {
-		t.Fatalf("Expected amqp.Error, got: %T (%v)", err, err)
-	}
-	if amqpErr.Code != PreconditionFailed {
-		t.Fatalf("Expected PreconditionFailed (406), got code: %d", amqpErr.Code)
-	}
-
-	// Verify ch1 transitioned to StateClosed and did not trigger recovery
-	waitForChannelClose(t, chanStateChanged1, int(ch1.id), "PreconditionFailed")
-
-	if conn.IsClosed() {
-		t.Fatalf("Expected connection to remain open after PRECONDITION_FAILED soft exception")
-	}
-	t.Log("Verified connection remains open after PRECONDITION_FAILED")
-
-	// --- 2. Test RESOURCE_LOCKED (405) using exclusive queue settings ---
-	ch2, err := conn.Channel()
-	if err != nil {
-		t.Fatalf("Second Channel creation failed: %v", err)
-	}
-	defer ch2.Close()
-
-	chanStateChanged2 := make(chan *StateChanged, 10)
-	ch2.NotifyStateChange(chanStateChanged2)
-
-	queueNameResource := "resource_locked_test_queue"
-	_, _ = ch2.QueueDelete(queueNameResource, false, false, false)
-
-	// Declare as exclusive: true, auto-delete: true
-	_, err = ch2.QueueDeclare(
-		queueNameResource,
-		false, // durable
-		true,  // auto-delete
-		true,  // exclusive
-		false, // no-wait
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("QueueDeclare exclusive:true failed: %v", err)
-	}
-
-	// Declare again on SAME channel with exclusive: false (ResourceLocked)
-	_, err = ch2.QueueDeclare(
-		queueNameResource,
-		false, // durable
-		true,  // auto-delete
-		false, // exclusive (mismatched)
-		false, // no-wait
-		nil,
-	)
-	if err == nil {
-		t.Fatalf("Expected ResourceLocked error but second QueueDeclare succeeded")
-	}
-
-	amqpErr, ok = err.(*Error)
-	if !ok {
-		t.Fatalf("Expected amqp.Error, got: %T (%v)", err, err)
-	}
-	if amqpErr.Code != ResourceLocked {
-		t.Fatalf("Expected ResourceLocked (405), got code: %d", amqpErr.Code)
-	}
-
-	// Verify ch2 transitioned to StateClosed and did not trigger recovery
-	waitForChannelClose(t, chanStateChanged2, int(ch2.id), "ResourceLocked")
-
-	if conn.IsClosed() {
-		t.Fatalf("Expected connection to remain open after RESOURCE_LOCKED soft exception")
-	}
-	t.Log("Verified connection remains open after RESOURCE_LOCKED")
 }
 
 // TestConnectionRecoveryChannelIDReservation verifies that after connection recovery,
@@ -2049,11 +1872,12 @@ func TestConnectionRecoveryTopologyDisabled(t *testing.T) {
 //
 // The failure path is: a recoverable drop starts recovery; a queue that can no
 // longer be redeclared (its definition was changed out-of-band) makes
-// RecoverTopology fail; Reconnect() calls Close() on the transport, whose reader
-// raises a non-recoverable shutdown that closes the listeners; after retries are
-// exhausted OnConnectionClose calls cleanup(), which closed the same listeners a
-// second time and panicked with "close of closed channel". A registered
-// NotifyClose listener is required to surface the panic.
+// RecoverTopology fail (OnTopologyEntityError returns false to abort, not skip);
+// Reconnect() calls Close() on the transport, whose reader raises a
+// non-recoverable shutdown that closes the listeners; after retries are exhausted
+// OnConnectionClose calls cleanup(), which closed the same listeners a second time
+// and panicked with "close of closed channel". A registered NotifyClose listener
+// is required to surface the panic.
 func TestConnectionRecoveryExhaustionDoesNotPanic(t *testing.T) {
 	connectionName := "test-connection-recovery-exhaustion-no-panic"
 	properties := NewConnectionProperties()
@@ -2066,6 +1890,12 @@ func TestConnectionRecoveryExhaustionDoesNotPanic(t *testing.T) {
 				RetryInterval: 1 * time.Second,
 			},
 			TopologyRecoveryMode: TopologyRecoveryAllEnabled,
+			// Return false to abort topology recovery on any entity error.
+			// Without this, the default behavior skips the failed entity and
+			// recovery succeeds — the connection never reaches StateClosed.
+			OnTopologyEntityError: func(_ *Connection, _ TopologyRecoveryEntity) bool {
+				return false
+			},
 		},
 		Locale:     defaultLocale,
 		Properties: properties,
@@ -2616,8 +2446,19 @@ func TestConnectionRecoveryAutoDeleteExchangeCascade(t *testing.T) {
 			},
 		},
 	}
+	// Use a plain, non-recovering connection for these checks: each is expected
+	// to close its channel with a 404, and running them on the recovering
+	// `conn` would trigger the library's own per-channel auto-recovery
+	// (Connection.watchChannel -> OnChannelClose -> Channel.Reconnect) for a
+	// channel we're intentionally breaking, racing with the next check.
+	verifyConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("s3 verification connection failed: %v", err)
+	}
+	defer verifyConn.Close()
+
 	for _, ck := range checks {
-		verifyCh, err := conn.Channel()
+		verifyCh, err := verifyConn.Channel()
 		if err != nil {
 			t.Fatalf("s3 verification channel failed: %v", err)
 		}
@@ -2674,4 +2515,278 @@ func TestConnectionRecoveryAutoDeleteExchangeCascade(t *testing.T) {
 		t.Fatalf("s4: auto-delete source exchange %q must be forgotten after ExchangeDelete removed its only e2e binding, but it is still tracked", s4Source)
 	}
 	t.Logf("Scenario 4 OK: source exchange %q cascade-forgotten after ExchangeDelete of destination %q", s4Source, s4Dest)
+}
+
+// TestConnectionRecoverySkipAndContinue tests that when a topology entity fails to
+// recover, OnTopologyEntityError can skip it and recovery still completes successfully.
+// The StateReconnecting→StateOpen transition must carry the skipped entities in
+// SkippedTopologyEntities so the caller can observe what was not restored.
+func TestConnectionRecoverySkipAndContinue(t *testing.T) {
+	connectionName := "test-connection-recovery-skip-and-continue"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+
+	// 1. Declare topology: auto-delete exchange, durable queue (with x-max-length),
+	//    a binding, and a consumer.
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			// Explicitly return true to skip the failed entity and continue recovery.
+			OnTopologyEntityError: func(_ *Connection, e TopologyRecoveryEntity) bool {
+				return true
+			},
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	exchangeName := "test_skip_continue_ex"
+	if err := ch.ExchangeDeclare(exchangeName, "direct", false, true, false, false, nil); err != nil {
+		t.Fatalf("ExchangeDeclare failed: %v", err)
+	}
+	defer func() {
+		if !conn.IsClosed() {
+			_ = ch.ExchangeDelete(exchangeName, false, false)
+		}
+	}()
+
+	queueName := "test_skip_continue_q"
+	if _, err := ch.QueueDeclare(queueName, true, false, false, false, Table{"x-max-length": int32(10)}); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+	defer func() {
+		// ch may be closed after the conflicting-queue error during recovery; use a
+		// fresh channel for cleanup so the queue is always removed.
+		if conn.IsClosed() {
+			return
+		}
+		cleanupCh, cerr := conn.Channel()
+		if cerr != nil {
+			return
+		}
+		defer cleanupCh.Close()
+		_, _ = cleanupCh.QueueDelete(queueName, false, false, false)
+	}()
+
+	routingKey := "skip-continue-key"
+	if err := ch.QueueBind(queueName, routingKey, exchangeName, false, nil); err != nil {
+		t.Fatalf("QueueBind failed: %v", err)
+	}
+
+	msgs, err := ch.Consume(queueName, "skip-continue-consumer", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume failed: %v", err)
+	}
+	_ = msgs
+
+	// 2. Out-of-band: delete and redeclare the queue with a conflicting definition
+	//    so that the client's recovery-time redeclare fails with PRECONDITION_FAILED.
+	adminConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("admin DialConfig failed: %v", err)
+	}
+	adminCh, err := adminConn.Channel()
+	if err != nil {
+		t.Fatalf("admin Channel failed: %v", err)
+	}
+	if _, err := adminCh.QueueDelete(queueName, false, false, false); err != nil {
+		t.Fatalf("admin QueueDelete failed: %v", err)
+	}
+	if _, err := adminCh.QueueDeclare(queueName, true, false, false, false, Table{"x-max-length": int32(99)}); err != nil {
+		t.Fatalf("admin QueueDeclare (conflicting) failed: %v", err)
+	}
+	_ = adminCh.Close()
+	_ = adminConn.Close()
+
+	// 3. Register state change listener.
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+
+	// 4. Drop the connection.
+	dropConnection(t, connectionName)
+
+	// 5. Wait for recovery; 6. Assert the open transition carries skipped entities.
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case sc := <-stateChanged:
+			t.Logf("Connection state changed: %s", sc)
+			if sc.To != StateOpen {
+				continue
+			}
+			if len(sc.SkippedTopologyEntities) == 0 {
+				t.Fatalf("Expected SkippedTopologyEntities to be non-empty on StateOpen after skip-and-continue, but it was nil/empty")
+			}
+			t.Logf("Recovery succeeded with %d skipped topology entity/entities:", len(sc.SkippedTopologyEntities))
+			for _, e := range sc.SkippedTopologyEntities {
+				t.Logf("  - %s %q on channel %d: %v", e.EntityType, e.EntityName, e.ChannelID, e.Err)
+			}
+			// Verify at least one skipped entity is the conflicting queue.
+			foundQueue := false
+			for _, e := range sc.SkippedTopologyEntities {
+				if e.EntityType == TopologyEntityQueue && e.EntityName == queueName {
+					foundQueue = true
+				}
+			}
+			if !foundQueue {
+				t.Fatalf("Expected a skipped entity for queue %q but it was not found in SkippedTopologyEntities: %+v",
+					queueName, sc.SkippedTopologyEntities)
+			}
+			return
+		case <-timeout:
+			t.Fatalf("Timeout waiting for connection to recover to StateOpen with skipped topology entities")
+		}
+	}
+}
+
+// countingTopologyRecovery wraps DefaultTopologyRecovery and counts how many
+// times RecoverTopology is invoked, so a test can detect a self-sustaining
+// recovery loop (a growing count) versus a single settled pass.
+type countingTopologyRecovery struct {
+	calls int32
+}
+
+func (c *countingTopologyRecovery) RecoverTopology(conn *Connection, channels []*Channel) ([]TopologyRecoveryEntity, error) {
+	atomic.AddInt32(&c.calls, 1)
+	return (&DefaultTopologyRecovery{}).RecoverTopology(conn, channels)
+}
+
+// TestConnectionRecoverySkipAndContinueNoInfiniteLoop verifies that skipping a
+// permanently-failing topology entity settles the channel instead of looping
+// forever.
+//
+// Regression for: a channel-level soft error (e.g. PRECONDITION_FAILED)
+// raised while recoverConnectionTopology is already reopening/redeclaring a
+// channel used to be re-delivered to watchChannel's long-lived NotifyClose
+// listener, which started a second, independent Reconnect+RecoverTopology
+// pass over the same still-conflicting entities. That pass hit the same
+// broker error again, re-triggering the cycle roughly every notifyTimeout
+// (5s) forever. Channel.recoveringTopology now suppresses that redundant
+// trigger while an in-flight pass owns the channel.
+func TestConnectionRecoverySkipAndContinueNoInfiniteLoop(t *testing.T) {
+	counter := &countingTopologyRecovery{}
+
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			TopologyRecoveryMode: TopologyRecoveryAllEnabled,
+			TopologyRecovery:     counter,
+			OnTopologyEntityError: func(_ *Connection, _ TopologyRecoveryEntity) bool {
+				return true // skip-and-continue
+			},
+		},
+		Locale: defaultLocale,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch1, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("conn.Channel failed: %v", err)
+	}
+	defer ch1.Close()
+
+	// Two queues on the same channel, both durable with an arg, so redeclaring
+	// either during recovery can be made to fail with PRECONDITION_FAILED.
+	q1, q2 := "test_no_infinite_loop_q1", "test_no_infinite_loop_q2"
+	_, _ = ch1.QueueDelete(q1, false, false, false)
+	_, _ = ch1.QueueDelete(q2, false, false, false)
+
+	if _, err := ch1.QueueDeclare(q1, true, false, false, false, Table{"x-max-length": int32(10)}); err != nil {
+		t.Fatalf("QueueDeclare q1 failed: %v", err)
+	}
+	if _, err := ch1.QueueDeclare(q2, true, false, false, false, Table{"x-max-length": int32(10)}); err != nil {
+		t.Fatalf("QueueDeclare q2 failed: %v", err)
+	}
+
+	adminConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("admin DialConfig failed: %v", err)
+	}
+	defer adminConn.Close()
+	adminCh, err := adminConn.Channel()
+	if err != nil {
+		t.Fatalf("admin Channel failed: %v", err)
+	}
+	defer func() {
+		_, _ = adminCh.QueueDelete(q1, false, false, false)
+		_, _ = adminCh.QueueDelete(q2, false, false, false)
+	}()
+
+	// Corrupt q1 and q2 out-of-band so that when ch1's own recovery pass
+	// redeclares them (durable=true), the broker responds with
+	// PRECONDITION_FAILED for both — a permanent, realistic conflict.
+	for _, q := range []string{q1, q2} {
+		if _, err := adminCh.QueueDelete(q, false, false, false); err != nil {
+			t.Fatalf("admin QueueDelete %s failed: %v", q, err)
+		}
+		if _, err := adminCh.QueueDeclare(q, true, false, false, false, Table{"x-max-length": int32(99)}); err != nil {
+			t.Fatalf("admin QueueDeclare(conflicting) %s failed: %v", q, err)
+		}
+	}
+
+	stateChanged := make(chan *StateChanged, 20)
+	ch1.NotifyStateChange(stateChanged)
+
+	// Trigger a channel-level soft error UNRELATED to q1/q2 to close ch1 and
+	// drive it through watchChannel -> Reconnect -> RecoverTopology, which
+	// will hit the q1/q2 conflicts just planted.
+	q3 := "test_no_infinite_loop_q3_trigger"
+	_, _ = adminCh.QueueDelete(q3, false, false, false)
+	if _, err := adminCh.QueueDeclare(q3, true, false, false, false, nil); err != nil {
+		t.Fatalf("admin QueueDeclare q3 failed: %v", err)
+	}
+	defer func() { _, _ = adminCh.QueueDelete(q3, false, false, false) }()
+
+	if _, err := ch1.QueueDeclare(q3, true, true /* mismatched auto-delete -> 406 */, false, false, nil); err == nil {
+		t.Fatalf("expected ch1.QueueDeclare(q3) to fail with PRECONDITION_FAILED, got no error")
+	}
+
+	// Wait for the first recovery pass to settle back to StateOpen.
+	timeout := time.After(15 * time.Second)
+waitOpen:
+	for {
+		select {
+		case sc := <-stateChanged:
+			t.Logf("Channel state changed: %s", sc)
+			if sc.To == StateOpen {
+				break waitOpen
+			}
+		case <-timeout:
+			t.Fatalf("Timeout waiting for channel to settle to StateOpen after skip-and-continue recovery")
+		}
+	}
+
+	// Give any in-flight goroutines (e.g. shutdown's background fallback
+	// delivery) a moment to finish before taking the first snapshot.
+	time.Sleep(1 * time.Second)
+	firstCount := atomic.LoadInt32(&counter.calls)
+	if firstCount == 0 {
+		t.Fatalf("expected at least one RecoverTopology call, got 0")
+	}
+
+	// If watchChannel's listener were still re-triggering a redundant pass,
+	// it would recur roughly every notifyTimeout (5s) since q1/q2 remain
+	// permanently conflicting. Wait several multiples of that period and
+	// confirm the call count does not grow.
+	time.Sleep(3 * notifyTimeout)
+	secondCount := atomic.LoadInt32(&counter.calls)
+	if secondCount != firstCount {
+		t.Fatalf("RecoverTopology call count grew from %d to %d after settling — self-sustaining recovery loop detected", firstCount, secondCount)
+	}
+
+	if ch1.IsClosed() {
+		t.Fatalf("expected ch1 to be open after settling, but it is closed")
+	}
+	t.Logf("Channel settled after %d RecoverTopology call(s), no further calls over %v", firstCount, 3*notifyTimeout)
 }
