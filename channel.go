@@ -689,6 +689,12 @@ It is safe to call this method multiple times.
 func (ch *Channel) Close() error {
 	ch.closeRecovery() // Stop any active recovery process
 
+	// Wait for any in-flight reconnectChannel() to fully settle before
+	// inspecting/tearing down state. See Connection.Close() for the analogous
+	// connection-level race this prevents.
+	ch.reconnecting.Lock()
+	defer ch.reconnecting.Unlock()
+
 	if ch.IsClosed() {
 		return nil
 	}

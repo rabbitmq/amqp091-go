@@ -552,36 +552,45 @@ will also be closed.
 func (c *Connection) Close() error {
 	c.closeRecovery() // Stop any active recovery process
 
+	// Mark close-intent before racing for c.reconnecting below. If Reconnect()
+	// hasn't started yet (e.g. it hasn't reached c.reconnecting.Lock() and so
+	// closeRecovery() above found no cancel channel to close), it has no other
+	// way to learn a close was requested. Reconnect() re-checks closeInit
+	// (via IsRecoveryEnabled()) immediately after acquiring c.reconnecting, so
+	// setting this first guarantees it aborts instead of resurrecting the
+	// connection after this call has already returned ErrClosed to the caller.
+	c.closeM.Lock()
+	initiated := !c.closeInit
+	c.closeInit = true
+	c.closeM.Unlock()
+
+	if !initiated {
+		return ErrClosed
+	}
+
+	// Wait for any in-flight Reconnect() to fully settle (succeed or exhaust
+	// retries) before inspecting/tearing down state. Reconnect() holds this
+	// mutex for its entire duration, so without this, Close() can race past a
+	// stale IsClosed() snapshot while Reconnect() is still redialing and
+	// reopening channels, tearing down state that Reconnect() then rebuilds
+	// on top of, orphaning the newly spawned reader/heartbeater goroutines.
+	c.reconnecting.Lock()
+	defer c.reconnecting.Unlock()
+
 	if c.IsClosed() {
 		return ErrClosed
 	}
 
 	c.lifeCycle.SetState(StateClosing, nil)
 
-	var handshakeErr error
-	var initiated bool
-
-	c.closeM.Lock()
-	if !c.closeInit {
-		c.closeInit = true
-		initiated = true
-	}
-	c.closeM.Unlock()
-
-	if initiated {
-		defer c.shutdown(nil)
-		handshakeErr = c.call(
-			&connectionClose{
-				ReplyCode: replySuccess,
-				ReplyText: "kthxbai",
-			},
-			&connectionCloseOk{},
-		)
-	}
-	if !initiated {
-		return ErrClosed
-	}
-	return handshakeErr
+	defer c.shutdown(nil)
+	return c.call(
+		&connectionClose{
+			ReplyCode: replySuccess,
+			ReplyText: "kthxbai",
+		},
+		&connectionCloseOk{},
+	)
 }
 
 // CloseDeadline requests and waits for the response to close this AMQP connection.
@@ -600,37 +609,36 @@ func (c *Connection) Close() error {
 func (c *Connection) CloseDeadline(deadline time.Time) error {
 	c.closeRecovery() // Stop any active recovery process
 
+	// See Close() for why closeInit must be marked before racing for
+	// c.reconnecting below.
+	c.closeM.Lock()
+	initiated := !c.closeInit
+	c.closeInit = true
+	c.closeM.Unlock()
+
+	if !initiated {
+		return ErrClosed
+	}
+
+	// See Close() for why this waits on an in-flight Reconnect().
+	c.reconnecting.Lock()
+	defer c.reconnecting.Unlock()
+
 	if c.IsClosed() {
 		return ErrClosed
 	}
 
-	var handshakeErr error
-	var initiated bool
-
-	c.closeM.Lock()
-	if !c.closeInit {
-		c.closeInit = true
-		initiated = true
+	defer c.shutdown(nil)
+	if err := c.setDeadline(deadline); err != nil {
+		return err
 	}
-	c.closeM.Unlock()
-
-	if initiated {
-		defer c.shutdown(nil)
-		if err := c.setDeadline(deadline); err != nil {
-			return err
-		}
-		handshakeErr = c.call(
-			&connectionClose{
-				ReplyCode: replySuccess,
-				ReplyText: "kthxbai",
-			},
-			&connectionCloseOk{},
-		)
-	}
-	if !initiated {
-		return ErrClosed
-	}
-	return handshakeErr
+	return c.call(
+		&connectionClose{
+			ReplyCode: replySuccess,
+			ReplyText: "kthxbai",
+		},
+		&connectionCloseOk{},
+	)
 }
 
 func (c *Connection) closeWith(err *Error) error {
@@ -1524,6 +1532,15 @@ func (c *Connection) Reconnect() error {
 
 	c.reconnecting.Lock()
 	defer c.reconnecting.Unlock()
+
+	// Re-check: Close()/CloseDeadline() may have marked closeInit and be
+	// racing us for c.reconnecting between our IsRecoveryEnabled() check above
+	// and this point. Without this, we could resurrect a connection whose
+	// Close() call already returned ErrClosed to the caller, leaving it with
+	// no way to ever close the connection we're about to rebuild.
+	if !c.IsRecoveryEnabled() {
+		return ErrClosed
+	}
 
 	if !c.IsClosed() {
 		return nil

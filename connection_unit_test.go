@@ -5,12 +5,15 @@
 package amqp091
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -149,6 +152,96 @@ func TestReconnectRestoresSASLCredentials(t *testing.T) {
 
 	if restoredPa.Username != "user" || restoredPa.Password != "mysecretpassword" {
 		t.Errorf("expected restored credentials to be user:mysecretpassword, got %s:%s", restoredPa.Username, restoredPa.Password)
+	}
+}
+
+type dummyReadWriteCloser struct{}
+
+func (d dummyReadWriteCloser) Read(p []byte) (n int, err error)  { return 0, nil }
+func (d dummyReadWriteCloser) Write(p []byte) (n int, err error) { return len(p), nil }
+func (d dummyReadWriteCloser) Close() error                      { return nil }
+
+// TestReconnectAbortsWhenCloseWonTheRace forces the exact interleaving that
+// Close()/Reconnect() must handle: Reconnect() passes its top-of-function
+// IsRecoveryEnabled() check *before* Close() marks closeInit, then blocks
+// trying to acquire c.reconnecting (held here to control timing). Close()
+// then marks closeInit and the lock is released, so Reconnect() must
+// re-check closeInit immediately after acquiring the lock and abort, rather
+// than proceeding into the retry loop (or worse, silently returning nil
+// without having reconnected anything, which would skip the cleanup() that
+// DefaultConnectionRecovery.OnConnectionClose triggers on a non-nil error).
+func TestReconnectAbortsWhenCloseWonTheRace(t *testing.T) {
+	var buf bytes.Buffer
+	var dialCalled atomic.Bool
+	conn := &Connection{
+		conn:      dummyReadWriteCloser{},
+		writer:    &writer{bufio.NewWriter(&buf)},
+		rpc:       make(chan message, 2),
+		close:     make(chan struct{}),
+		errors:    make(chan *Error, 1),
+		sends:     make(chan time.Time, 100),
+		deadlines: make(chan readDeadliner, 100),
+		lifeCycle: newLifeCycle(),
+		Config: Config{
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount: 5,
+					RetryInterval: time.Millisecond,
+				},
+			},
+			// The dialer is only ever reached from inside the retry loop,
+			// which sits after the closeInit re-check.
+			// If it's ever invoked, Reconnect() didn't bail out where expected.
+			Dial: func(network, addr string) (net.Conn, error) {
+				dialCalled.Store(true)
+				return nil, errors.New("dial should not have been attempted")
+			},
+		},
+	}
+	conn.lifeCycle.SetState(StateOpen, nil)
+	conn.closed.Store(true) // simulate: connection is mid-drop, not yet reconnected
+
+	// Hold c.reconnecting ourselves so Reconnect() (started below) passes its
+	// top IsRecoveryEnabled() check (closeInit is still false) and then
+	// blocks waiting for this same lock.
+	conn.reconnecting.Lock()
+
+	reconnectDone := make(chan error, 1)
+	go func() {
+		reconnectDone <- conn.Reconnect()
+	}()
+
+	// Give the goroutine time to pass the top check and start blocking on
+	// c.reconnecting.
+	time.Sleep(100 * time.Millisecond)
+
+	// Simulate Close() winning the race: mark closeInit while Reconnect() is
+	// still blocked waiting for the lock we hold.
+	conn.closeM.Lock()
+	conn.closeInit = true
+	conn.closeM.Unlock()
+
+	// Release the lock — Reconnect() can now proceed and must re-check
+	// closeInit immediately.
+	conn.reconnecting.Unlock()
+
+	select {
+	case err := <-reconnectDone:
+		if err != ErrClosed {
+			t.Fatalf("expected ErrClosed, got %v", err)
+		}
+		// c.lifeCycle.SetState(StateReconnecting, ...) only happens after the
+		// closeInit re-check, i.e. only if Reconnect() proceeded into the
+		// retry loop. Seeing anything other than the StateOpen we set above
+		// means it didn't bail out where we expect.
+		if state := conn.lifeCycle.State(); state != StateOpen {
+			t.Fatalf("expected lifecycle state to remain StateOpen (Reconnect() should not have touched it), got %v", state)
+		}
+		if dialCalled.Load() {
+			t.Fatal("Reconnect() invoked the dialer — it proceeded into the retry loop instead of catching closeInit immediately")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reconnect() did not return within 2s — it did not abort on closeInit and is stuck in its retry loop")
 	}
 }
 

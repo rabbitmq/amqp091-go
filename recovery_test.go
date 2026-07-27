@@ -1245,8 +1245,17 @@ func TestConnectionRecoveryTopologyOnlyTransient(t *testing.T) {
 	}
 
 	// --- Assertion 2: the durable queue was NOT re-declared during recovery ---
-	// A failed passive declare closes the channel, so use a throwaway channel.
-	checkCh, err := conn.Channel()
+	// A failed passive declare closes the channel. Use a non-recovering connection
+	// for this check: running it on the recovering `conn` would trigger the
+	// library's own per-channel auto-recovery (Connection.watchChannel ->
+	// OnChannelClose -> Channel.Reconnect) for a channel we're intentionally
+	// breaking, racing with this function's teardown.
+	checkConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("verification DialConfig failed: %v", err)
+	}
+	defer checkConn.Close()
+	checkCh, err := checkConn.Channel()
 	if err != nil {
 		t.Fatalf("verification Channel failed: %v", err)
 	}
@@ -1779,8 +1788,18 @@ func TestConnectionRecoveryTopologyDisabled(t *testing.T) {
 	waitForChannelOpen(t, ch2StateChanged)
 
 	// Verify transient entities are gone (broker deleted them on connection drop).
-	// A failed passive declare closes the channel, so use a throwaway channel for each check.
-	checkTransientExCh, err := conn.Channel()
+	// A failed passive declare closes the channel. Use a non-recovering connection
+	// for these checks: running them on the recovering `conn` would trigger the
+	// library's own per-channel auto-recovery (Connection.watchChannel ->
+	// OnChannelClose -> Channel.Reconnect) for a channel we're intentionally
+	// breaking, racing with the next check.
+	freshConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("fresh DialConfig failed: %v", err)
+	}
+	defer freshConn.Close()
+
+	checkTransientExCh, err := freshConn.Channel()
 	if err != nil {
 		t.Fatalf("verification Channel for transient exchange check failed: %v", err)
 	}
@@ -1795,7 +1814,7 @@ func TestConnectionRecoveryTopologyDisabled(t *testing.T) {
 	}
 	t.Logf("Confirmed transient exchange %q is absent after TopologyRecoveryDisabled", transientExchange)
 
-	checkTransientQCh, err := conn.Channel()
+	checkTransientQCh, err := freshConn.Channel()
 	if err != nil {
 		t.Fatalf("verification Channel for transient queue check failed: %v", err)
 	}
@@ -1829,13 +1848,7 @@ func TestConnectionRecoveryTopologyDisabled(t *testing.T) {
 	}
 	t.Logf("Confirmed durable queue %q is still present after TopologyRecoveryDisabled", durableQueue)
 
-	// Verify durable topology is functional via a fresh non-recovering connection.
-	freshConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
-	if err != nil {
-		t.Fatalf("fresh DialConfig failed: %v", err)
-	}
-	defer freshConn.Close()
-
+	// Verify durable topology is functional, reusing the non-recovering connection above.
 	freshCh, err := freshConn.Channel()
 	if err != nil {
 		t.Fatalf("fresh Channel failed: %v", err)
@@ -2175,9 +2188,19 @@ func TestConnectionRecoveryAutoDeleteTopologyForgotten(t *testing.T) {
 	}
 
 	// The auto-delete queue and exchange were forgotten before the drop, so recovery
-	// must not re-declare them.  Use fresh throwaway channels for passive declares
-	// (a failed passive declare closes its channel).
-	checkQCh, err := conn.Channel()
+	// must not re-declare them.  Use fresh throwaway channels on a non-recovering
+	// connection for passive declares: a failed passive declare closes its channel,
+	// and running the check on the recovering `conn` would trigger the library's own
+	// per-channel auto-recovery (Connection.watchChannel -> OnChannelClose ->
+	// Channel.Reconnect) for a channel we're intentionally breaking, racing with the
+	// next check.
+	checkConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("verification DialConfig failed: %v", err)
+	}
+	defer checkConn.Close()
+
+	checkQCh, err := checkConn.Channel()
 	if err != nil {
 		t.Fatalf("verification channel for queue check failed: %v", err)
 	}
@@ -2192,7 +2215,7 @@ func TestConnectionRecoveryAutoDeleteTopologyForgotten(t *testing.T) {
 	}
 	t.Logf("Confirmed auto-delete queue %q was NOT re-declared during recovery", adQueue)
 
-	checkExCh, err := conn.Channel()
+	checkExCh, err := checkConn.Channel()
 	if err != nil {
 		t.Fatalf("verification channel for exchange check failed: %v", err)
 	}
