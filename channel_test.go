@@ -162,3 +162,74 @@ func TestQosNegativeReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error for positive values: %v", err)
 	}
 }
+
+// TestReconnectChannelAbortsWhenCloseWonTheRace mirrors
+// TestReconnectAbortsWhenCloseWonTheRace (connection_unit_test.go) at the
+// channel level: reconnectChannel() passes its top-of-function
+// IsRecoveryEnabled() check *before* Close() marks closeInit, then blocks
+// trying to acquire ch.reconnecting (held here to control timing). Close()
+// then marks closeInit and the lock is released, so reconnectChannel() must
+// re-check closeInit immediately after acquiring the lock and abort, rather
+// than proceeding into its retry loop while Close() waits behind it for no
+// reason. See Connection.Reconnect() for the analogous connection-level
+// race.
+func TestReconnectChannelAbortsWhenCloseWonTheRace(t *testing.T) {
+	conn := &Connection{
+		channels:  make(map[uint16]*Channel),
+		lifeCycle: newLifeCycle(),
+		Config: Config{
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount: 5,
+					RetryInterval: time.Millisecond,
+				},
+			},
+		},
+	}
+	conn.lifeCycle.SetState(StateOpen, nil)
+
+	ch := &Channel{
+		connection: conn,
+		id:         1,
+		lifeCycle:  newLifeCycle(),
+	}
+	conn.channels[ch.id] = ch
+	ch.lifeCycle.SetState(StateOpen, nil)
+	ch.closed.Store(true) // simulate: broker already closed this channel
+
+	// Hold ch.reconnecting ourselves so reconnectChannel() (started below)
+	// passes its top IsRecoveryEnabled() check (closeInit is still false)
+	// and then blocks waiting for this same lock.
+	ch.reconnecting.Lock()
+
+	reconnectDone := make(chan error, 1)
+	go func() { reconnectDone <- ch.reconnectChannel() }()
+
+	// Give the goroutine time to pass the top check and start blocking on
+	// ch.reconnecting.
+	time.Sleep(100 * time.Millisecond)
+
+	// Simulate Close() winning the race: mark closeInit while
+	// reconnectChannel() is still blocked waiting for the lock we hold.
+	ch.closeInit.Store(true)
+
+	// Release the lock — reconnectChannel() can now proceed and must
+	// re-check closeInit immediately.
+	ch.reconnecting.Unlock()
+
+	select {
+	case err := <-reconnectDone:
+		if err != ErrClosed {
+			t.Fatalf("expected ErrClosed, got %v", err)
+		}
+		// ch.lifeCycle.SetState(StateReconnecting, ...) only happens after
+		// the closeInit re-check, i.e. only if reconnectChannel() proceeded
+		// into the retry loop. Seeing anything other than the StateOpen we
+		// set above means it didn't bail out where we expect.
+		if state := ch.lifeCycle.State(); state != StateOpen {
+			t.Fatalf("expected lifecycle state to remain StateOpen (reconnectChannel() should not have touched it), got %v", state)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnectChannel() did not return within 2s — it did not abort on closeInit and is stuck in its retry loop")
+	}
+}

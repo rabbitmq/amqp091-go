@@ -114,6 +114,8 @@ type Channel struct {
 	reconnecting sync.Mutex // Mutex for reconnecting channel.
 	lifeCycle    *lifeCycle // The current state of the channel.
 
+	closeInit atomic.Bool // Set by Close() before racing for reconnecting; see reconnectChannel().
+
 	// recoveringTopology is true while a recoverConnectionTopology pass owns
 	// this channel's reopen/redeclare sequence. watchChannel's NotifyClose
 	// listener checks this to avoid starting a redundant, competing
@@ -688,6 +690,16 @@ It is safe to call this method multiple times.
 */
 func (ch *Channel) Close() error {
 	ch.closeRecovery() // Stop any active recovery process
+
+	// Mark close-intent before racing for ch.reconnecting below. If
+	// reconnectChannel() hasn't started yet (e.g. it hasn't reached
+	// ch.reconnecting.Lock() and so closeRecovery() above found no cancel
+	// channel to close), it has no other way to learn a close was
+	// requested. reconnectChannel() re-checks this immediately after
+	// acquiring ch.reconnecting, so setting it first guarantees it aborts
+	// instead of running its full retry loop while this call waits behind
+	// it. See Connection.Close() for the analogous connection-level fix.
+	ch.closeInit.Store(true)
 
 	// Wait for any in-flight reconnectChannel() to fully settle before
 	// inspecting/tearing down state. See Connection.Close() for the analogous
@@ -2395,6 +2407,18 @@ func (ch *Channel) reconnectChannel() error {
 	ch.reconnecting.Lock()
 	defer ch.reconnecting.Unlock()
 
+	// Re-check: Close() may have marked closeInit and be racing us for
+	// ch.reconnecting between our check above and this point — in
+	// particular, its earlier closeRecovery() call runs before we've
+	// registered a cancel channel below, so that signal alone would
+	// otherwise be lost. Without this, a reconnectChannel() that wins the
+	// race would run its full retry loop while Close() waits behind
+	// ch.reconnecting for no reason. See Connection.Reconnect() for the
+	// analogous connection-level race.
+	if ch.closeInit.Load() {
+		return ErrClosed
+	}
+
 	if !ch.IsClosed() {
 		return nil
 	}
@@ -2481,6 +2505,7 @@ func (ch *Channel) setupChannelBasic() error {
 func (ch *Channel) resetState() {
 	ch.closed.Store(false)
 	ch.destructed = false
+	ch.closeInit.Store(false)
 
 	ch.errors = make(chan *Error, 1)
 	ch.close = make(chan struct{})
