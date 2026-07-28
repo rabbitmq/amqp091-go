@@ -606,6 +606,11 @@ func (c *Connection) Close() error {
 // After returning from this call, all resources associated with this connection,
 // including the underlying io, Channels, Notify listeners and Channel consumers
 // will also be closed.
+//
+// Note: deadline only bounds the close handshake itself (setDeadline() below and
+// the subsequent connection.close call). If an in-flight Reconnect() is holding
+// c.reconnecting, this call blocks behind it first — that wait is not covered by
+// deadline and can run for the duration of Reconnect()'s full retry loop.
 func (c *Connection) CloseDeadline(deadline time.Time) error {
 	c.closeRecovery() // Stop any active recovery process
 
@@ -642,34 +647,35 @@ func (c *Connection) CloseDeadline(deadline time.Time) error {
 }
 
 func (c *Connection) closeWith(err *Error) error {
+	c.closeRecovery() // Stop any active recovery process
+
+	// See Close() for why closeInit must be marked before racing for
+	// c.reconnecting below.
+	c.closeM.Lock()
+	initiated := !c.closeInit
+	c.closeInit = true
+	c.closeM.Unlock()
+
+	if !initiated {
+		return ErrClosed
+	}
+
+	// See Close() for why this waits on an in-flight Reconnect().
+	c.reconnecting.Lock()
+	defer c.reconnecting.Unlock()
+
 	if c.IsClosed() {
 		return ErrClosed
 	}
 
-	var handshakeErr error
-	var initiated bool
-
-	c.closeM.Lock()
-	if !c.closeInit {
-		c.closeInit = true
-		initiated = true
-	}
-	c.closeM.Unlock()
-
-	if initiated {
-		defer c.shutdown(err)
-		handshakeErr = c.call(
-			&connectionClose{
-				ReplyCode: uint16(err.Code),
-				ReplyText: err.Reason,
-			},
-			&connectionCloseOk{},
-		)
-	}
-	if !initiated {
-		return ErrClosed
-	}
-	return handshakeErr
+	defer c.shutdown(err)
+	return c.call(
+		&connectionClose{
+			ReplyCode: uint16(err.Code),
+			ReplyText: err.Reason,
+		},
+		&connectionCloseOk{},
+	)
 }
 
 // IsClosed returns true if the connection is marked as closed, otherwise false
@@ -840,7 +846,10 @@ func (c *Connection) shutdown(err *Error) {
 		for _, block := range c.blocks {
 			close(block)
 		}
-		c.closes, c.blocks = nil, nil // nil to prevent double-close
+		for _, listener := range c.recoveryCancels {
+			close(listener)
+		}
+		c.closes, c.blocks, c.recoveryCancels = nil, nil, nil // nil to prevent double-close
 	}
 
 	// Shutdown the channel, but do not use closeChannel() as it calls

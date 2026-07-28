@@ -2343,6 +2343,15 @@ func (ch *Channel) Reconnect() error {
 // whether to send a channel.close courtesy frame to the broker before the next
 // retry (meaningful only when open succeeded but setup then failed).
 func (ch *Channel) openChannelSession() (openSucceeded bool, err error) {
+	// Close() may have marked closeInit and be racing us for ch.reconnecting;
+	// both callers hold that mutex, so this check is the single point that
+	// keeps either from resurrecting a channel Close() already committed to
+	// closing. See reconnectChannel() for the analogous per-caller check this
+	// supersedes.
+	if ch.closeInit.Load() {
+		return false, ErrClosed
+	}
+
 	// 1. Reset client-side state
 	ch.destructorM.Lock()
 	ch.m.Lock()
@@ -2411,9 +2420,11 @@ func (ch *Channel) reconnectChannel() error {
 	// ch.reconnecting between our check above and this point — in
 	// particular, its earlier closeRecovery() call runs before we've
 	// registered a cancel channel below, so that signal alone would
-	// otherwise be lost. Without this, a reconnectChannel() that wins the
-	// race would run its full retry loop while Close() waits behind
-	// ch.reconnecting for no reason. See Connection.Reconnect() for the
+	// otherwise be lost. This is a fast-path optimization on top of the
+	// authoritative check in openChannelSession(): without it, a
+	// reconnectChannel() that wins the race would still run its full retry
+	// loop (with backoff) before openChannelSession() rejects each attempt,
+	// instead of returning immediately. See Connection.Reconnect() for the
 	// analogous connection-level race.
 	if ch.closeInit.Load() {
 		return ErrClosed
