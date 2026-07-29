@@ -63,7 +63,7 @@ should be discarded and a new channel established.
 type Channel struct {
 	destructorM sync.Mutex   // Mutex for destroying the channel.
 	destructed  bool         // Will be true if the channel has been destroyed, false otherwise.
-	cleanedUp   atomic.Bool  // Thread-safe atomic boolean to track final cleanup status
+	closeOnce   sync.Once    // Ensures closeResources() runs at most once, however it's reached.
 	m           sync.Mutex   // Mutex for the channel.
 	notifyM     sync.RWMutex // Mutex for the notify state.
 
@@ -305,53 +305,15 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 	}
 
+	close(ch.errors)
+	close(ch.close)
+
 	if e == nil || !ch.connection.IsRecoveryEnabled() {
-		ch.consumers.close()
-
-		for _, c := range ch.closes {
-			close(c)
-		}
-
-		for _, c := range ch.flows {
-			close(c)
-		}
-
-		for _, c := range ch.returns {
-			close(c)
-		}
-
-		for _, c := range ch.cancels {
-			close(c)
-		}
-
-		for _, c := range ch.recoveryCancels {
-			close(c)
-		}
-
-		// Set the slices to nil to prevent the dispatch() range from sending on
-		// the now closed channels after we release the notifyM mutex
-		ch.recoveryCancels = nil
-		ch.flows = nil
-		ch.closes = nil
-		ch.returns = nil
-		ch.cancels = nil
-
-		if ch.confirms != nil {
-			ch.confirms.Close()
-		}
-
-		close(ch.errors)
-		close(ch.close)
-		ch.noNotify = true
-
 		var err error
 		if e != nil {
 			err = fmt.Errorf("channel shutdown error: %w", e) // errors.As(err, &target) still unwraps to *Error
 		}
-		ch.lifeCycle.SetState(StateClosed, err)
-	} else {
-		close(ch.errors)
-		close(ch.close)
+		ch.closeResources(err)
 	}
 }
 
@@ -2235,14 +2197,58 @@ func (ch *Channel) GetNextPublishSeqNo() uint64 {
 	return ch.confirms.published + 1
 }
 
+// closeResources performs the final teardown of a Channel's consumers,
+// notify listeners, and confirms, then transitions the lifecycle to
+// StateClosed with the given (already-wrapped) error. Shared by shutdown()
+// and cleanup(), both of which can independently decide to invoke it for the
+// same Channel — ch.closeOnce ensures the teardown itself, and the resulting
+// state transition, happens exactly once no matter which caller gets here
+// first. Callers must hold ch.m and ch.notifyM.
+func (ch *Channel) closeResources(err error) {
+	ch.closeOnce.Do(func() {
+		ch.consumers.close()
+
+		for _, c := range ch.closes {
+			close(c)
+		}
+
+		for _, c := range ch.flows {
+			close(c)
+		}
+
+		for _, c := range ch.returns {
+			close(c)
+		}
+
+		for _, c := range ch.cancels {
+			close(c)
+		}
+
+		for _, c := range ch.recoveryCancels {
+			close(c)
+		}
+
+		// Set the slices to nil to prevent the dispatch() range from sending on
+		// the now closed channels after we release the notifyM mutex
+		ch.recoveryCancels = nil
+		ch.flows = nil
+		ch.closes = nil
+		ch.returns = nil
+		ch.cancels = nil
+
+		if ch.confirms != nil {
+			ch.confirms.Close()
+		}
+
+		ch.noNotify = true
+
+		ch.lifeCycle.SetState(StateClosed, err)
+	})
+}
+
 // cleanup closes all the channels and the confirms.
 func (ch *Channel) cleanup(e error) {
 	ch.setClosed() // Ensure ch.IsClosed() returns true globally
-
-	// If it returns false, it means cleanedUp was already true (cleanup already ran).
-	if !ch.cleanedUp.CompareAndSwap(false, true) {
-		return
-	}
 
 	ch.destructorM.Lock()
 	ch.destructed = true // Lock out any future transport shutdowns as well
@@ -2254,46 +2260,12 @@ func (ch *Channel) cleanup(e error) {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
-	ch.consumers.close()
-
-	for _, c := range ch.closes {
-		close(c)
-	}
-
-	for _, c := range ch.flows {
-		close(c)
-	}
-
-	for _, c := range ch.returns {
-		close(c)
-	}
-
-	for _, c := range ch.cancels {
-		close(c)
-	}
-
-	for _, c := range ch.recoveryCancels {
-		close(c)
-	}
-
-	ch.recoveryCancels = nil
-	ch.flows = nil
-	ch.closes = nil
-	ch.returns = nil
-	ch.cancels = nil
-
-	if ch.confirms != nil {
-		ch.confirms.Close()
-	}
-
-	ch.noNotify = true
-
 	var err error
 	if e != nil {
 		err = fmt.Errorf("channel cleanup error: %w", e)
 	}
 
-	ch.lifeCycle.SetState(StateClosed, err)
+	ch.closeResources(err)
 }
 
 // watchChannel watches the channel for close events and triggers recovery if needed.

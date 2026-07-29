@@ -839,19 +839,6 @@ func (c *Connection) shutdown(err *Error) {
 	// Shutdown handler goroutine can still receive the result.
 	close(c.errors)
 
-	if err == nil || !c.IsRecoveryEnabled() {
-		for _, listener := range c.closes {
-			close(listener)
-		}
-		for _, block := range c.blocks {
-			close(block)
-		}
-		for _, listener := range c.recoveryCancels {
-			close(listener)
-		}
-		c.closes, c.blocks, c.recoveryCancels = nil, nil, nil // nil to prevent double-close
-	}
-
 	// Shutdown the channel, but do not use closeChannel() as it calls
 	// releaseChannel() which requires the connection lock.
 	//
@@ -866,15 +853,11 @@ func (c *Connection) shutdown(err *Error) {
 	close(c.close)
 
 	if err == nil || !c.IsRecoveryEnabled() {
-		c.channels = nil
-		c.allocator = nil
-		c.noNotify = true
-
 		var e error
 		if err != nil {
 			e = fmt.Errorf("connection shutdown error: %w", err) // errors.As(e, &target) still unwraps to *Error
 		}
-		c.lifeCycle.SetState(StateClosed, e)
+		c.closeResources(e)
 	}
 }
 
@@ -1474,6 +1457,39 @@ func negotiateFrameSize(client, server int) int {
 	return size
 }
 
+// closeResources closes and clears the Connection's close/block/recovery-cancel
+// notification listeners, tears down the channel registry, and transitions the
+// lifecycle to StateClosed with the given (already-wrapped) error. Shared by
+// shutdown() and cleanup() — callers must hold c.m and c.notifyM. It's fine
+// for this to run more than once (e.g. both callers reaching it for the same
+// Connection): every field it touches is nilled out before returning, so a
+// repeat call just ranges over nil slices/maps and re-sets the same state.
+func (c *Connection) closeResources(err error) {
+	for _, listener := range c.closes {
+		close(listener)
+	}
+	for _, block := range c.blocks {
+		close(block)
+	}
+	for _, listener := range c.recoveryCancels {
+		close(listener)
+	}
+	// nil to prevent double-close
+	c.closes = nil
+	c.blocks = nil
+	c.recoveryCancels = nil
+	c.channels = nil
+	c.allocator = nil
+
+	c.noNotify = true
+
+	c.topologyM.Lock()
+	c.topologyConfiguration = nil
+	c.topologyM.Unlock()
+
+	c.lifeCycle.SetState(StateClosed, err)
+}
+
 // cleanup releases registered resources and performs final teardown of the connection.
 func (c *Connection) cleanup(err error) {
 	c.m.Lock()
@@ -1482,37 +1498,16 @@ func (c *Connection) cleanup(err error) {
 	c.notifyM.Lock()
 	defer c.notifyM.Unlock()
 
-	for _, listener := range c.closes {
-		close(listener)
-	}
-	for _, block := range c.blocks {
-		close(block)
-	}
-	c.closes, c.blocks = nil, nil // nil to prevent double-close
-
 	for _, ch := range c.channels {
 		ch.cleanup(err)
 	}
-
-	for _, listener := range c.recoveryCancels {
-		close(listener)
-	}
-
-	c.recoveryCancels = nil
-	c.channels = nil
-	c.allocator = nil
-	c.noNotify = true
-
-	c.topologyM.Lock()
-	c.topologyConfiguration = nil
-	c.topologyM.Unlock()
 
 	var e error
 	if err != nil {
 		e = fmt.Errorf("connection cleanup error: %w", err)
 	}
 
-	c.lifeCycle.SetState(StateClosed, e)
+	c.closeResources(e)
 }
 
 // watchConnection watches the connection for close events and triggers recovery if needed.
