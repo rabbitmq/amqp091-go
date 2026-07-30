@@ -552,36 +552,45 @@ will also be closed.
 func (c *Connection) Close() error {
 	c.closeRecovery() // Stop any active recovery process
 
+	// Mark close-intent before racing for c.reconnecting below. If Reconnect()
+	// hasn't started yet (e.g. it hasn't reached c.reconnecting.Lock() and so
+	// closeRecovery() above found no cancel channel to close), it has no other
+	// way to learn a close was requested. Reconnect() re-checks closeInit
+	// (via IsRecoveryEnabled()) immediately after acquiring c.reconnecting, so
+	// setting this first guarantees it aborts instead of resurrecting the
+	// connection after this call has already returned ErrClosed to the caller.
+	c.closeM.Lock()
+	initiated := !c.closeInit
+	c.closeInit = true
+	c.closeM.Unlock()
+
+	if !initiated {
+		return ErrClosed
+	}
+
+	// Wait for any in-flight Reconnect() to fully settle (succeed or exhaust
+	// retries) before inspecting/tearing down state. Reconnect() holds this
+	// mutex for its entire duration, so without this, Close() can race past a
+	// stale IsClosed() snapshot while Reconnect() is still redialing and
+	// reopening channels, tearing down state that Reconnect() then rebuilds
+	// on top of, orphaning the newly spawned reader/heartbeater goroutines.
+	c.reconnecting.Lock()
+	defer c.reconnecting.Unlock()
+
 	if c.IsClosed() {
 		return ErrClosed
 	}
 
 	c.lifeCycle.SetState(StateClosing, nil)
 
-	var handshakeErr error
-	var initiated bool
-
-	c.closeM.Lock()
-	if !c.closeInit {
-		c.closeInit = true
-		initiated = true
-	}
-	c.closeM.Unlock()
-
-	if initiated {
-		defer c.shutdown(nil)
-		handshakeErr = c.call(
-			&connectionClose{
-				ReplyCode: replySuccess,
-				ReplyText: "kthxbai",
-			},
-			&connectionCloseOk{},
-		)
-	}
-	if !initiated {
-		return ErrClosed
-	}
-	return handshakeErr
+	defer c.shutdown(nil)
+	return c.call(
+		&connectionClose{
+			ReplyCode: replySuccess,
+			ReplyText: "kthxbai",
+		},
+		&connectionCloseOk{},
+	)
 }
 
 // CloseDeadline requests and waits for the response to close this AMQP connection.
@@ -597,71 +606,76 @@ func (c *Connection) Close() error {
 // After returning from this call, all resources associated with this connection,
 // including the underlying io, Channels, Notify listeners and Channel consumers
 // will also be closed.
+//
+// Note: deadline only bounds the close handshake itself (setDeadline() below and
+// the subsequent connection.close call). If an in-flight Reconnect() is holding
+// c.reconnecting, this call blocks behind it first — that wait is not covered by
+// deadline and can run for the duration of Reconnect()'s full retry loop.
 func (c *Connection) CloseDeadline(deadline time.Time) error {
 	c.closeRecovery() // Stop any active recovery process
 
+	// See Close() for why closeInit must be marked before racing for
+	// c.reconnecting below.
+	c.closeM.Lock()
+	initiated := !c.closeInit
+	c.closeInit = true
+	c.closeM.Unlock()
+
+	if !initiated {
+		return ErrClosed
+	}
+
+	// See Close() for why this waits on an in-flight Reconnect().
+	c.reconnecting.Lock()
+	defer c.reconnecting.Unlock()
+
 	if c.IsClosed() {
 		return ErrClosed
 	}
 
-	var handshakeErr error
-	var initiated bool
-
-	c.closeM.Lock()
-	if !c.closeInit {
-		c.closeInit = true
-		initiated = true
+	defer c.shutdown(nil)
+	if err := c.setDeadline(deadline); err != nil {
+		return err
 	}
-	c.closeM.Unlock()
-
-	if initiated {
-		defer c.shutdown(nil)
-		if err := c.setDeadline(deadline); err != nil {
-			return err
-		}
-		handshakeErr = c.call(
-			&connectionClose{
-				ReplyCode: replySuccess,
-				ReplyText: "kthxbai",
-			},
-			&connectionCloseOk{},
-		)
-	}
-	if !initiated {
-		return ErrClosed
-	}
-	return handshakeErr
+	return c.call(
+		&connectionClose{
+			ReplyCode: replySuccess,
+			ReplyText: "kthxbai",
+		},
+		&connectionCloseOk{},
+	)
 }
 
 func (c *Connection) closeWith(err *Error) error {
+	c.closeRecovery() // Stop any active recovery process
+
+	// See Close() for why closeInit must be marked before racing for
+	// c.reconnecting below.
+	c.closeM.Lock()
+	initiated := !c.closeInit
+	c.closeInit = true
+	c.closeM.Unlock()
+
+	if !initiated {
+		return ErrClosed
+	}
+
+	// See Close() for why this waits on an in-flight Reconnect().
+	c.reconnecting.Lock()
+	defer c.reconnecting.Unlock()
+
 	if c.IsClosed() {
 		return ErrClosed
 	}
 
-	var handshakeErr error
-	var initiated bool
-
-	c.closeM.Lock()
-	if !c.closeInit {
-		c.closeInit = true
-		initiated = true
-	}
-	c.closeM.Unlock()
-
-	if initiated {
-		defer c.shutdown(err)
-		handshakeErr = c.call(
-			&connectionClose{
-				ReplyCode: uint16(err.Code),
-				ReplyText: err.Reason,
-			},
-			&connectionCloseOk{},
-		)
-	}
-	if !initiated {
-		return ErrClosed
-	}
-	return handshakeErr
+	defer c.shutdown(err)
+	return c.call(
+		&connectionClose{
+			ReplyCode: uint16(err.Code),
+			ReplyText: err.Reason,
+		},
+		&connectionCloseOk{},
+	)
 }
 
 // IsClosed returns true if the connection is marked as closed, otherwise false
@@ -825,16 +839,6 @@ func (c *Connection) shutdown(err *Error) {
 	// Shutdown handler goroutine can still receive the result.
 	close(c.errors)
 
-	if err == nil || !c.IsRecoveryEnabled() {
-		for _, listener := range c.closes {
-			close(listener)
-		}
-		for _, block := range c.blocks {
-			close(block)
-		}
-		c.closes, c.blocks = nil, nil // nil to prevent double-close
-	}
-
 	// Shutdown the channel, but do not use closeChannel() as it calls
 	// releaseChannel() which requires the connection lock.
 	//
@@ -849,15 +853,11 @@ func (c *Connection) shutdown(err *Error) {
 	close(c.close)
 
 	if err == nil || !c.IsRecoveryEnabled() {
-		c.channels = nil
-		c.allocator = nil
-		c.noNotify = true
-
 		var e error
 		if err != nil {
 			e = fmt.Errorf("connection shutdown error: %w", err) // errors.As(e, &target) still unwraps to *Error
 		}
-		c.lifeCycle.SetState(StateClosed, e)
+		c.closeResources(e)
 	}
 }
 
@@ -1457,6 +1457,39 @@ func negotiateFrameSize(client, server int) int {
 	return size
 }
 
+// closeResources closes and clears the Connection's close/block/recovery-cancel
+// notification listeners, tears down the channel registry, and transitions the
+// lifecycle to StateClosed with the given (already-wrapped) error. Shared by
+// shutdown() and cleanup() — callers must hold c.m and c.notifyM. It's fine
+// for this to run more than once (e.g. both callers reaching it for the same
+// Connection): every field it touches is nilled out before returning, so a
+// repeat call just ranges over nil slices/maps and re-sets the same state.
+func (c *Connection) closeResources(err error) {
+	for _, listener := range c.closes {
+		close(listener)
+	}
+	for _, block := range c.blocks {
+		close(block)
+	}
+	for _, listener := range c.recoveryCancels {
+		close(listener)
+	}
+	// nil to prevent double-close
+	c.closes = nil
+	c.blocks = nil
+	c.recoveryCancels = nil
+	c.channels = nil
+	c.allocator = nil
+
+	c.noNotify = true
+
+	c.topologyM.Lock()
+	c.topologyConfiguration = nil
+	c.topologyM.Unlock()
+
+	c.lifeCycle.SetState(StateClosed, err)
+}
+
 // cleanup releases registered resources and performs final teardown of the connection.
 func (c *Connection) cleanup(err error) {
 	c.m.Lock()
@@ -1465,37 +1498,16 @@ func (c *Connection) cleanup(err error) {
 	c.notifyM.Lock()
 	defer c.notifyM.Unlock()
 
-	for _, listener := range c.closes {
-		close(listener)
-	}
-	for _, block := range c.blocks {
-		close(block)
-	}
-	c.closes, c.blocks = nil, nil // nil to prevent double-close
-
 	for _, ch := range c.channels {
 		ch.cleanup(err)
 	}
-
-	for _, listener := range c.recoveryCancels {
-		close(listener)
-	}
-
-	c.recoveryCancels = nil
-	c.channels = nil
-	c.allocator = nil
-	c.noNotify = true
-
-	c.topologyM.Lock()
-	c.topologyConfiguration = nil
-	c.topologyM.Unlock()
 
 	var e error
 	if err != nil {
 		e = fmt.Errorf("connection cleanup error: %w", err)
 	}
 
-	c.lifeCycle.SetState(StateClosed, e)
+	c.closeResources(e)
 }
 
 // watchConnection watches the connection for close events and triggers recovery if needed.
@@ -1524,6 +1536,15 @@ func (c *Connection) Reconnect() error {
 
 	c.reconnecting.Lock()
 	defer c.reconnecting.Unlock()
+
+	// Re-check: Close()/CloseDeadline() may have marked closeInit and be
+	// racing us for c.reconnecting between our IsRecoveryEnabled() check above
+	// and this point. Without this, we could resurrect a connection whose
+	// Close() call already returned ErrClosed to the caller, leaving it with
+	// no way to ever close the connection we're about to rebuild.
+	if !c.IsRecoveryEnabled() {
+		return ErrClosed
+	}
 
 	if !c.IsClosed() {
 		return nil
@@ -1594,6 +1615,22 @@ func (c *Connection) Reconnect() error {
 		c.closeM.Lock()
 		c.m.Lock()
 
+		// Re-check closeInit: Close()/CloseDeadline()/closeWith() may have set
+		// it while we were dialing/handshaking above, before we grabbed these
+		// locks. Bail out here rather than swapping in the new connection and
+		// starting a reader for it — otherwise Phase 1 below would reject the
+		// channel reconnects anyway (IsRecoveryEnabled() is false once closeInit
+		// is set), leaving us to tear down the connection we just built for
+		// nothing: the open() handshake wasted, and the reader goroutine we just
+		// started immediately killed by closing the socket out from under it.
+		if c.closeInit {
+			c.m.Unlock()
+			c.closeM.Unlock()
+			c.destructorM.Unlock()
+			conn.Close()
+			return ErrClosed
+		}
+
 		// Swap the connection
 		c.conn = conn
 		c.writer = &writer{bufio.NewWriter(conn)}
@@ -1662,13 +1699,12 @@ func (c *Connection) Reconnect() error {
 	return err
 }
 
-// resetState clears the shutdown and close flags and re-initializes the internal
-// channels so the connection can be reused after a successful reconnection.
-// The caller must hold c.destructorM, c.closeM and c.m.
+// resetState clears the shutdown flag and re-initializes the internal channels
+// so the connection can be reused after a successful reconnection.
+// The caller must hold c.destructorM and c.m.
 func (c *Connection) resetState() {
 	c.closed.Store(false)
 	c.destructed = false
-	c.closeInit = false
 
 	c.errors = make(chan *Error, 1)
 	c.close = make(chan struct{})

@@ -63,7 +63,7 @@ should be discarded and a new channel established.
 type Channel struct {
 	destructorM sync.Mutex   // Mutex for destroying the channel.
 	destructed  bool         // Will be true if the channel has been destroyed, false otherwise.
-	cleanedUp   atomic.Bool  // Thread-safe atomic boolean to track final cleanup status
+	closeOnce   sync.Once    // Ensures closeResources() runs at most once, however it's reached.
 	m           sync.Mutex   // Mutex for the channel.
 	notifyM     sync.RWMutex // Mutex for the notify state.
 
@@ -113,6 +113,8 @@ type Channel struct {
 
 	reconnecting sync.Mutex // Mutex for reconnecting channel.
 	lifeCycle    *lifeCycle // The current state of the channel.
+
+	closeInit atomic.Bool // Set by Close() before racing for reconnecting; see reconnectChannel().
 
 	// recoveringTopology is true while a recoverConnectionTopology pass owns
 	// this channel's reopen/redeclare sequence. watchChannel's NotifyClose
@@ -303,53 +305,15 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 	}
 
+	close(ch.errors)
+	close(ch.close)
+
 	if e == nil || !ch.connection.IsRecoveryEnabled() {
-		ch.consumers.close()
-
-		for _, c := range ch.closes {
-			close(c)
-		}
-
-		for _, c := range ch.flows {
-			close(c)
-		}
-
-		for _, c := range ch.returns {
-			close(c)
-		}
-
-		for _, c := range ch.cancels {
-			close(c)
-		}
-
-		for _, c := range ch.recoveryCancels {
-			close(c)
-		}
-
-		// Set the slices to nil to prevent the dispatch() range from sending on
-		// the now closed channels after we release the notifyM mutex
-		ch.recoveryCancels = nil
-		ch.flows = nil
-		ch.closes = nil
-		ch.returns = nil
-		ch.cancels = nil
-
-		if ch.confirms != nil {
-			ch.confirms.Close()
-		}
-
-		close(ch.errors)
-		close(ch.close)
-		ch.noNotify = true
-
 		var err error
 		if e != nil {
 			err = fmt.Errorf("channel shutdown error: %w", e) // errors.As(err, &target) still unwraps to *Error
 		}
-		ch.lifeCycle.SetState(StateClosed, err)
-	} else {
-		close(ch.errors)
-		close(ch.close)
+		ch.closeResources(err)
 	}
 }
 
@@ -688,6 +652,22 @@ It is safe to call this method multiple times.
 */
 func (ch *Channel) Close() error {
 	ch.closeRecovery() // Stop any active recovery process
+
+	// Mark close-intent before racing for ch.reconnecting below. If
+	// reconnectChannel() hasn't started yet (e.g. it hasn't reached
+	// ch.reconnecting.Lock() and so closeRecovery() above found no cancel
+	// channel to close), it has no other way to learn a close was
+	// requested. reconnectChannel() re-checks this immediately after
+	// acquiring ch.reconnecting, so setting it first guarantees it aborts
+	// instead of running its full retry loop while this call waits behind
+	// it. See Connection.Close() for the analogous connection-level fix.
+	ch.closeInit.Store(true)
+
+	// Wait for any in-flight reconnectChannel() to fully settle before
+	// inspecting/tearing down state. See Connection.Close() for the analogous
+	// connection-level race this prevents.
+	ch.reconnecting.Lock()
+	defer ch.reconnecting.Unlock()
 
 	if ch.IsClosed() {
 		return nil
@@ -2217,14 +2197,58 @@ func (ch *Channel) GetNextPublishSeqNo() uint64 {
 	return ch.confirms.published + 1
 }
 
+// closeResources performs the final teardown of a Channel's consumers,
+// notify listeners, and confirms, then transitions the lifecycle to
+// StateClosed with the given (already-wrapped) error. Shared by shutdown()
+// and cleanup(), both of which can independently decide to invoke it for the
+// same Channel — ch.closeOnce ensures the teardown itself, and the resulting
+// state transition, happens exactly once no matter which caller gets here
+// first. Callers must hold ch.m and ch.notifyM.
+func (ch *Channel) closeResources(err error) {
+	ch.closeOnce.Do(func() {
+		ch.consumers.close()
+
+		for _, c := range ch.closes {
+			close(c)
+		}
+
+		for _, c := range ch.flows {
+			close(c)
+		}
+
+		for _, c := range ch.returns {
+			close(c)
+		}
+
+		for _, c := range ch.cancels {
+			close(c)
+		}
+
+		for _, c := range ch.recoveryCancels {
+			close(c)
+		}
+
+		// Set the slices to nil to prevent the dispatch() range from sending on
+		// the now closed channels after we release the notifyM mutex
+		ch.recoveryCancels = nil
+		ch.flows = nil
+		ch.closes = nil
+		ch.returns = nil
+		ch.cancels = nil
+
+		if ch.confirms != nil {
+			ch.confirms.Close()
+		}
+
+		ch.noNotify = true
+
+		ch.lifeCycle.SetState(StateClosed, err)
+	})
+}
+
 // cleanup closes all the channels and the confirms.
 func (ch *Channel) cleanup(e error) {
 	ch.setClosed() // Ensure ch.IsClosed() returns true globally
-
-	// If it returns false, it means cleanedUp was already true (cleanup already ran).
-	if !ch.cleanedUp.CompareAndSwap(false, true) {
-		return
-	}
 
 	ch.destructorM.Lock()
 	ch.destructed = true // Lock out any future transport shutdowns as well
@@ -2236,46 +2260,12 @@ func (ch *Channel) cleanup(e error) {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
-	ch.consumers.close()
-
-	for _, c := range ch.closes {
-		close(c)
-	}
-
-	for _, c := range ch.flows {
-		close(c)
-	}
-
-	for _, c := range ch.returns {
-		close(c)
-	}
-
-	for _, c := range ch.cancels {
-		close(c)
-	}
-
-	for _, c := range ch.recoveryCancels {
-		close(c)
-	}
-
-	ch.recoveryCancels = nil
-	ch.flows = nil
-	ch.closes = nil
-	ch.returns = nil
-	ch.cancels = nil
-
-	if ch.confirms != nil {
-		ch.confirms.Close()
-	}
-
-	ch.noNotify = true
-
 	var err error
 	if e != nil {
 		err = fmt.Errorf("channel cleanup error: %w", e)
 	}
 
-	ch.lifeCycle.SetState(StateClosed, err)
+	ch.closeResources(err)
 }
 
 // watchChannel watches the channel for close events and triggers recovery if needed.
@@ -2325,6 +2315,15 @@ func (ch *Channel) Reconnect() error {
 // whether to send a channel.close courtesy frame to the broker before the next
 // retry (meaningful only when open succeeded but setup then failed).
 func (ch *Channel) openChannelSession() (openSucceeded bool, err error) {
+	// Close() may have marked closeInit and be racing us for ch.reconnecting;
+	// both callers hold that mutex, so this check is the single point that
+	// keeps either from resurrecting a channel Close() already committed to
+	// closing. See reconnectChannel() for the analogous per-caller check this
+	// supersedes.
+	if ch.closeInit.Load() {
+		return false, ErrClosed
+	}
+
 	// 1. Reset client-side state
 	ch.destructorM.Lock()
 	ch.m.Lock()
@@ -2388,6 +2387,20 @@ func (ch *Channel) reconnectChannel() error {
 
 	ch.reconnecting.Lock()
 	defer ch.reconnecting.Unlock()
+
+	// Re-check: Close() may have marked closeInit and be racing us for
+	// ch.reconnecting between our check above and this point — in
+	// particular, its earlier closeRecovery() call runs before we've
+	// registered a cancel channel below, so that signal alone would
+	// otherwise be lost. This is a fast-path optimization on top of the
+	// authoritative check in openChannelSession(): without it, a
+	// reconnectChannel() that wins the race would still run its full retry
+	// loop (with backoff) before openChannelSession() rejects each attempt,
+	// instead of returning immediately. See Connection.Reconnect() for the
+	// analogous connection-level race.
+	if ch.closeInit.Load() {
+		return ErrClosed
+	}
 
 	if !ch.IsClosed() {
 		return nil

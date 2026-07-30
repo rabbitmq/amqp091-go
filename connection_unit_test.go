@@ -5,12 +5,16 @@
 package amqp091
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -149,6 +153,221 @@ func TestReconnectRestoresSASLCredentials(t *testing.T) {
 
 	if restoredPa.Username != "user" || restoredPa.Password != "mysecretpassword" {
 		t.Errorf("expected restored credentials to be user:mysecretpassword, got %s:%s", restoredPa.Username, restoredPa.Password)
+	}
+}
+
+type dummyReadWriteCloser struct{}
+
+func (d dummyReadWriteCloser) Read(p []byte) (n int, err error)  { return 0, nil }
+func (d dummyReadWriteCloser) Write(p []byte) (n int, err error) { return len(p), nil }
+func (d dummyReadWriteCloser) Close() error                      { return nil }
+
+// fakeNetConn adapts an io.ReadWriteCloser (e.g. the in-memory pipe used by
+// newSession) to net.Conn, so it can be returned from a Config.Dial mock and
+// drive Reconnect() against a fake in-process broker instead of a real socket.
+type fakeNetConn struct {
+	io.ReadWriteCloser
+}
+
+func (fakeNetConn) LocalAddr() net.Addr              { return fakeAddr{} }
+func (fakeNetConn) RemoteAddr() net.Addr             { return fakeAddr{} }
+func (fakeNetConn) SetDeadline(time.Time) error      { return nil }
+func (fakeNetConn) SetReadDeadline(time.Time) error  { return nil }
+func (fakeNetConn) SetWriteDeadline(time.Time) error { return nil }
+
+type fakeAddr struct{}
+
+func (fakeAddr) Network() string { return "fake" }
+func (fakeAddr) String() string  { return "fake" }
+
+// TestCloseWaitsForInFlightReconnectThenClosesRecoveredConnection forces the
+// primary race Close()/Reconnect() must handle: Close() is called while
+// Reconnect() is actively rebuilding the connection — past its closeInit
+// check, mid AMQP handshake with the broker — not merely queued behind it
+// before it started. Unlike TestReconnectAbortsWhenCloseWonTheRace (which
+// covers Close() winning the race before Reconnect() begins), this drives
+// Reconnect() all the way to a successful, live connection while Close() is
+// blocked, to prove Close() doesn't race past a stale IsClosed() snapshot
+// and instead correctly tears down the connection Reconnect() rebuilt —
+// rather than returning ErrClosed early and leaking the new reader and
+// heartbeater goroutines.
+func TestCloseWaitsForInFlightReconnectThenClosesRecoveredConnection(t *testing.T) {
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { _ = rwc.Close() })
+
+	conn := &Connection{
+		url:                   "amqp://guest:guest@localhost:5672/",
+		conn:                  dummyReadWriteCloser{},
+		writer:                &writer{bufio.NewWriter(&bytes.Buffer{})},
+		channels:              make(map[uint16]*Channel),
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+		rpc:                   make(chan message),
+		sends:                 make(chan time.Time, 100),
+		errors:                make(chan *Error, 1),
+		close:                 make(chan struct{}),
+		deadlines:             make(chan readDeadliner, 100),
+		lifeCycle:             newLifeCycle(),
+		Config: Config{
+			Vhost:  "/",
+			Locale: defaultLocale,
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount: 3,
+					RetryInterval: time.Millisecond,
+				},
+			},
+			Dial: func(network, addr string) (net.Conn, error) {
+				return fakeNetConn{rwc}, nil
+			},
+		},
+	}
+	conn.lifeCycle.SetState(StateOpen, nil)
+	conn.closed.Store(true) // simulate: connection is mid-drop, not yet reconnected
+
+	handshakeStarted := make(chan struct{})
+	proceedWithHandshake := make(chan struct{})
+	go func() {
+		srv.expectAMQP()
+		close(handshakeStarted)
+		<-proceedWithHandshake
+		srv.connectionStart()
+		srv.connectionTune()
+		srv.recv(0, &connectionOpen{})
+		srv.send(0, &connectionOpenOk{})
+		// Serve the close handshake the blocked Close() call below will send
+		// once Reconnect() finishes and releases c.reconnecting.
+		srv.recv(0, &connectionClose{})
+		srv.send(0, &connectionCloseOk{})
+	}()
+
+	reconnectDone := make(chan error, 1)
+	go func() { reconnectDone <- conn.Reconnect() }()
+
+	select {
+	case <-handshakeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reconnect() never reached the AMQP handshake")
+	}
+
+	// At this point Reconnect() has already swapped in the new connection,
+	// released destructorM/closeM/m, and started the new reader goroutine —
+	// it's now blocked in c.open() waiting on the broker, but still holds
+	// c.reconnecting for the rest of the call.
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- conn.Close() }()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close() returned (%v) before Reconnect() finished — it must wait on c.reconnecting", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(proceedWithHandshake)
+
+	select {
+	case err := <-reconnectDone:
+		if err != nil {
+			t.Fatalf("Reconnect() returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reconnect() did not complete after the handshake was allowed to proceed")
+	}
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() did not unblock/complete after Reconnect() released c.reconnecting")
+	}
+
+	if !conn.IsClosed() {
+		t.Fatal("expected the rebuilt connection to be closed after Close() completed")
+	}
+}
+
+// TestReconnectAbortsWhenCloseWonTheRace forces the exact interleaving that
+// Close()/Reconnect() must handle: Reconnect() passes its top-of-function
+// IsRecoveryEnabled() check *before* Close() marks closeInit, then blocks
+// trying to acquire c.reconnecting (held here to control timing). Close()
+// then marks closeInit and the lock is released, so Reconnect() must
+// re-check closeInit immediately after acquiring the lock and abort, rather
+// than proceeding into the retry loop (or worse, silently returning nil
+// without having reconnected anything, which would skip the cleanup() that
+// DefaultConnectionRecovery.OnConnectionClose triggers on a non-nil error).
+func TestReconnectAbortsWhenCloseWonTheRace(t *testing.T) {
+	var buf bytes.Buffer
+	var dialCalled atomic.Bool
+	conn := &Connection{
+		conn:      dummyReadWriteCloser{},
+		writer:    &writer{bufio.NewWriter(&buf)},
+		rpc:       make(chan message, 2),
+		close:     make(chan struct{}),
+		errors:    make(chan *Error, 1),
+		sends:     make(chan time.Time, 100),
+		deadlines: make(chan readDeadliner, 100),
+		lifeCycle: newLifeCycle(),
+		Config: Config{
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount: 5,
+					RetryInterval: time.Millisecond,
+				},
+			},
+			// The dialer is only ever reached from inside the retry loop,
+			// which sits after the closeInit re-check.
+			// If it's ever invoked, Reconnect() didn't bail out where expected.
+			Dial: func(network, addr string) (net.Conn, error) {
+				dialCalled.Store(true)
+				return nil, errors.New("dial should not have been attempted")
+			},
+		},
+	}
+	conn.lifeCycle.SetState(StateOpen, nil)
+	conn.closed.Store(true) // simulate: connection is mid-drop, not yet reconnected
+
+	// Hold c.reconnecting ourselves so Reconnect() (started below) passes its
+	// top IsRecoveryEnabled() check (closeInit is still false) and then
+	// blocks waiting for this same lock.
+	conn.reconnecting.Lock()
+
+	reconnectDone := make(chan error, 1)
+	go func() {
+		reconnectDone <- conn.Reconnect()
+	}()
+
+	// Give the goroutine time to pass the top check and start blocking on
+	// c.reconnecting.
+	time.Sleep(100 * time.Millisecond)
+
+	// Simulate Close() winning the race: mark closeInit while Reconnect() is
+	// still blocked waiting for the lock we hold.
+	conn.closeM.Lock()
+	conn.closeInit = true
+	conn.closeM.Unlock()
+
+	// Release the lock — Reconnect() can now proceed and must re-check
+	// closeInit immediately.
+	conn.reconnecting.Unlock()
+
+	select {
+	case err := <-reconnectDone:
+		if err != ErrClosed {
+			t.Fatalf("expected ErrClosed, got %v", err)
+		}
+		// c.lifeCycle.SetState(StateReconnecting, ...) only happens after the
+		// closeInit re-check, i.e. only if Reconnect() proceeded into the
+		// retry loop. Seeing anything other than the StateOpen we set above
+		// means it didn't bail out where we expect.
+		if state := conn.lifeCycle.State(); state != StateOpen {
+			t.Fatalf("expected lifecycle state to remain StateOpen (Reconnect() should not have touched it), got %v", state)
+		}
+		if dialCalled.Load() {
+			t.Fatal("Reconnect() invoked the dialer — it proceeded into the retry loop instead of catching closeInit immediately")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reconnect() did not return within 2s — it did not abort on closeInit and is stuck in its retry loop")
 	}
 }
 
