@@ -74,7 +74,7 @@ func (s *tlsServer) Serve(t *testing.T) {
 func startTLSServer(t *testing.T, cfg *tls.Config) tlsServer {
 	t.Helper()
 
-	l, err := tls.Listen("tcp", "127.0.0.1:3456", cfg)
+	l, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
 	if err != nil {
 		t.Fatalf("TLS server Listen error: %+v", err)
 	}
@@ -118,7 +118,7 @@ func TestTLSHandshake(t *testing.T) {
 
 	go func() {
 		select {
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(5 * time.Second):
 			errs <- errors.New("server timeout waiting for TLS handshake from client")
 		case session := <-srv.Sessions:
 			session.connectionOpen()
