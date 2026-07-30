@@ -2488,7 +2488,6 @@ func (ch *Channel) setupChannelBasic() error {
 func (ch *Channel) resetState() {
 	ch.closed.Store(false)
 	ch.destructed = false
-	ch.closeInit.Store(false)
 
 	ch.errors = make(chan *Error, 1)
 	ch.close = make(chan struct{})

@@ -1615,6 +1615,22 @@ func (c *Connection) Reconnect() error {
 		c.closeM.Lock()
 		c.m.Lock()
 
+		// Re-check closeInit: Close()/CloseDeadline()/closeWith() may have set
+		// it while we were dialing/handshaking above, before we grabbed these
+		// locks. Bail out here rather than swapping in the new connection and
+		// starting a reader for it — otherwise Phase 1 below would reject the
+		// channel reconnects anyway (IsRecoveryEnabled() is false once closeInit
+		// is set), leaving us to tear down the connection we just built for
+		// nothing: the open() handshake wasted, and the reader goroutine we just
+		// started immediately killed by closing the socket out from under it.
+		if c.closeInit {
+			c.m.Unlock()
+			c.closeM.Unlock()
+			c.destructorM.Unlock()
+			conn.Close()
+			return ErrClosed
+		}
+
 		// Swap the connection
 		c.conn = conn
 		c.writer = &writer{bufio.NewWriter(conn)}
@@ -1683,13 +1699,12 @@ func (c *Connection) Reconnect() error {
 	return err
 }
 
-// resetState clears the shutdown and close flags and re-initializes the internal
-// channels so the connection can be reused after a successful reconnection.
-// The caller must hold c.destructorM, c.closeM and c.m.
+// resetState clears the shutdown flag and re-initializes the internal channels
+// so the connection can be reused after a successful reconnection.
+// The caller must hold c.destructorM and c.m.
 func (c *Connection) resetState() {
 	c.closed.Store(false)
 	c.destructed = false
-	c.closeInit = false
 
 	c.errors = make(chan *Error, 1)
 	c.close = make(chan struct{})
