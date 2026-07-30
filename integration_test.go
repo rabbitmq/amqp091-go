@@ -2812,6 +2812,7 @@ func integrationQueue(t *testing.T, name string) (*Connection, *Channel) {
 				return conn, channel
 			}
 		}
+		_ = conn.Close()
 	}
 	return nil, nil
 }
