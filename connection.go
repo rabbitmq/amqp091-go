@@ -536,6 +536,52 @@ func (c *Connection) NotifyBlocked(receiver chan Blocking) chan Blocking {
 	return receiver
 }
 
+// beginClose marks close-intent, waits out any in-flight Reconnect(), transitions
+// the lifecycle to StateClosing, and reports whether the caller should proceed.
+// Shared prologue for Close()/CloseDeadline()/closeWith().
+//
+// On a non-nil error (always ErrClosed), the caller must return it
+// immediately — a concurrent close already won the race, or the connection
+// was already closed. On success, the caller must defer the returned unlock
+// func to release c.reconnecting.
+func (c *Connection) beginClose() (unlock func(), err error) {
+	c.closeRecovery() // Stop any active recovery process
+
+	// Mark close-intent before racing for c.reconnecting below. If Reconnect()
+	// hasn't started yet (e.g. it hasn't reached c.reconnecting.Lock() and so
+	// closeRecovery() above found no cancel channel to close), it has no other
+	// way to learn a close was requested. Reconnect() re-checks closeInit
+	// immediately after acquiring c.reconnecting, so setting this first
+	// guarantees it aborts instead of resurrecting the connection after this
+	// call has already returned ErrClosed to the caller.
+	c.closeM.Lock()
+	initiated := !c.closeInit
+	c.closeInit = true
+	c.closeM.Unlock()
+
+	if !initiated {
+		return nil, ErrClosed
+	}
+
+	// Wait for any in-flight Reconnect() to fully settle (succeed or exhaust
+	// retries) before inspecting/tearing down state. Reconnect() holds this
+	// mutex for its entire duration, so without this, the caller could race
+	// past a stale IsClosed() snapshot while Reconnect() is still redialing
+	// and reopening channels, tearing down state that Reconnect() then
+	// rebuilds on top of, orphaning the newly spawned reader/heartbeater
+	// goroutines.
+	c.reconnecting.Lock()
+
+	if c.IsClosed() {
+		c.reconnecting.Unlock()
+		return nil, ErrClosed
+	}
+
+	c.lifeCycle.SetState(StateClosing, nil)
+
+	return c.reconnecting.Unlock, nil
+}
+
 /*
 Close requests and waits for the response to close the AMQP connection.
 
@@ -550,38 +596,11 @@ including the underlying io, Channels, Notify listeners and Channel consumers
 will also be closed.
 */
 func (c *Connection) Close() error {
-	c.closeRecovery() // Stop any active recovery process
-
-	// Mark close-intent before racing for c.reconnecting below. If Reconnect()
-	// hasn't started yet (e.g. it hasn't reached c.reconnecting.Lock() and so
-	// closeRecovery() above found no cancel channel to close), it has no other
-	// way to learn a close was requested. Reconnect() re-checks closeInit
-	// (via IsRecoveryEnabled()) immediately after acquiring c.reconnecting, so
-	// setting this first guarantees it aborts instead of resurrecting the
-	// connection after this call has already returned ErrClosed to the caller.
-	c.closeM.Lock()
-	initiated := !c.closeInit
-	c.closeInit = true
-	c.closeM.Unlock()
-
-	if !initiated {
-		return ErrClosed
+	unlock, err := c.beginClose()
+	if err != nil {
+		return err
 	}
-
-	// Wait for any in-flight Reconnect() to fully settle (succeed or exhaust
-	// retries) before inspecting/tearing down state. Reconnect() holds this
-	// mutex for its entire duration, so without this, Close() can race past a
-	// stale IsClosed() snapshot while Reconnect() is still redialing and
-	// reopening channels, tearing down state that Reconnect() then rebuilds
-	// on top of, orphaning the newly spawned reader/heartbeater goroutines.
-	c.reconnecting.Lock()
-	defer c.reconnecting.Unlock()
-
-	if c.IsClosed() {
-		return ErrClosed
-	}
-
-	c.lifeCycle.SetState(StateClosing, nil)
+	defer unlock()
 
 	defer c.shutdown(nil)
 	return c.call(
@@ -612,26 +631,11 @@ func (c *Connection) Close() error {
 // c.reconnecting, this call blocks behind it first — that wait is not covered by
 // deadline and can run for the duration of Reconnect()'s full retry loop.
 func (c *Connection) CloseDeadline(deadline time.Time) error {
-	c.closeRecovery() // Stop any active recovery process
-
-	// See Close() for why closeInit must be marked before racing for
-	// c.reconnecting below.
-	c.closeM.Lock()
-	initiated := !c.closeInit
-	c.closeInit = true
-	c.closeM.Unlock()
-
-	if !initiated {
-		return ErrClosed
+	unlock, err := c.beginClose()
+	if err != nil {
+		return err
 	}
-
-	// See Close() for why this waits on an in-flight Reconnect().
-	c.reconnecting.Lock()
-	defer c.reconnecting.Unlock()
-
-	if c.IsClosed() {
-		return ErrClosed
-	}
+	defer unlock()
 
 	defer c.shutdown(nil)
 	if err := c.setDeadline(deadline); err != nil {
@@ -647,26 +651,11 @@ func (c *Connection) CloseDeadline(deadline time.Time) error {
 }
 
 func (c *Connection) closeWith(err *Error) error {
-	c.closeRecovery() // Stop any active recovery process
-
-	// See Close() for why closeInit must be marked before racing for
-	// c.reconnecting below.
-	c.closeM.Lock()
-	initiated := !c.closeInit
-	c.closeInit = true
-	c.closeM.Unlock()
-
-	if !initiated {
-		return ErrClosed
+	unlock, beginErr := c.beginClose()
+	if beginErr != nil {
+		return beginErr
 	}
-
-	// See Close() for why this waits on an in-flight Reconnect().
-	c.reconnecting.Lock()
-	defer c.reconnecting.Unlock()
-
-	if c.IsClosed() {
-		return ErrClosed
-	}
+	defer unlock()
 
 	defer c.shutdown(err)
 	return c.call(
