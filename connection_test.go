@@ -347,7 +347,24 @@ func TestConnection_Close_WhenMemoryAlarmIsActive(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = rabbitmqctl(t, "set_vm_memory_high_watermark", "0.4")
-		conn, ch := integrationQueue(t, t.Name())
+
+		// The broker does not lift the memory alarm instantaneously after the
+		// watermark is reset, so retry until a connection/channel can be
+		// established rather than flaking on a transient nil channel.
+		var conn *Connection
+		var ch *Channel
+		deadline := time.Now().Add(time.Second * 10)
+		for time.Now().Before(deadline) {
+			conn, ch = integrationQueue(t, t.Name())
+			if conn != nil && ch != nil {
+				break
+			}
+			time.Sleep(time.Millisecond * 500)
+		}
+		if conn == nil || ch == nil {
+			t.Fatal("timed out waiting for broker to accept connections after clearing memory alarm")
+		}
+
 		integrationQueueDelete(t, ch, t.Name())
 		_ = ch.Close()
 		_ = conn.Close()
