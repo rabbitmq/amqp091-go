@@ -1529,7 +1529,7 @@ func (c *Connection) watchConnection() {
 // and recovers both connection and channel states.
 // It performs a retry loop to dial the broker, negotiate the AMQP handshake, and recover all
 // active channels and their registered consumers sequentially.
-func (c *Connection) Reconnect() error {
+func (c *Connection) Reconnect() (err error) {
 	if !c.IsRecoveryEnabled() {
 		return ErrClosed
 	}
@@ -1550,11 +1550,26 @@ func (c *Connection) Reconnect() error {
 		return nil
 	}
 
+	// resetState() below flips c.closed to false mid-attempt so open() and
+	// channel recovery can send frames on the new connection. If this attempt
+	// then fails or is aborted, leaving c.closed false would let a
+	// concurrently-blocked Close() (which waits on c.reconnecting for us to
+	// settle) mistake the dead connection for a live one once we return.
+	// Guarantee the invariant here instead of at every failure/abort return
+	// site below: any non-nil return means the connection is closed. Registered
+	// only past the guard clauses above, so it can't fire for a connection
+	// that was never actually touched by this attempt (already open, or
+	// recovery disabled/closing).
+	defer func() {
+		if err != nil {
+			c.closed.Store(true)
+		}
+	}()
+
 	c.lifeCycle.SetState(StateReconnecting, nil)
 
 	cancelCh := c.NotifyRecoveryCancel(make(chan struct{}))
 
-	var err error
 	for i := 0; i < c.MaxRetryCount(); i++ {
 		Logger.Printf("Connection recovery attempt %d of %d", i+1, c.MaxRetryCount())
 		jitter := time.Duration(rand.Intn(500)) * time.Millisecond // Random 500ms jitter to avoid thundering herd
@@ -1694,7 +1709,6 @@ func (c *Connection) Reconnect() error {
 	if c.conn != nil {
 		c.conn.Close()
 	}
-	c.closed.Store(true)
 
 	return err
 }

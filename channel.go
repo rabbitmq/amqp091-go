@@ -2444,8 +2444,13 @@ func (ch *Channel) reconnectChannel() error {
 				// gracefully close the broker-side session before the next attempt.
 				// channelClose must be sent before setClosed()
 				_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Recovery retry"}, &channelCloseOk{})
-				ch.setClosed()
 			}
+			// resetState() in openChannelSession() already flipped ch.closed
+			// to false for this attempt; restore it here on any failure
+			// (including open() itself failing, opened == false) so a
+			// concurrently-blocked Close() doesn't mistake the dead channel
+			// for a live one once reconnectChannel() gives up.
+			ch.setClosed()
 			continue
 		}
 
