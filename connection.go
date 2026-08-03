@@ -1529,6 +1529,15 @@ func (c *Connection) watchConnection() {
 // and recovers both connection and channel states.
 // It performs a retry loop to dial the broker, negotiate the AMQP handshake, and recover all
 // active channels and their registered consumers sequentially.
+//
+// Applications must coordinate with in-progress recovery rather than calling into the
+// Connection unconditionally: register NotifyStateChange and hold off on new connection-level
+// calls (e.g. Channel(), UpdateSecret()) until state is StateOpen again. In order to initiate
+// the AMQP handshake below, IsClosed() will momentarily return false before c.open actually
+// completes it — a connection-level call made in that window, without waiting for StateOpen,
+// can interleave a frame with the handshake and cause the broker to reject it as a protocol
+// violation. Waiting for StateOpen via NotifyStateChange before issuing new connection-level
+// calls avoids this entirely.
 func (c *Connection) Reconnect() (err error) {
 	if !c.IsRecoveryEnabled() {
 		return ErrClosed
