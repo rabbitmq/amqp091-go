@@ -2502,6 +2502,15 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 					return skipped, fatal
 				}
 				ch.reopenIfClosed()
+
+				// basic.consume never reached the broker, so it will never send
+				// basic.cancel for this tag — synthesize the same local cleanup
+				// dispatch() does for a broker-initiated cancel, so the buffer
+				// goroutine and the caller's delivery channel don't leak forever.
+				ch.notifyM.RLock()
+				notifyAll(ch.cancels, tag)
+				ch.notifyM.RUnlock()
+				ch.consumers.cancel(tag)
 			}
 		}
 	}
