@@ -381,9 +381,12 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 		errors:                make(chan *Error, 1),
 		close:                 make(chan struct{}),
 		deadlines:             make(chan readDeadliner, 1),
-		Config:                config,
-		lifeCycle:             newLifeCycle(),
+		// TODO: Connection has Config and also an atomic int for MaxFrameSize. Duplication to simplify.
+		Config:    config,
+		lifeCycle: newLifeCycle(),
 	}
+	// Before max frame size is negotiated in Tune, the spec sets a ceiling of 4096 bytes
+	c.maxFrameSize.Store(frameMinSize)
 	go c.reader(conn)
 	err := c.open(config)
 	if err == nil {
@@ -1298,7 +1301,7 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	// minimum floor of frameMinSize (4096 bytes) to prevent malicious servers
 	// from forcing extreme fragmentation and CPU overhead.
 	c.Config.FrameSize = negotiateFrameSize(config.FrameSize, int(tune.FrameMax))
-	// This is the only place maxFrameSize is written. reader.ReadFrame relies on
+	// reader.ReadFrame relies on
 	// any nonzero value here being >= frameMinSize (negotiateFrameSize's floor)
 	// to safely subtract frameHeaderSize without underflow — keep it that way if
 	// another write path is ever added.

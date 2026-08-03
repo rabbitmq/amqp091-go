@@ -156,6 +156,75 @@ func TestReconnectRestoresSASLCredentials(t *testing.T) {
 	}
 }
 
+// TestOpenInitializesMaxFrameSize verifies that Open() initializes the atomic
+// maxFrameSize to frameMinSize before starting the reader goroutine. This ensures
+// the reader will reject oversized frames immediately, even before connection.tune
+// negotiates the actual frame size with the server, preventing a malicious server
+// from forcing large buffer allocations during the handshake.
+func TestOpenInitializesMaxFrameSize(t *testing.T) {
+	t.Parallel()
+
+	// Create a connection that reads EOF immediately to unblock the reader
+	pr, pw := io.Pipe()
+	pw.Close() // Close immediately so reader gets EOF
+
+	mockConn := struct {
+		io.Reader
+		io.Writer
+		io.Closer
+	}{
+		Reader: pr,
+		Writer: pw,
+		Closer: pr,
+	}
+
+	// Not checking error because it is expected to return EOF. However, Connection
+	// will be initialised, and that's all we care, so that we can check FrameSize
+	c, _ := Open(mockConn, Config{FrameSize: 8096}) // Any arbitrary max frame size that doesnt match minFrameSize
+	if c == nil {
+		t.Fatal("Open returned nil")
+	}
+
+	got := c.maxFrameSize.Load()
+	if got != uint32(frameMinSize) {
+		t.Errorf("maxFrameSize = %d, want %d (frameMinSize)", got, frameMinSize)
+	}
+}
+
+// TestOpenMaxFrameSizeIsNotZero verifies that after Open() initializes the connection,
+// maxFrameSize has been set to a non-zero value. This guards against a regression
+// where maxFrameSize initialization could be accidentally removed, leaving it at
+// the default zero value and allowing oversized frame allocations before negotiation.
+func TestOpenMaxFrameSizeIsNotZero(t *testing.T) {
+	t.Parallel()
+
+	// Create a connection that reads EOF immediately to unblock the reader
+	pr, pw := io.Pipe()
+	pw.Close() // Close immediately so reader gets EOF
+
+	mockConn := struct {
+		io.Reader
+		io.Writer
+		io.Closer
+	}{
+		Reader: pr,
+		Writer: pw,
+		Closer: pr,
+	}
+
+	// Not checking error because it is expected to return EOF. However, Connection
+	// will be initialised, and that's all we care, so that we can check FrameSize
+	c, _ := Open(mockConn, Config{})
+	if c == nil {
+		t.Fatal("Open returned nil")
+	}
+
+	got := c.maxFrameSize.Load()
+	if got == 0 {
+		t.Error("maxFrameSize was not initialized; still at zero value")
+	}
+}
+
 type dummyReadWriteCloser struct{}
 
 func (d dummyReadWriteCloser) Read(p []byte) (n int, err error)  { return 0, nil }
