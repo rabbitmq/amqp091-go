@@ -2380,6 +2380,14 @@ func (ch *Channel) reopenIfClosed() {
 
 // reconnectChannel opens a fresh channel on the broker and performs basic setup (QoS, Confirms).
 // It does NOT recover the channel's topology.
+//
+// Applications must coordinate with in-progress recovery rather than calling into the
+// Channel unconditionally: register NotifyStateChange and hold off on new operations on
+// this Channel until state is StateOpen again. In order to reopen the channel, IsClosed()
+// will momentarily return false before the channel.open handshake actually completes — a
+// call made on this Channel in that window, without waiting for StateOpen, can interleave a
+// frame with the handshake and cause the broker to reject it as a protocol violation.
+// Waiting for StateOpen via NotifyStateChange before issuing new calls avoids this entirely.
 func (ch *Channel) reconnectChannel() error {
 	if !ch.connection.IsRecoveryEnabled() {
 		return ErrClosed
@@ -2444,8 +2452,13 @@ func (ch *Channel) reconnectChannel() error {
 				// gracefully close the broker-side session before the next attempt.
 				// channelClose must be sent before setClosed()
 				_ = ch.call(&channelClose{ReplyCode: replySuccess, ReplyText: "Recovery retry"}, &channelCloseOk{})
-				ch.setClosed()
 			}
+			// resetState() in openChannelSession() already flipped ch.closed
+			// to false for this attempt; restore it here on any failure
+			// (including open() itself failing, opened == false) so a
+			// concurrently-blocked Close() doesn't mistake the dead channel
+			// for a live one once reconnectChannel() gives up.
+			ch.setClosed()
 			continue
 		}
 
