@@ -2813,3 +2813,241 @@ waitOpen:
 	}
 	t.Logf("Channel settled after %d RecoverTopology call(s), no further calls over %v", firstCount, 3*notifyTimeout)
 }
+
+// blockingTopologyRecovery wraps DefaultTopologyRecovery and holds an exclusive
+// consumer on targetQueue for the duration of the recovery pass, so the
+// recovery-time basic.consume for that queue fails with 403 ACCESS_REFUSED.
+//
+// The blocker is taken immediately before the pass and released immediately
+// after, which makes the failure deterministic (no sleeps or timing windows) and
+// guarantees the obstruction is gone before any subsequent recovery attempt.
+// Anything that is still missing afterwards is missing because recovery forgot
+// it, not because the broker is still refusing.
+// RecoverTopology runs on an internal recovery goroutine that can outlive the
+// test function, so it reports through Logger rather than testing.T, whose Logf
+// panics once the test has returned.
+type blockingTopologyRecovery struct {
+	targetQueue string
+	passes      int32
+}
+
+func (b *blockingTopologyRecovery) RecoverTopology(conn *Connection, channels []*Channel) ([]TopologyRecoveryEntity, error) {
+	// Only obstruct the first pass. Later passes run unobstructed so the test can
+	// tell "permanently forgotten" from "still blocked".
+	if atomic.AddInt32(&b.passes, 1) == 1 {
+		if blockerConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale}); err != nil {
+			Logger.Printf("test blocker: DialConfig failed: %v", err)
+		} else {
+			// Release as soon as this recovery pass returns, so the next attempt
+			// is unobstructed.
+			defer func() { _ = blockerConn.Close() }()
+
+			if blockerCh, err := blockerConn.Channel(); err != nil {
+				Logger.Printf("test blocker: Channel failed: %v", err)
+			} else if _, err := blockerCh.Consume(b.targetQueue, "recovery-blocker", true,
+				true /* exclusive */, false, false, nil); err != nil {
+				Logger.Printf("test blocker: Consume failed: %v", err)
+			}
+		}
+	}
+
+	return (&DefaultTopologyRecovery{}).RecoverTopology(conn, channels)
+}
+
+// TestConnectionRecoveryConsumerNotForgottenAfterFailedResubscribe verifies that a
+// consumer whose recovery-time basic.consume fails is still known to the client
+// afterwards, so a later recovery attempt can re-subscribe it.
+//
+// recoverConnectionTopology step 5 iterates ch.consumers.configs, and on failure
+// calls ch.consumers.cancel(tag), which deletes configs[tag] and closes the
+// caller's delivery channel. Because configs is the only record of a consumer
+// (there is no recordConsumer counterpart to recordExchange/recordQueue/
+// recordBinding), that deletion erases the consumer from the very map step 5
+// iterates. Steps 1-4 only log, skip, and reopen the channel, keeping their
+// records so a failed entity is retried on the next attempt; step 5 is the only
+// step that destroys its own retry source.
+//
+// Consequence: a single transient failure on one basic.consume loses the consumer
+// permanently, even though the obstruction was momentary and later attempts would
+// succeed. Recovery reports success and the connection and channel stay open,
+// while the queue is no longer consumed.
+//
+// Note that the loss is reported rather than truly silent: NotifyCancel listeners
+// fire, the delivery channel is closed, and the entity appears in
+// SkippedTopologyEntities. The cancel was added deliberately on that basis, so
+// that an application is told to re-Consume() instead of the library reviving the
+// consumer later.
+//
+// The reason to retry instead is that a failed re-subscribe is not a
+// cancellation, and the reference clients agree. Neither the Java nor the .NET
+// client removes a recorded consumer when the recovery-time basic.consume fails;
+// both report it through their topology recovery exception handler and keep the
+// record, and Java has explicit retry machinery for this case
+// (TopologyRecoveryRetryLogic.RECOVER_CONSUMER). Both remove the record only on a
+// client-initiated basic.cancel or channel teardown. A broker-sent basic.cancel
+// remains a cancellation here too; see dispatch().
+func TestConnectionRecoveryConsumerNotForgottenAfterFailedResubscribe(t *testing.T) {
+	connectionName := "test-recovery-consumer-not-forgotten"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+
+	queueName := "test_consumer_not_forgotten_q"
+	consumerTag := "consumer-not-forgotten-tag"
+
+	blocker := &blockingTopologyRecovery{targetQueue: queueName}
+
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			TopologyRecoveryMode: TopologyRecoveryAllEnabled,
+			TopologyRecovery:     blocker,
+			OnTopologyEntityError: func(_ *Connection, _ TopologyRecoveryEntity) bool {
+				return true // skip-and-continue, the default behaviour
+			},
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	// Durable, non-exclusive, not auto-delete: the queue must outlive the
+	// connection drop so the consumer is the only thing that can go missing.
+	// Delete first in case an earlier failed run left it behind with a different
+	// definition.
+	_, _ = ch.QueueDelete(queueName, false, false, false)
+	if _, err := ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+	defer func() {
+		cleanupConn, cerr := DialConfig(amqpURL, Config{Locale: defaultLocale})
+		if cerr != nil {
+			return
+		}
+		defer cleanupConn.Close()
+		cleanupCh, cerr := cleanupConn.Channel()
+		if cerr != nil {
+			return
+		}
+		defer cleanupCh.Close()
+		_, _ = cleanupCh.QueueDelete(queueName, false, false, false)
+	}()
+
+	// Exclusive consumer, so the blocker's exclusive consume during recovery is
+	// refused with 403 ACCESS_REFUSED.
+	deliveries, err := ch.Consume(queueName, consumerTag, true, true /* exclusive */, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume failed: %v", err)
+	}
+
+	// Sanity check: delivery works before recovery, so a later failure to
+	// deliver cannot be blamed on a broken fixture.
+	if err := ch.Publish("", queueName, false, false, Publishing{Body: []byte("before")}); err != nil {
+		t.Fatalf("Publish (pre-recovery) failed: %v", err)
+	}
+	select {
+	case d, ok := <-deliveries:
+		if !ok {
+			t.Fatalf("delivery channel closed before recovery")
+		}
+		t.Logf("pre-recovery delivery received: %q", d.Body)
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no pre-recovery delivery; test fixture is wrong")
+	}
+
+	stateChanged := make(chan *StateChanged, 20)
+	conn.NotifyStateChange(stateChanged)
+
+	// Drop the connection to drive a full recovery pass, which the wrapper above
+	// obstructs for the consumer only.
+	dropConnection(t, connectionName)
+
+	// Wait for recovery to settle, and confirm the consumer really was the thing
+	// that failed. Without this the test could pass vacuously if the blocker
+	// never won the race.
+	var skippedConsumerSeen bool
+	timeout := time.After(60 * time.Second)
+waitOpen:
+	for {
+		select {
+		case sc := <-stateChanged:
+			t.Logf("Connection state changed: %s", sc)
+			for _, e := range sc.SkippedTopologyEntities {
+				t.Logf("  skipped: %s %q on channel %d: %v", e.EntityType, e.EntityName, e.ChannelID, e.Err)
+				if e.EntityType == TopologyEntityConsumer && e.EntityName == consumerTag {
+					skippedConsumerSeen = true
+				}
+			}
+			if sc.To == StateOpen {
+				break waitOpen
+			}
+		case <-timeout:
+			t.Fatalf("Timeout waiting for connection to recover to StateOpen")
+		}
+	}
+
+	if !skippedConsumerSeen {
+		t.Skipf("consumer re-subscribe was not obstructed (blocker lost the race); nothing to assert")
+	}
+	t.Logf("consumer %q was skipped during recovery, as intended", consumerTag)
+
+	// The blocker released exclusivity when that recovery pass returned, so
+	// nothing stands in the way of re-subscribing the consumer now.
+	if conn.IsClosed() {
+		t.Fatalf("connection is closed after recovery reported StateOpen")
+	}
+	if ch.IsClosed() {
+		t.Fatalf("channel is closed after recovery reported StateOpen")
+	}
+
+	// Force a second, entirely unobstructed reconnect. Every other entity type
+	// keeps its topology record on failure and is retried here; the consumer
+	// must be too.
+	dropConnection(t, connectionName)
+	waitForConnectionOpen(t, stateChanged)
+	time.Sleep(2 * time.Second)
+
+	ch.consumers.Lock()
+	_, cfgFound := ch.consumers.configs[consumerTag]
+	ch.consumers.Unlock()
+	if !cfgFound {
+		t.Errorf("consumer %q was forgotten: ch.consumers.configs no longer has an entry for it, "+
+			"so no later recovery attempt can ever re-subscribe it", consumerTag)
+	}
+
+	// The decisive, behavioural assertion: is the queue being consumed again?
+	pubConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("publisher DialConfig failed: %v", err)
+	}
+	defer pubConn.Close()
+	pubCh, err := pubConn.Channel()
+	if err != nil {
+		t.Fatalf("publisher Channel failed: %v", err)
+	}
+	defer pubCh.Close()
+
+	if err := pubCh.Publish("", queueName, false, false, Publishing{Body: []byte("after")}); err != nil {
+		t.Fatalf("Publish (post-recovery) failed: %v", err)
+	}
+
+	select {
+	case d, ok := <-deliveries:
+		if !ok {
+			t.Fatalf("delivery channel was closed by recovery: the consumer is gone even though "+
+				"the connection and channel are both open, so queue %q is no longer consumed",
+				queueName)
+		}
+		t.Logf("post-recovery delivery received: %q", d.Body)
+	case <-time.After(15 * time.Second):
+		t.Fatalf("no post-recovery delivery: queue %q is no longer consumed on an open connection",
+			queueName)
+	}
+}

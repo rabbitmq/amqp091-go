@@ -2504,14 +2504,37 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				}
 				ch.reopenIfClosed()
 
-				// basic.consume never reached the broker, so it will never send
-				// basic.cancel for this tag — synthesize the same local cleanup
-				// dispatch() does for a broker-initiated cancel, so the buffer
-				// goroutine and the caller's delivery channel don't leak forever.
-				ch.notifyM.RLock()
-				notifyAll(ch.cancels, tag)
-				ch.notifyM.RUnlock()
-				ch.consumers.cancel(tag)
+				// Deliberately keep ch.consumers.configs[tag] and the caller's
+				// delivery channel intact, so a later recovery attempt can
+				// re-subscribe this consumer.
+				//
+				// configs is the only record this client has of a consumer (there
+				// is no recordConsumer counterpart to recordExchange/recordQueue/
+				// recordBinding) and it is the map this loop iterates, so cancelling
+				// here would erase the consumer from the client's own topology and no
+				// later attempt could retry it. One transient failure on one
+				// basic.consume would lose the consumer for the life of the
+				// connection while recovery reports success and the channel stays
+				// open. Keeping the record matches how steps 1-4 treat a failed
+				// entity: log, skip, keep the record, retry on the next attempt.
+				//
+				// It also matches the reference clients. Neither the Java nor the
+				// .NET client removes a recorded consumer when the recovery-time
+				// basic.consume fails: both report the failure through their topology
+				// recovery exception handler and leave the record in place, and the
+				// Java client has explicit retry machinery for exactly this case
+				// (TopologyRecoveryRetryLogic.RECOVER_CONSUMER). In both, the record
+				// is removed only on a client-initiated basic.cancel or on channel
+				// teardown. A broker-sent basic.cancel is a different event and is
+				// still handled as a cancellation, in dispatch().
+				//
+				// The leak that motivated the earlier cleanup here stays bounded:
+				// closeResources -> consumers.close() closes every remaining buffer
+				// channel and waits on the WaitGroup at channel teardown, and a
+				// successful re-subscribe on a later attempt reuses this same entry
+				// rather than creating a second one. The failure is reported to
+				// applications through SkippedTopologyEntities on the
+				// StateReconnecting -> StateOpen transition.
 			}
 		}
 	}
