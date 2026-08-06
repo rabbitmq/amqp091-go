@@ -41,6 +41,8 @@ Caller
   └─ Connection (connection.go)     TCP socket, AMQP handshake, heartbeat, frame mux
        ├─ read.go / write.go        frame (de)serialization
        ├─ recovery.go               connection/channel recovery (reconnection)
+       ├─ lifecycle.go              StateOpen/Reconnecting/Closing/Closed FSM + NotifyStateChange fan-out
+       ├─ log.go                    package-level Logger (SetLogger), no-op by default
        └─ Channel (channel.go)      AMQP channel — all protocol methods
             ├─ confirms.go          publisher confirm tracking
             └─ consumers.go         consumer tag → delivery channel dispatch
@@ -95,8 +97,9 @@ All `Notify*` methods (`NotifyClose`, `NotifyBlocked`, `NotifyFlow`, `NotifyRetu
 The library supports automatic connection and channel recovery (reconnection) when a network failure occurs.
 
 - **Enabling Recovery**: Automatic recovery is enabled by providing a non-nil `Recovery` configuration in `Config` when calling `DialConfig`. If `Recovery` is nil (the default), automatic recovery is disabled.
-- **Configuration**: `Config.Recovery` contains `ReconnectionConfig` (defines `MaxRetryCount`, `RetryInterval`, and `RecoverableErrorCodes`) and `ConnectionRecovery` (an interface for the recovery implementation). If these are nil but `Recovery` is non-nil, `DefaultReconnectionConfig` and `DefaultConnectionRecovery` are used.
-- **State Monitoring**: Applications can monitor recovery state transitions (e.g., from `StateActive` to `StateReconnecting` to `StateClosed`) by registering with `Connection.NotifyStateChange` or `Channel.NotifyStateChange`.
+- **Configuration**: `Config.Recovery` (`recovery.go`) contains `ReconnectionConfig` (`MaxRetryCount`, `RetryInterval`), `ConnectionRecovery` (interface with `OnConnectionClose`/`OnChannelClose` hooks), and `TopologyRecovery` (interface with `RecoverTopology`). If these are nil but `Recovery` is non-nil, `DefaultReconnectionConfig`, `DefaultConnectionRecovery`, and `DefaultTopologyRecovery` are used. Whether a given close is retried at all is decided per-error by `Error.Recoverable()` (based on the AMQP reply code via `isSoftExceptionCode`), not by a config field.
+- **Topology recovery scope**: `Recovery.TopologyRecoveryMode` selects `TopologyRecoveryAllEnabled` (default), `TopologyRecoveryOnlyTransient` (only exclusive/auto-delete queues, auto-delete exchanges, their bindings, and consumers — durable topology is assumed broker-retained), or `TopologyRecoveryDisabled`. `Recovery.OnTopologyEntityError` is called per failed entity (exchange/queue/binding/consumer) during recovery; returning `true` (or leaving it nil) skips that entity and continues, `false` aborts and retries the whole reconnect cycle. Skipped entities surface in `StateChanged.SkippedTopologyEntities` on the `StateReconnecting`→`StateOpen` transition.
+- **State Monitoring**: Applications can monitor recovery state transitions (`StateOpen`/`StateReconnecting`/`StateClosing`/`StateClosed`, defined in `lifecycle.go`) by registering with `Connection.NotifyStateChange` or `Channel.NotifyStateChange`. Each registered listener gets its own delivery goroutine with strict FIFO ordering and a bounded (50-entry sliding window) queue, so a slow listener can't block others or the state machine itself.
 - **Cancellation**: Recovery can be canceled or aborted (e.g., when `Close()` is called during active reconnection). Applications can listen to this via `Connection.NotifyRecoveryCancel` or `Channel.NotifyRecoveryCancel`.
 - **Examples**: `_examples/recovery/recovery.go` demonstrates the automatic recovery pattern, while `_examples/client/client.go` demonstrates a manual reconnecting wrapper pattern.
 
@@ -104,5 +107,5 @@ The library supports automatic connection and channel recovery (reconnection) wh
 
 - `*Error` (`types.go`) carries an AMQP reply code and whether the error is recoverable. Server-initiated closes arrive on `NotifyClose` channels as `*Error`.
 - `Table` is `map[string]interface{}` with a restricted set of allowed value types enumerated in `types.go`.
-- Mutexes follow a strict order: `Connection.m` → `Channel.m` (never the reverse) to avoid deadlock.
+- Mutexes follow a strict order: `Connection.m` → `Channel.m` (never the reverse) to avoid deadlock. Within `Connection` itself, teardown acquires `destructorM` → `closeM` → `m` in that order (see `connection.go`); `topologyM` is acquired independently and must not be held while calling back into code that re-enters `record*`/`remove*` topology methods.
 - `atomic.Bool` flags (`Connection.closed`, `Channel.closed`) allow lock-free early-exit checks on the hot path.
