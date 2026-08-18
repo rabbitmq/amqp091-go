@@ -1,5 +1,31 @@
 # Changelog
 
+## [v1.14.0](https://github.com/rabbitmq/amqp091-go/tree/v1.14.0) (2026-08-18)
+
+[Full Changelog](https://github.com/rabbitmq/amqp091-go/compare/v1.13.0...v1.14.0)
+
+**Implemented enhancements:**
+
+- refactor: extract shared close prologue into beginClose\(\) [\#376](https://github.com/rabbitmq/amqp091-go/pull/376) ([suchitd](https://github.com/suchitd))
+
+**Fixed bugs:**
+
+- Retry consumer recovery instead of cancelling on a failed re-subscribe [\#380](https://github.com/rabbitmq/amqp091-go/pull/380) ([lukebakken](https://github.com/lukebakken))
+- Fix auto-recovery correctness gaps [\#379](https://github.com/rabbitmq/amqp091-go/pull/379) ([suchitd](https://github.com/suchitd))
+- Enforce frame size in pre-negotiation state [\#377](https://github.com/rabbitmq/amqp091-go/pull/377) ([Zerpet](https://github.com/Zerpet))
+- test: retry cleanup connection after clearing memory alarm [\#375](https://github.com/rabbitmq/amqp091-go/pull/375) ([suchitd](https://github.com/suchitd))
+- fix: eliminate flakiness in TestTLSHandshake [\#373](https://github.com/rabbitmq/amqp091-go/pull/373) ([suchitd](https://github.com/suchitd))
+- fix: close goroutine leaks from Close\(\)/Reconnect\(\) races [\#372](https://github.com/rabbitmq/amqp091-go/pull/372) ([suchitd](https://github.com/suchitd))
+
+**Merged pull requests:**
+
+- chore\(deps\): reduce github-actions dependabot updates to weekly [\#384](https://github.com/rabbitmq/amqp091-go/pull/384) ([suchitd](https://github.com/suchitd))
+- chore\(deps\): bump github/codeql-action from 4.37.5 to 4.37.6 in the github-actions group [\#383](https://github.com/rabbitmq/amqp091-go/pull/383) ([dependabot[bot]](https://github.com/apps/dependabot))
+- docs: update CLAUDE.md with lifecycle/log files and updated recovery details [\#382](https://github.com/rabbitmq/amqp091-go/pull/382) ([suchitd](https://github.com/suchitd))
+- chore\(deps\): bump github/codeql-action from 4.37.4 to 4.37.5 in the github-actions group [\#381](https://github.com/rabbitmq/amqp091-go/pull/381) ([dependabot[bot]](https://github.com/apps/dependabot))
+- chore\(deps\): bump github/codeql-action from 4.37.3 to 4.37.4 in the github-actions group [\#378](https://github.com/rabbitmq/amqp091-go/pull/378) ([dependabot[bot]](https://github.com/apps/dependabot))
+- chore\(deps\): bump github/codeql-action from 4 to 4.37.3 in the github-actions group [\#374](https://github.com/rabbitmq/amqp091-go/pull/374) ([dependabot[bot]](https://github.com/apps/dependabot))
+
 ## [v1.13.0](https://github.com/rabbitmq/amqp091-go/tree/v1.13.0) (2026-07-21)
 
 [Full Changelog](https://github.com/rabbitmq/amqp091-go/compare/v1.12.0...v1.13.0)
