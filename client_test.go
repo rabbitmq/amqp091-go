@@ -294,6 +294,52 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+// TestOpenDoesNotMutateCallerProvidedSASLCredentials guards against
+// https://github.com/rabbitmq/amqp091-go/issues/387: Open must not zero out
+// the password on the caller's own *PlainAuth (reached via Config.SASL)
+// after a successful handshake, since callers commonly build one Config and
+// reuse it across multiple DialConfig/Open calls (e.g. on reconnect).
+func TestOpenDoesNotMutateCallerProvidedSASLCredentials(t *testing.T) {
+	pa := &PlainAuth{Username: defaultLogin, Password: defaultPassword}
+	config := Config{
+		SASL:   []Authentication{pa},
+		Vhost:  "/",
+		Locale: defaultLocale,
+	}
+
+	rwc1, srv1 := newSession(t)
+	t.Cleanup(func() { _ = rwc1.Close() })
+	go func() {
+		srv1.connectionOpen()
+	}()
+
+	if c, err := Open(rwc1, config); err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	if pa.Password != defaultPassword {
+		t.Fatalf("Open zeroed out the caller-owned PlainAuth password: got %q, want %q", pa.Password, defaultPassword)
+	}
+
+	// Reuse the same Config for a second Open, as a caller reconnecting
+	// with the original Config would. If the password had been zeroed
+	// above, the server would observe an empty password here.
+	rwc2, srv2 := newSession(t)
+	t.Cleanup(func() { _ = rwc2.Close() })
+	go func() {
+		srv2.connectionOpen()
+	}()
+
+	if c, err := Open(rwc2, config); err != nil {
+		t.Fatalf("could not create connection on second Open with reused Config: %v (%s)", c, err)
+	}
+
+	wantResponse := "\000" + defaultLogin + "\000" + defaultPassword
+	if srv2.start.Response != wantResponse {
+		t.Fatalf("second Open sent wrong SASL response: got %q, want %q", srv2.start.Response, wantResponse)
+	}
+}
+
 func TestOpenClose_ShouldNotPanic(t *testing.T) {
 	rwc, srv := newSession(t)
 	t.Cleanup(func() {

@@ -89,3 +89,17 @@ func pickSASLMechanism(client []Authentication, serverMechanisms []string) (auth
 
 	return
 }
+
+// cloneAuthentication returns a clone of auth.
+func cloneAuthentication(auth Authentication) Authentication {
+	switch a := auth.(type) {
+	case *PlainAuth:
+		clone := *a
+		return &clone
+	case *AMQPlainAuth:
+		clone := *a
+		return &clone
+	default:
+		return auth
+	}
+}
