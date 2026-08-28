@@ -1229,7 +1229,11 @@ func (c *Connection) openStart(config Config) error {
 		return ErrSASL
 	}
 
-	// Save this mechanism off as the one we chose
+	// Save this mechanism off as the one we chose. Clone it so that the
+	// credential zeroing in openComplete does not mutate the caller-owned
+	// Authentication stored in the original Config.SASL, which callers may
+	// reuse across DialConfig calls (e.g. on reconnect).
+	auth = cloneAuthentication(auth)
 	c.Config.SASL = []Authentication{auth}
 
 	// Set the connection locale to client locale
