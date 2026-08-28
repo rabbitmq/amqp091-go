@@ -90,7 +90,37 @@ func pickSASLMechanism(client []Authentication, serverMechanisms []string) (auth
 	return
 }
 
-// cloneAuthentication returns a clone of auth.
+// cloneAuthentications returns a clone of each entry in auths, preserving
+// order. Used to retain an independent copy of caller-provided
+// Authentication candidates that survives credential zeroing.
+func cloneAuthentications(auths []Authentication) []Authentication {
+	if auths == nil {
+		return nil
+	}
+	clones := make([]Authentication, len(auths))
+	for i, auth := range auths {
+		clones[i] = cloneAuthentication(auth)
+	}
+	return clones
+}
+
+// cloneAuthentication returns a clone of auth. Only *PlainAuth and
+// *AMQPlainAuth are actually copied, since those are the only mechanisms
+// whose credentials the library zeroes out post-handshake (see
+// openComplete); any other implementation is returned as-is: there's no
+// general way to deep-copy an arbitrary caller-supplied Authentication (its
+// concrete fields are unknown to this package). This is safe with respect
+// to the library's own zeroing, which never runs on a custom type, so
+// aliasing it here introduces no corruption on this package's side. It
+// does mean a custom Authentication reused across reconnects is the
+// caller's literal object: if the caller mutates its internal state in
+// place (e.g. rotating a token), that mutation is visible on the next
+// reconnect too, since it's the same instance, not a copy. This makes a
+// custom Authentication the right choice when secrets/passwords rotate over
+// the connection's lifetime (e.g. via UpdateSecret): unlike PlainAuth/
+// AMQPlainAuth, which are frozen as a deep copy at Open time, a custom
+// Authentication that reads its secret dynamically in Response() will
+// always have Reconnect() use the latest value.
 func cloneAuthentication(auth Authentication) Authentication {
 	switch a := auth.(type) {
 	case *PlainAuth:

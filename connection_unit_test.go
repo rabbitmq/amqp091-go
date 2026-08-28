@@ -156,6 +156,105 @@ func TestReconnectRestoresSASLCredentials(t *testing.T) {
 	}
 }
 
+// customAuth is a stand-in for an Authentication mechanism beyond
+// PlainAuth/AMQPlainAuth/ExternalAuth (e.g. OAuth2 token auth), used to
+// verify Reconnect() preserves it rather than silently falling back to a
+// URL-derived PlainAuth.
+type customAuth struct {
+	token string
+}
+
+func (a *customAuth) Mechanism() string { return "CUSTOM" }
+func (a *customAuth) Response() string  { return a.token }
+
+// TestReconnectRestoresCustomSASLFromOriginalClone is a follow-up to the fix
+// for https://github.com/rabbitmq/amqp091-go/issues/387: Reconnect() must
+// restore Config.SASL from the clone captured at initial Open
+// (c.originalSASL), not re-derive it from the connection URL, so custom
+// Authentication implementations survive reconnects.
+func TestReconnectRestoresCustomSASLFromOriginalClone(t *testing.T) {
+	custom := &customAuth{token: "opaque-token"}
+	c := &Connection{
+		url:       "amqp://guest:guest@localhost:5672/",
+		lifeCycle: newLifeCycle(),
+		Config: Config{
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount: 1,
+					RetryInterval: 1 * time.Millisecond,
+				},
+			},
+			Dial: func(network, addr string) (net.Conn, error) {
+				return nil, errors.New("mock dial error")
+			},
+		},
+		originalSASL: []Authentication{custom},
+	}
+	c.closed.Store(true)
+
+	// Trigger Reconnect. It will fail due to the mock dialer, but should
+	// restore SASL from originalSASL first.
+	_ = c.Reconnect()
+
+	if len(c.Config.SASL) != 1 {
+		t.Fatalf("expected 1 SASL mechanism after Reconnect, got %d", len(c.Config.SASL))
+	}
+
+	restored, ok := c.Config.SASL[0].(*customAuth)
+	if !ok {
+		t.Fatalf("expected *customAuth after Reconnect, got %T", c.Config.SASL[0])
+	}
+
+	if restored.token != "opaque-token" {
+		t.Errorf("expected custom auth token to survive Reconnect, got %q", restored.token)
+	}
+}
+
+// TestReconnectRestoresOutOfBandPlainAuthOverURL is a follow-up to the fix
+// for https://github.com/rabbitmq/amqp091-go/issues/387: when the caller's
+// PlainAuth credentials were supplied out-of-band (e.g. from secret
+// management) and differ from whatever is embedded in the connection URL,
+// Reconnect() must restore the caller's credentials, not the URL's.
+func TestReconnectRestoresOutOfBandPlainAuthOverURL(t *testing.T) {
+	pa := &PlainAuth{Username: "vault-user", Password: "vault-password"}
+	c := &Connection{
+		url:       "amqp://urluser:urlpassword@localhost:5672/",
+		lifeCycle: newLifeCycle(),
+		Config: Config{
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount: 1,
+					RetryInterval: 1 * time.Millisecond,
+				},
+			},
+			Dial: func(network, addr string) (net.Conn, error) {
+				return nil, errors.New("mock dial error")
+			},
+		},
+		originalSASL: []Authentication{pa},
+	}
+	c.closed.Store(true)
+
+	_ = c.Reconnect()
+
+	if len(c.Config.SASL) != 1 {
+		t.Fatalf("expected 1 SASL mechanism after Reconnect, got %d", len(c.Config.SASL))
+	}
+
+	restored, ok := c.Config.SASL[0].(*PlainAuth)
+	if !ok {
+		t.Fatalf("expected *PlainAuth after Reconnect, got %T", c.Config.SASL[0])
+	}
+
+	if restored == pa {
+		t.Fatal("expected Reconnect to restore a clone, not the retained originalSASL pointer")
+	}
+
+	if restored.Username != "vault-user" || restored.Password != "vault-password" {
+		t.Errorf("expected out-of-band credentials vault-user:vault-password to survive Reconnect, got %s:%s", restored.Username, restored.Password)
+	}
+}
+
 // TestOpenInitializesMaxFrameSize verifies that Open() initializes the atomic
 // maxFrameSize to frameMinSize before starting the reader goroutine. This ensures
 // the reader will reject oversized frames immediately, even before connection.tune

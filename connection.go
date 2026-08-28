@@ -174,6 +174,14 @@ type Connection struct {
 
 	Config Config // The negotiated Config after connection.open
 
+	// originalSASL is a clone of the caller-provided Config.SASL candidates,
+	// captured once at initial Open, before openStart narrows Config.SASL
+	// down to the single chosen (and cloned) mechanism and before
+	// openComplete zeroes its credentials. Reconnect() restores Config.SASL
+	// from this instead of re-deriving credentials from the URL, so it
+	// honors whatever Authentication the caller actually configured.
+	originalSASL []Authentication
+
 	url string // Connection URL stored for recovery
 
 	Major      int      // Server's major version
@@ -387,6 +395,7 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 	}
 	// Before max frame size is negotiated in Tune, the spec sets a ceiling of 4096 bytes
 	c.maxFrameSize.Store(frameMinSize)
+	c.originalSASL = cloneAuthentications(config.SASL)
 	go c.reader(conn)
 	err := c.open(config)
 	if err == nil {
@@ -1602,11 +1611,26 @@ func (c *Connection) Reconnect() (err error) {
 			return err
 		}
 
-		// Reset SASL to recover from zeroed out credentials
-		c.Config.SASL = nil
-		if err = c.Config.setSASL(uri); err != nil {
-			Logger.Printf("Connection recovery failed to set SASL: %v", err)
-			return err
+		// Restore SASL from the clone captured at initial Open, before the
+		// caller-provided credentials were narrowed/zeroed out, so recovery
+		// honors whatever Authentication the caller actually configured.
+		// Only fall back to deriving credentials from the URL if none was
+		// ever configured, matching setSASL's own "if not already set"
+		// contract.
+		if len(c.originalSASL) > 0 {
+			// Clone again rather than aliasing c.originalSASL directly:
+			// Config.SASL is a public field, so external code (or a future
+			// change here) could read/mutate conn.Config.SASL in place. If
+			// that slice were originalSASL itself, such a mutation would
+			// permanently corrupt the retained original and break every
+			// later reconnect, not just this attempt.
+			c.Config.SASL = cloneAuthentications(c.originalSASL)
+		} else {
+			c.Config.SASL = nil
+			if err = c.Config.setSASL(uri); err != nil {
+				Logger.Printf("Connection recovery failed to set SASL: %v", err)
+				return err
+			}
 		}
 
 		addr := net.JoinHostPort(uri.Host, strconv.FormatInt(int64(uri.Port), 10))
