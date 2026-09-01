@@ -296,6 +296,158 @@ func TestConnectionRecoveryConsume(t *testing.T) {
 	}
 }
 
+// TestConnectionRecoveryCustomSASLPlainAuth is a follow-up to the fix for
+// https://github.com/rabbitmq/amqp091-go/issues/387: Reconnect() must reuse
+// the Authentication the caller explicitly configured via Config.SASL, not
+// re-derive credentials from the connection URL on every retry.
+//
+// The dial URL below carries the right username but a deliberately wrong
+// password, while the real password is supplied only through Config.SASL.
+// The initial connect succeeds because openStart authenticates from
+// Config.SASL, never from the URL. If Reconnect() ever fell back to
+// re-deriving SASL from this URL, the reconnect attempt would authenticate
+// with the wrong password and fail; with the fix, SASL is restored from the
+// caller-provided clone and reconnect succeeds.
+func TestConnectionRecoveryCustomSASLPlainAuth(t *testing.T) {
+	connectionName := "test-connection-recovery-custom-sasl"
+
+	parsedURL, err := url.Parse(amqpURL)
+	if err != nil {
+		t.Fatalf("failed to parse amqpURL: %v", err)
+	}
+	realUsername := parsedURL.User.Username()
+	realPassword, _ := parsedURL.User.Password()
+
+	parsedURL.User = url.UserPassword(realUsername, "wrong-"+realPassword)
+	urlWithWrongPassword := parsedURL.String()
+
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(urlWithWrongPassword, Config{
+		SASL:       []Authentication{&PlainAuth{Username: realUsername, Password: realPassword}},
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	defer ch.Close()
+
+	queueName := "recovery_custom_sasl_queue"
+	_, err = ch.QueueDeclare(
+		queueName, // name
+		true,      // durable
+		false,     // auto-delete
+		false,     // exclusive
+		false,     // no-wait
+		nil,       // arguments
+	)
+	if err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+	defer func() {
+		_, _ = ch.QueueDelete(queueName, false, false, false)
+	}()
+
+	msgs, err := ch.Consume(
+		queueName,
+		"recovery_custom_sasl_consumer", // consumer tag
+		true,                            // autoAck
+		false,                           // exclusive
+		false,                           // noLocal
+		false,                           // noWait
+		nil,                             // args
+	)
+	if err != nil {
+		t.Fatalf("Consume failed: %v", err)
+	}
+
+	// Publish and receive a message pre-recovery.
+	preRecoveryMessage := "hello custom sasl recovery 1"
+	err = ch.PublishWithContext(
+		context.Background(),
+		"",        // exchange
+		queueName, // routing key = queue name
+		false,
+		false,
+		Publishing{
+			ContentType: "text/plain",
+			Body:        []byte(preRecoveryMessage),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Publish pre-recovery message failed: %v", err)
+	}
+	t.Logf("Published message pre-recovery: %s", preRecoveryMessage)
+
+	select {
+	case d, ok := <-msgs:
+		if !ok {
+			t.Fatalf("Consume channel closed prematurely")
+		}
+		if string(d.Body) != preRecoveryMessage {
+			t.Fatalf("Expected message '%s', got: %s", preRecoveryMessage, string(d.Body))
+		}
+		t.Logf("Received message pre-recovery: %s", string(d.Body))
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timeout waiting for receive message pre-recovery: %s", preRecoveryMessage)
+	}
+
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+
+	chanStateChanged := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(chanStateChanged)
+
+	dropConnection(t, connectionName)
+
+	// Wait for connection to reconnect. This requires the real password
+	// supplied via Config.SASL to be honored during recovery.
+	waitForConnectionOpen(t, stateChanged)
+
+	// Verify channel state change notification is received and is reconnecting, followed by open
+	waitForChannelOpen(t, chanStateChanged)
+
+	// Verify Publish and receive a message post-recovery, proving the
+	// connection is fully usable again with the same custom SASL credentials.
+	postRecoveryMessage := "hello custom sasl recovery 2"
+	err = ch.PublishWithContext(
+		context.Background(),
+		"",
+		queueName,
+		false,
+		false,
+		Publishing{
+			ContentType: "text/plain",
+			Body:        []byte(postRecoveryMessage),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Publish post-recovery message failed: %v", err)
+	}
+	t.Logf("Published message post-recovery: %s", postRecoveryMessage)
+
+	select {
+	case d, ok := <-msgs:
+		if !ok {
+			t.Fatalf("Consume channel closed after recovery")
+		}
+		if string(d.Body) != postRecoveryMessage {
+			t.Fatalf("Expected message '%s', got: %s", postRecoveryMessage, string(d.Body))
+		}
+		t.Logf("Received message post-recovery: %s", string(d.Body))
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Timeout waiting for receive message post-recovery: %s", postRecoveryMessage)
+	}
+}
+
 func dropConnection(t *testing.T, name string) {
 	var targetConnName string
 	loopDeadline := time.Now().Add(10 * time.Second)

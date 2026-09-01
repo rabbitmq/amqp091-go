@@ -340,6 +340,48 @@ func TestOpenDoesNotMutateCallerProvidedSASLCredentials(t *testing.T) {
 	}
 }
 
+// TestOpenCapturesOriginalSASLClone is a follow-up to the fix for
+// https://github.com/rabbitmq/amqp091-go/issues/387: Open must retain an
+// independent clone of the caller-provided Config.SASL candidates so
+// Reconnect() can later restore them, without that clone aliasing the
+// caller's own Authentication objects.
+func TestOpenCapturesOriginalSASLClone(t *testing.T) {
+	pa := &PlainAuth{Username: defaultLogin, Password: defaultPassword}
+	config := Config{
+		SASL:   []Authentication{pa},
+		Vhost:  "/",
+		Locale: defaultLocale,
+	}
+
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { _ = rwc.Close() })
+	go func() {
+		srv.connectionOpen()
+	}()
+
+	c, err := Open(rwc, config)
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	if len(c.originalSASL) != 1 {
+		t.Fatalf("expected 1 captured original SASL candidate, got %d", len(c.originalSASL))
+	}
+
+	clonedPa, ok := c.originalSASL[0].(*PlainAuth)
+	if !ok {
+		t.Fatalf("expected *PlainAuth, got %T", c.originalSASL[0])
+	}
+
+	if clonedPa == pa {
+		t.Fatal("expected originalSASL to hold a clone, not the caller's own *PlainAuth pointer")
+	}
+
+	if clonedPa.Username != defaultLogin || clonedPa.Password != defaultPassword {
+		t.Errorf("expected cloned credentials %s:%s, got %s:%s", defaultLogin, defaultPassword, clonedPa.Username, clonedPa.Password)
+	}
+}
+
 func TestOpenClose_ShouldNotPanic(t *testing.T) {
 	rwc, srv := newSession(t)
 	t.Cleanup(func() {
