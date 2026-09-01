@@ -400,15 +400,12 @@ func TestConnectionRecoveryCustomSASLPlainAuth(t *testing.T) {
 		t.Fatalf("Timeout waiting for receive message pre-recovery: %s", preRecoveryMessage)
 	}
 
-	// Register with connection for NotifyStateChange
 	stateChanged := make(chan *StateChanged, 10)
 	conn.NotifyStateChange(stateChanged)
 
-	// Register with channel for NotifyStateChange
 	chanStateChanged := make(chan *StateChanged, 10)
 	ch.NotifyStateChange(chanStateChanged)
 
-	// Call Http API to close the current connection
 	dropConnection(t, connectionName)
 
 	// Wait for connection to reconnect. This requires the real password
