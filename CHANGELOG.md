@@ -1,5 +1,24 @@
 # Changelog
 
+## [v1.15.0](https://github.com/rabbitmq/amqp091-go/tree/v1.15.0) (2026-09-15)
+
+[Full Changelog](https://github.com/rabbitmq/amqp091-go/compare/v1.14.0...v1.15.0)
+
+**Fixed bugs:**
+
+- fix: preserve caller-provided SASL credentials across Reconnect\(\) [\#389](https://github.com/rabbitmq/amqp091-go/pull/389) ([suchitd](https://github.com/suchitd))
+- fix: clone SASL authentication before zeroing credentials post-handshake [\#388](https://github.com/rabbitmq/amqp091-go/pull/388) ([suchitd](https://github.com/suchitd))
+
+**Closed issues:**
+
+- v1.13.0 \(\#350\) zeroes caller-provided PlainAuth.Password, breaking auth on any reconnect that reuses the Config [\#387](https://github.com/rabbitmq/amqp091-go/issues/387)
+
+**Merged pull requests:**
+
+- chore\(deps\): bump github/codeql-action from 4.37.8 to 4.37.9 in the github-actions group [\#390](https://github.com/rabbitmq/amqp091-go/pull/390) ([dependabot[bot]](https://github.com/apps/dependabot))
+- chore\(deps\): bump github/codeql-action from 4.37.7 to 4.37.8 in the github-actions group [\#386](https://github.com/rabbitmq/amqp091-go/pull/386) ([dependabot[bot]](https://github.com/apps/dependabot))
+- chore\(deps\): bump github/codeql-action from 4.37.6 to 4.37.7 in the github-actions group [\#385](https://github.com/rabbitmq/amqp091-go/pull/385) ([dependabot[bot]](https://github.com/apps/dependabot))
+
 ## [v1.14.0](https://github.com/rabbitmq/amqp091-go/tree/v1.14.0) (2026-08-18)
 
 [Full Changelog](https://github.com/rabbitmq/amqp091-go/compare/v1.13.0...v1.14.0)
