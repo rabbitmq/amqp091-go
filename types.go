@@ -52,12 +52,20 @@ var (
 	// be negotiated.
 	ErrSASL = &Error{Code: AccessRefused, Reason: "SASL could not negotiate a shared mechanism"}
 
-	// ErrCredentials is returned when the authenticated client is not authorized
-	// to any vhost.
+	// ErrCredentials is returned when the broker drops the connection during
+	// authentication without sending a connection.close, which is how a login is
+	// rejected unless the client advertises the authentication_failure_close
+	// capability. When the broker does reply with a connection.close, Dial
+	// returns that reply instead: a server-originated *Error carrying the
+	// broker's code and text.
 	ErrCredentials = &Error{Code: AccessRefused, Reason: "username or password not allowed"}
 
-	// ErrVhost is returned when the authenticated user is not permitted to
-	// access the requested Vhost.
+	// ErrVhost is returned when the broker drops the connection during
+	// connection.open without sending a connection.close. RabbitMQ normally
+	// replies with a connection.close that explains the refusal, such as
+	// 530 NOT_ALLOWED for a vhost the user may not access or for a reached
+	// per-user or per-vhost connection limit; Dial returns that reply instead:
+	// a server-originated *Error carrying the broker's code and text.
 	ErrVhost = &Error{Code: AccessRefused, Reason: "no access to this vhost"}
 
 	// ErrSyntax is hard protocol error, indicating an unsupported protocol,
