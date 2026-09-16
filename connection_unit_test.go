@@ -1494,3 +1494,39 @@ func TestFilterTransientTopologyMixedScenario(t *testing.T) {
 		t.Fatalf("expected 1 filtered exchange binding, got %d: %+v", len(fEB), fEB)
 	}
 }
+
+// TestConnectionCallPrefersShutdownReasonOverClosedRPC guards the select in
+// Connection.call. Once the reader has exited, rpc is closed and the shutdown
+// reason sits buffered in errors, so both cases are ready and select picks one
+// at random. call must report the shutdown reason (or ErrClosed when there is
+// none) instead of ErrCommandInvalid for the nil message read from the closed
+// rpc channel; that reason is what open() surfaces when the broker rejects a
+// handshake step with a connection.close.
+func TestConnectionCallPrefersShutdownReasonOverClosedRPC(t *testing.T) {
+	t.Parallel()
+
+	want := newError(NotAllowed, "NOT_ALLOWED - connection refused for user 'guest': user connection limit (1) is reached")
+
+	// Repeat enough times that select is certain to pick the closed rpc case
+	// at least once; the assertion must hold on every iteration.
+	for i := 0; i < 200; i++ {
+		c := &Connection{errors: make(chan *Error, 1), rpc: make(chan message)}
+		c.errors <- want
+		close(c.errors)
+		close(c.rpc)
+
+		if err := c.call(nil, &connectionOpenOk{}); err != want {
+			t.Fatalf("iteration %d: expected shutdown reason %v, got %v", i, want, err)
+		}
+	}
+
+	for i := 0; i < 200; i++ {
+		c := &Connection{errors: make(chan *Error, 1), rpc: make(chan message)}
+		close(c.errors)
+		close(c.rpc)
+
+		if err := c.call(nil, &connectionOpenOk{}); err != ErrClosed {
+			t.Fatalf("iteration %d: expected ErrClosed, got %v", i, err)
+		}
+	}
+}
