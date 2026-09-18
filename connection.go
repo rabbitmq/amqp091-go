@@ -1367,14 +1367,8 @@ func (c *Connection) openVhost(config Config) error {
 	return c.openComplete()
 }
 
-// handshakeError chooses the error reported for a failed handshake step.
-//
-// When the broker rejects a step with a connection.close, dispatch0 has already
-// turned that frame into a server-originated *Error carrying the broker's reply
-// code and text, for example 530 NOT_ALLOWED "connection refused for user 'x':
-// user connection limit (1) is reached", and that is what the caller needs to
-// see. Only when the socket was closed without such a reply do we fall back to
-// the sentinel describing the most likely cause for that step.
+// Only trust err as the failure reason if the broker actually sent it;
+// a locally constructed *Error must not be mistaken for the broker's reply.
 func handshakeError(err error, fallback *Error) error {
 	var amqpErr *Error
 	if errors.As(err, &amqpErr) && amqpErr.Server {
