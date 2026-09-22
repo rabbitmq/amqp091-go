@@ -218,6 +218,77 @@ func TestReadTableOversizeOuterBlobReturnsError(t *testing.T) {
 	}
 }
 
+// TestReadLongstrLargeDeclaredLengthReturnsErrorWithoutActualData verifies a
+// long-str whose declared length exceeds the available data fails instead of
+// forcing a large up-front allocation.
+func TestReadLongstrLargeDeclaredLengthReturnsErrorWithoutActualData(t *testing.T) {
+	// 256MiB claimed, far more than the data provided below.
+	const declaredLength = 1 << 28
+
+	var buf bytes.Buffer
+	if err := binary.Write(&buf, binary.BigEndian, uint32(declaredLength)); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+	buf.WriteString("not nearly enough data")
+
+	_, err := readLongstr(&buf)
+	if err == nil {
+		t.Fatal("expected error when declared length exceeds available data, got nil")
+	}
+}
+
+// TestReadFieldByteArrayLargeDeclaredLengthReturnsErrorWithoutActualData is
+// the 'x' (byte-array field) analogue of the longstr case above.
+func TestReadFieldByteArrayLargeDeclaredLengthReturnsErrorWithoutActualData(t *testing.T) {
+	const declaredLength = 1 << 28
+
+	var buf bytes.Buffer
+	buf.WriteByte('x')
+	if err := binary.Write(&buf, binary.BigEndian, int32(declaredLength)); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+	buf.WriteString("not nearly enough data")
+
+	_, err := readField(&buf)
+	if err == nil {
+		t.Fatal("expected error when declared length exceeds available data, got nil")
+	}
+}
+
+// TestReadArrayOversizeLengthReturnsError verifies readArray rejects a
+// declared size above max int32, matching readLongstr's existing guard.
+func TestReadArrayOversizeLengthReturnsError(t *testing.T) {
+	var buf bytes.Buffer
+	if err := binary.Write(&buf, binary.BigEndian, uint32(0x80000000)); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+
+	_, err := readArray(&buf)
+	if err == nil {
+		t.Fatal("expected error for oversized array length, got nil")
+	}
+}
+
+// TestReadFieldDeepNestingReturnsErrorInsteadOfCrashing verifies a table
+// nested far deeper than maxFieldDepth returns an error rather than
+// recursing until the goroutine stack overflows.
+func TestReadFieldDeepNestingReturnsErrorInsteadOfCrashing(t *testing.T) {
+	var nested any = Table{"v": int32(1)}
+	for i := 0; i < maxFieldDepth*4; i++ {
+		nested = Table{"nested": nested}
+	}
+
+	var buf bytes.Buffer
+	if err := writeField(&buf, nested); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+
+	_, err := readField(&buf)
+	if err == nil {
+		t.Fatal("expected error for deeply nested table, got nil")
+	}
+}
+
 func TestWriteFieldUnsignedTypes(t *testing.T) {
 	testCases := []struct {
 		name     string
