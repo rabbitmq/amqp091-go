@@ -35,6 +35,12 @@ const (
 	// before they create operational headaches. See https://github.com/rabbitmq/rabbitmq-server/issues/1593.
 	defaultChannelMax = uint16((2 << 10) - 1)
 	defaultLocale     = "en_US"
+	// defaultFrameSize matches RabbitMQ broker's own default frame_max, used
+	// whenever a caller leaves Config.FrameSize unset (0) so that "didn't
+	// specify" doesn't silently become "request unlimited frame size" against
+	// a broker that also proposes 0. Callers that explicitly want unlimited
+	// must set Config.FrameSize to a negative value instead.
+	defaultFrameSize = 131072
 )
 
 // Config is used in DialConfig and Open to specify the desired tuning
@@ -50,9 +56,22 @@ type Config struct {
 	// bindings on the server.  Dial sets this to the path parsed from the URL.
 	Vhost string
 
-	ChannelMax uint16        // 0 max channels means 2^16 - 1
-	FrameSize  int           // 0 max bytes means unlimited
-	Heartbeat  time.Duration // less than 1s uses the server's interval
+	// ChannelMax caps the number of channels. 0 means 2^16 - 1.
+	ChannelMax uint16
+
+	// FrameSize caps the max AMQP frame size in bytes.
+	//   0 (default/unset): DialConfig fills in a sane default (defaultFrameSize,
+	//     matching RabbitMQ's own broker default) rather than requesting
+	//     unlimited frame size from the broker.
+	//   < 0 (canonically -1): explicitly request unlimited frame size. Only
+	//     takes effect if the broker also proposes no limit; a malicious or
+	//     misbehaving broker can then send arbitrarily large frames.
+	//   > 0: explicit cap, negotiated down to the broker's max if lower.
+	FrameSize int
+
+	// Heartbeat is the interval between keep-alive frames. Less than 1s uses
+	// the server's interval.
+	Heartbeat time.Duration
 
 	// TLSClientConfig specifies the client configuration of the TLS connection
 	// when establishing a tls transport.
@@ -312,6 +331,10 @@ func DialConfig(url string, config Config) (*Connection, error) {
 
 	if config.ChannelMax == 0 {
 		config.ChannelMax = uri.ChannelMax
+	}
+
+	if config.FrameSize == 0 {
+		config.FrameSize = defaultFrameSize
 	}
 
 	connectionTimeout := defaultConnectionTimeout
@@ -1322,7 +1345,20 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	// Frame size includes headers and end byte (len(payload)+8). Enforce the spec
 	// minimum floor of frameMinSize (4096 bytes) to prevent malicious servers
 	// from forcing extreme fragmentation and CPU overhead.
-	c.Config.FrameSize = negotiateFrameSize(config.FrameSize, int(tune.FrameMax))
+	//
+	// A negative config.FrameSize is the caller's explicit "unlimited" opt-in
+	// (see the Config.FrameSize doc); translate it to the wire value 0 so
+	// negotiateFrameSize/pick never see a negative input.
+	//
+	// This runs before any channel exists, so c.Config.FrameSize is always 0
+	// or a positive cap by the time channel.go reads it, never the raw
+	// negative sentinel. Keep it that way: channel.go converts this field to
+	// uint64, where a raw -1 would wrap around instead of meaning "no limit".
+	wireFrameSize := config.FrameSize
+	if wireFrameSize < 0 {
+		wireFrameSize = 0
+	}
+	c.Config.FrameSize = negotiateFrameSize(wireFrameSize, int(tune.FrameMax))
 	// reader.ReadFrame relies on
 	// any nonzero value here being >= frameMinSize (negotiateFrameSize's floor)
 	// to safely subtract frameHeaderSize without underflow — keep it that way if

@@ -208,6 +208,14 @@ func readTimestamp(r io.Reader) (v time.Time, err error) {
 // unbounded recursion from overflowing the goroutine stack.
 const maxFieldDepth = 32
 
+// maxContainerElements limits how many elements/entries readArrayDepth and
+// readTableDepth will accept in a single container. AMQP tables/arrays in
+// practice hold at most a few hundred entries (message properties, queue
+// arguments, policy definitions); this cap rejects the empty-value ('V')
+// padding trick that would otherwise amplify wire bytes ~16-40x into heap via
+// boxed `any` slice elements / Table map entries.
+const maxContainerElements = 8192
+
 func readField(r io.Reader) (v any, err error) {
 	return readFieldDepth(r, 0)
 }
@@ -366,6 +374,10 @@ func readTableDepth(r io.Reader, depth int) (table Table, err error) {
 			return
 		}
 
+		if len(table) >= maxContainerElements {
+			return nil, ErrSyntax
+		}
+
 		table[key] = value
 	}
 
@@ -405,6 +417,11 @@ func readArrayDepth(r io.Reader, depth int) (arr []any, err error) {
 			}
 			return nil, err
 		}
+
+		if len(arr) >= maxContainerElements {
+			return nil, ErrSyntax
+		}
+
 		arr = append(arr, field)
 	}
 
