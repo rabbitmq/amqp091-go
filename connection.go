@@ -1181,7 +1181,22 @@ func (c *Connection) call(req message, res ...message) error {
 			return e
 		}
 		return ErrClosed
-	case msg = <-rpc:
+	case m, ok := <-rpc:
+		if !ok {
+			// The reader has exited, so shutdown already ran and left its reason
+			// (if any) buffered in errors. When both channels are ready select
+			// may pick this one; report the shutdown reason rather than
+			// mistaking the nil message for an unexpected command.
+			select {
+			case e, ok := <-errors:
+				if ok {
+					return e
+				}
+			default:
+			}
+			return ErrClosed
+		}
+		msg = m
 	}
 
 	// Try to match one of the result types
@@ -1275,10 +1290,12 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	tune := &connectionTune{}
 
 	if err := c.call(ok, tune); err != nil {
-		// per spec, a connection can only be closed when it has been opened
-		// so at this point, we know it's an auth error, but the socket
-		// was closed instead.  Return a meaningful error.
-		return ErrCredentials
+		// The broker either answered start-ok with a connection.close (RabbitMQ
+		// does so when the client advertises authentication_failure_close) or,
+		// as the spec originally allowed, dropped the socket without a word.
+		// Surface the broker's own reply when there is one; otherwise assume
+		// bad credentials, the only thing that can go wrong at this step.
+		return handshakeError(err, ErrCredentials)
 	}
 
 	// Edge case that may race with c.shutdown()
@@ -1340,13 +1357,27 @@ func (c *Connection) openVhost(config Config) error {
 	res := &connectionOpenOk{}
 
 	if err := c.call(req, res); err != nil {
-		// Cannot be closed yet, but we know it's a vhost problem
-		return ErrVhost
+		// RabbitMQ rejects connection.open with a connection.close whose code and
+		// text say why: 530 NOT_ALLOWED for a vhost the user may not access or
+		// for a reached per-user or per-vhost connection limit. Surface that
+		// reply; only fall back to ErrVhost when the socket was closed without
+		// one.
+		return handshakeError(err, ErrVhost)
 	}
 
 	c.Config.Vhost = config.Vhost
 
 	return c.openComplete()
+}
+
+// Only trust err as the failure reason if the broker actually sent it;
+// a locally constructed *Error must not be mistaken for the broker's reply.
+func handshakeError(err error, fallback *Error) error {
+	var amqpErr *Error
+	if errors.As(err, &amqpErr) && amqpErr.Server {
+		return err
+	}
+	return fallback
 }
 
 // openComplete performs any final Connection initialization dependent on the
