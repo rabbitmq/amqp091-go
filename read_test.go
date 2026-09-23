@@ -8,6 +8,7 @@ package amqp091
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -215,6 +216,156 @@ func TestReadTableOversizeOuterBlobReturnsError(t *testing.T) {
 	_, err := readTable(&buf)
 	if err == nil {
 		t.Fatal("readTable with oversized outer blob must return error, not silent empty table")
+	}
+}
+
+// TestReadLongstrLargeDeclaredLengthReturnsErrorWithoutActualData verifies a
+// long-str whose declared length exceeds the available data fails instead of
+// forcing a large up-front allocation.
+func TestReadLongstrLargeDeclaredLengthReturnsErrorWithoutActualData(t *testing.T) {
+	// 256MiB claimed, far more than the data provided below.
+	const declaredLength = 1 << 28
+
+	var buf bytes.Buffer
+	if err := binary.Write(&buf, binary.BigEndian, uint32(declaredLength)); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+	buf.WriteString("not nearly enough data")
+
+	_, err := readLongstr(&buf)
+	if err == nil {
+		t.Fatal("expected error when declared length exceeds available data, got nil")
+	}
+}
+
+// TestReadFieldByteArrayLargeDeclaredLengthReturnsErrorWithoutActualData is
+// the 'x' (byte-array field) analogue of the longstr case above.
+func TestReadFieldByteArrayLargeDeclaredLengthReturnsErrorWithoutActualData(t *testing.T) {
+	const declaredLength = 1 << 28
+
+	var buf bytes.Buffer
+	buf.WriteByte('x')
+	if err := binary.Write(&buf, binary.BigEndian, int32(declaredLength)); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+	buf.WriteString("not nearly enough data")
+
+	_, err := readField(&buf)
+	if err == nil {
+		t.Fatal("expected error when declared length exceeds available data, got nil")
+	}
+}
+
+// TestReadArrayOversizeLengthReturnsError verifies readArray rejects a
+// declared size above max int32, matching readLongstr's existing guard.
+func TestReadArrayOversizeLengthReturnsError(t *testing.T) {
+	var buf bytes.Buffer
+	if err := binary.Write(&buf, binary.BigEndian, uint32(0x80000000)); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+
+	_, err := readArray(&buf)
+	if err == nil {
+		t.Fatal("expected error for oversized array length, got nil")
+	}
+}
+
+// TestReadFieldDeepNestingReturnsErrorInsteadOfCrashing verifies a table
+// nested far deeper than maxFieldDepth returns an error rather than
+// recursing until the goroutine stack overflows.
+func TestReadFieldDeepNestingReturnsErrorInsteadOfCrashing(t *testing.T) {
+	var nested any = Table{"v": int32(1)}
+	for i := 0; i < maxFieldDepth*4; i++ {
+		nested = Table{"nested": nested}
+	}
+
+	var buf bytes.Buffer
+	if err := writeField(&buf, nested); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+
+	_, err := readField(&buf)
+	if err == nil {
+		t.Fatal("expected error for deeply nested table, got nil")
+	}
+}
+
+// TestReadArrayRejectsExcessiveElementCount verifies readArray rejects an
+// array containing more than maxContainerElements entries, guarding against
+// the empty-value ('V') padding trick that would otherwise amplify a small
+// number of wire bytes into a disproportionately large []any allocation.
+func TestReadArrayRejectsExcessiveElementCount(t *testing.T) {
+	elems := make([]any, maxContainerElements+1)
+
+	var buf bytes.Buffer
+	if err := writeField(&buf, elems); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+
+	if _, err := readField(&buf); err == nil {
+		t.Fatal("expected error for array exceeding maxContainerElements, got nil")
+	}
+}
+
+// TestReadArrayAcceptsElementCountAtCap verifies readArray still accepts an
+// array with exactly maxContainerElements entries, i.e. the cap doesn't
+// reject legitimate, if generous, arrays.
+func TestReadArrayAcceptsElementCountAtCap(t *testing.T) {
+	elems := make([]any, maxContainerElements)
+
+	var buf bytes.Buffer
+	if err := writeField(&buf, elems); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+
+	value, err := readField(&buf)
+	if err != nil {
+		t.Fatalf("expected no error at maxContainerElements, got: %v", err)
+	}
+
+	arr, ok := value.([]any)
+	if !ok || len(arr) != maxContainerElements {
+		t.Fatalf("expected array of length %d, got %#v", maxContainerElements, value)
+	}
+}
+
+// TestReadTableRejectsExcessiveEntryCount is the Table analogue of
+// TestReadArrayRejectsExcessiveElementCount.
+func TestReadTableRejectsExcessiveEntryCount(t *testing.T) {
+	table := make(Table, maxContainerElements+1)
+	for i := 0; i < maxContainerElements+1; i++ {
+		table[fmt.Sprintf("%d", i)] = nil
+	}
+
+	var buf bytes.Buffer
+	if err := writeTable(&buf, table); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+
+	if _, err := readTable(&buf); err == nil {
+		t.Fatal("expected error for table exceeding maxContainerElements, got nil")
+	}
+}
+
+// TestReadTableAcceptsEntryCountAtCap verifies readTable still accepts a
+// table with exactly maxContainerElements entries.
+func TestReadTableAcceptsEntryCountAtCap(t *testing.T) {
+	table := make(Table, maxContainerElements)
+	for i := 0; i < maxContainerElements; i++ {
+		table[fmt.Sprintf("%d", i)] = nil
+	}
+
+	var buf bytes.Buffer
+	if err := writeTable(&buf, table); err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+
+	output, err := readTable(&buf)
+	if err != nil {
+		t.Fatalf("expected no error at maxContainerElements, got: %v", err)
+	}
+	if len(output) != maxContainerElements {
+		t.Fatalf("expected table of length %d, got %d", maxContainerElements, len(output))
 	}
 }
 

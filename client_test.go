@@ -294,6 +294,72 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+// TestOpenTuneNegativeFrameSizeAllowsBrokerUnlimited verifies that
+// Config.FrameSize < 0 is the caller's explicit "I want unlimited frame size"
+// opt-in: when the broker also proposes FrameMax 0, the negotiated
+// c.Config.FrameSize ends up 0 (true mutual-unlimited), matching what
+// negotiateFrameSize(0, 0) would already produce for an explicit opt-in.
+func TestOpenTuneNegativeFrameSizeAllowsBrokerUnlimited(t *testing.T) {
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
+
+	go func() {
+		srv.expectAMQP()
+		srv.connectionStart()
+		srv.send(0, &connectionTune{ChannelMax: 11, FrameMax: 0, Heartbeat: 10})
+		srv.recv(0, &srv.tune)
+		srv.recv(0, &connectionOpen{})
+		srv.send(0, &connectionOpenOk{})
+	}()
+
+	config := defaultConfig()
+	config.FrameSize = -1
+
+	c, err := Open(rwc, config)
+	if err != nil {
+		t.Fatalf("could not create connection: %v", err)
+	}
+
+	if c.Config.FrameSize != 0 {
+		t.Fatalf("expected negotiated FrameSize 0 (unlimited), got %d", c.Config.FrameSize)
+	}
+	if got := c.maxFrameSize.Load(); got != 0 {
+		t.Fatalf("expected maxFrameSize 0 (unlimited), got %d", got)
+	}
+}
+
+// TestOpenTuneNegativeFrameSizeStillBoundByBroker verifies that opting into
+// unlimited frame size (Config.FrameSize < 0) does not override a broker that
+// itself proposes a real cap — the broker's cap still wins, exactly as it
+// would for an explicit Config.FrameSize == 0 today.
+func TestOpenTuneNegativeFrameSizeStillBoundByBroker(t *testing.T) {
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
+
+	const brokerFrameMax = 65536
+
+	go func() {
+		srv.expectAMQP()
+		srv.connectionStart()
+		srv.send(0, &connectionTune{ChannelMax: 11, FrameMax: brokerFrameMax, Heartbeat: 10})
+		srv.recv(0, &srv.tune)
+		srv.recv(0, &connectionOpen{})
+		srv.send(0, &connectionOpenOk{})
+	}()
+
+	config := defaultConfig()
+	config.FrameSize = -1
+
+	c, err := Open(rwc, config)
+	if err != nil {
+		t.Fatalf("could not create connection: %v", err)
+	}
+
+	if c.Config.FrameSize != brokerFrameMax {
+		t.Fatalf("expected negotiated FrameSize %d (broker's cap), got %d", brokerFrameMax, c.Config.FrameSize)
+	}
+}
+
 // TestOpenDoesNotMutateCallerProvidedSASLCredentials guards against
 // https://github.com/rabbitmq/amqp091-go/issues/387: Open must not zero out
 // the password on the caller's own *PlainAuth (reached via Config.SASL)

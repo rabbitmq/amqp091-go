@@ -539,6 +539,40 @@ func TestReconnectAbortsWhenCloseWonTheRace(t *testing.T) {
 	}
 }
 
+// TestDialConfigDefaultsFrameSizeWhenUnset verifies that a caller who never
+// touches Config.FrameSize (the common case for Dial/DialTLS/DialConfig) does
+// not silently negotiate an "unlimited" frame size just because the broker
+// also happens to propose FrameMax 0. DialConfig must fill in defaultFrameSize
+// before the handshake, so the mutual-zero case only happens when the caller
+// explicitly opted in via a negative FrameSize.
+func TestDialConfigDefaultsFrameSizeWhenUnset(t *testing.T) {
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
+
+	go func() {
+		srv.expectAMQP()
+		srv.connectionStart()
+		srv.send(0, &connectionTune{ChannelMax: 11, FrameMax: 0, Heartbeat: 10})
+		srv.recv(0, &srv.tune)
+		srv.recv(0, &connectionOpen{})
+		srv.send(0, &connectionOpenOk{})
+	}()
+
+	config := defaultConfig()
+	config.Dial = func(network, addr string) (net.Conn, error) {
+		return fakeNetConn{rwc}, nil
+	}
+
+	c, err := DialConfig("amqp://guest:guest@localhost/", config)
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+
+	if c.Config.FrameSize != defaultFrameSize {
+		t.Fatalf("expected negotiated FrameSize %d (defaultFrameSize), got %d", defaultFrameSize, c.Config.FrameSize)
+	}
+}
+
 func TestNegotiationEnforcesFrameMinSize(t *testing.T) {
 	tests := []struct {
 		name             string
