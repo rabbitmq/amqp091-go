@@ -232,6 +232,9 @@ func DefaultDial(connectionTimeout time.Duration) func(network, addr string) (ne
 //
 // Dial uses the zero value of tls.Config when it encounters an amqps://
 // scheme.  It is equivalent to calling DialTLS(amqp, nil).
+//
+// See ParseURI for the URI format, including the percent-encoding required
+// for a username or password containing reserved characters.
 func Dial(url string) (*Connection, error) {
 	return DialConfig(url, Config{
 		Locale: defaultLocale,

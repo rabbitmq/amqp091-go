@@ -78,6 +78,20 @@ type URI struct {
 // Mutual TLS (client auth) will be enabled only in case keyfile AND certfile provided.
 //
 // If Config.TLSClientConfig is set, TLS parameters from URI will be ignored.
+//
+// The username and password are parsed with the standard library's net/url
+// package, so per RFC 3986 §3.2.1 any reserved character in either one
+// (":", "@", "/", "?", "#", "%", ...) must be percent-encoded, or parsing
+// will fail or silently split the URI in the wrong place. The safest way to
+// build a URI containing such characters is with net/url:
+//
+//	u := &url.URL{
+//		Scheme: "amqp",
+//		User:   url.UserPassword(username, password), // percent-encodes for you
+//		Host:   fmt.Sprintf("%s:%d", host, port),
+//		Path:   "/" + vhost,
+//	}
+//	conn, err := amqp.Dial(u.String())
 func ParseURI(uri string) (URI, error) {
 	builder := defaultURI
 
@@ -87,7 +101,9 @@ func ParseURI(uri string) (URI, error) {
 
 	u, err := url.Parse(uri)
 	if err != nil {
-		return builder, err
+		return builder, fmt.Errorf("%w (if the username or password contains a reserved "+
+			"character such as \"?\", \"#\", \"@\", \":\", or \"/\", it must be percent-encoded "+
+			"per RFC 3986 §3.2.1 -- see ParseURI's doc comment and net/url.UserPassword)", err)
 	}
 
 	defaultPort, okScheme := schemePorts[u.Scheme]
