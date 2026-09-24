@@ -518,6 +518,87 @@ func TestOpenFailedVhost(t *testing.T) {
 	}
 }
 
+// TestOpenFailedServerClose covers a broker that rejects a handshake step with
+// an explicit connection.close, as RabbitMQ does for a rejected login (when the
+// client advertises authentication_failure_close) and for a rejected
+// connection.open (vhost access refused, per-vhost or per-user connection limit
+// reached). Open must surface the broker's reply code and text rather than the
+// generic ErrCredentials / ErrVhost sentinels, which are only for a broker that
+// drops the socket without saying why.
+func TestOpenFailedServerClose(t *testing.T) {
+	rejectOpen := func(srv *server) {
+		srv.connectionStart()
+		srv.connectionTune()
+		srv.recv(0, &connectionOpen{})
+	}
+	rejectStartOk := func(srv *server) {
+		srv.connectionStart()
+	}
+
+	tests := []struct {
+		name     string
+		code     uint16
+		reason   string
+		sentinel *Error
+		reject   func(srv *server) // drives the handshake up to the rejected step
+	}{
+		{
+			name:     "user connection limit reached",
+			code:     NotAllowed,
+			reason:   "NOT_ALLOWED - connection refused for user 'guest': user connection limit (1) is reached",
+			sentinel: ErrVhost,
+			reject:   rejectOpen,
+		},
+		{
+			name:     "vhost connection limit reached",
+			code:     NotAllowed,
+			reason:   "NOT_ALLOWED - access to vhost '/' refused for user 'guest': connection limit (1) is reached",
+			sentinel: ErrVhost,
+			reject:   rejectOpen,
+		},
+		{
+			name:     "vhost access refused",
+			code:     NotAllowed,
+			reason:   "NOT_ALLOWED - access to vhost '/' refused for user 'guest'",
+			sentinel: ErrVhost,
+			reject:   rejectOpen,
+		},
+		{
+			name:     "login refused",
+			code:     AccessRefused,
+			reason:   "ACCESS_REFUSED - Login was refused using authentication mechanism PLAIN. For details see the broker logfile.",
+			sentinel: ErrCredentials,
+			reject:   rejectStartOk,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rwc, srv := newSession(t)
+			t.Cleanup(func() { rwc.Close() })
+
+			go func() {
+				srv.expectAMQP()
+				tt.reject(srv)
+				srv.send(0, &connectionClose{ReplyCode: tt.code, ReplyText: tt.reason})
+				srv.recv(0, &connectionCloseOk{})
+			}()
+
+			c, err := Open(rwc, defaultConfig())
+			if err == tt.sentinel {
+				t.Fatalf("expected the broker's connection.close reason, got sentinel %v on %+v", err, c)
+			}
+			var amqpErr *Error
+			if !errors.As(err, &amqpErr) {
+				t.Fatalf("expected *Error, got %T %v on %+v", err, err, c)
+			}
+			if amqpErr.Code != int(tt.code) || amqpErr.Reason != tt.reason || !amqpErr.Server {
+				t.Fatalf("expected server error code %d reason %q, got %#v", tt.code, tt.reason, amqpErr)
+			}
+		})
+	}
+}
+
 func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 	rwc, srv := newSession(t)
 	defer rwc.Close()
