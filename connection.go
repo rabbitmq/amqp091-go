@@ -43,6 +43,13 @@ const (
 	defaultFrameSize = 131072
 )
 
+const (
+	// FrameSizeUnlimited is a canonical value to use in Config.FrameSize to intentionally
+	// request unlimited frame size. Note that the server has to agree in Tune.
+	FrameSizeUnlimited int = iota - 1
+	frameSizeUnset
+)
+
 // Config is used in DialConfig and Open to specify the desired tuning
 // parameters used during a connection open handshake.  The negotiated tuning
 // will be stored in the returned connection's Config field.
@@ -333,7 +340,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		config.ChannelMax = uri.ChannelMax
 	}
 
-	if config.FrameSize == 0 {
+	if config.FrameSize == frameSizeUnset {
 		config.FrameSize = defaultFrameSize
 	}
 
