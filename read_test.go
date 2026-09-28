@@ -8,11 +8,14 @@ package amqp091
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestParseHeaderFrameConsumesPaddingBytes verifies that parseHeaderFrame
@@ -420,4 +423,465 @@ func TestTableRoundTripUnsignedTypes(t *testing.T) {
 			t.Fatalf("key %q mismatch: expected %#v (%T), got %#v (%T)", key, expected, expected, got, got)
 		}
 	}
+}
+
+func fuzzSeedTable() Table {
+	return Table{
+		"bool":      true,
+		"byte":      byte(0xff),
+		"int8":      int8(-1),
+		"int16":     int16(-2),
+		"int32":     int32(-3),
+		"int64":     int64(-4),
+		"uint16":    uint16(5),
+		"uint32":    uint32(6),
+		"float32":   float32(1.5),
+		"float64":   float64(-2.5),
+		"decimal":   Decimal{Scale: 2, Value: 12345},
+		"string":    "string",
+		"bytes":     []byte("bytes"),
+		"timestamp": time.Unix(1700000000, 0),
+		"table":     Table{"nested": "value"},
+		"array":     []any{int32(1), "two", nil, []any{}},
+		"void":      nil,
+	}
+}
+
+func fuzzSeedFrames(t testing.TB) [][]byte {
+	props := properties{
+		ContentType:     "application/json",
+		ContentEncoding: "gzip",
+		Headers:         fuzzSeedTable(),
+		DeliveryMode:    Persistent,
+		Priority:        9,
+		CorrelationId:   "correlation",
+		ReplyTo:         "reply",
+		Expiration:      "60000",
+		MessageId:       "message",
+		Timestamp:       time.Unix(1700000000, 0),
+		Type:            "type",
+		UserId:          "guest",
+		AppId:           "app",
+	}
+
+	frames := []frame{
+		&methodFrame{ChannelId: 0, Method: &connectionStart{
+			VersionMajor:     0,
+			VersionMinor:     9,
+			ServerProperties: fuzzSeedTable(),
+			Mechanisms:       "PLAIN AMQPLAIN",
+			Locales:          "en_US",
+		}},
+		&methodFrame{ChannelId: 1, Method: &basicPublish{Exchange: "exchange", RoutingKey: "key", Mandatory: true}},
+		&methodFrame{ChannelId: 1, Method: &basicDeliver{ConsumerTag: "ctag", DeliveryTag: 42, Redelivered: true, Exchange: "exchange", RoutingKey: "key"}},
+		&headerFrame{ChannelId: 1, ClassId: 60, Size: 5, Properties: props},
+		&bodyFrame{ChannelId: 1, Body: []byte("hello")},
+		&heartbeatFrame{},
+	}
+
+	seeds := make([][]byte, 0, len(frames))
+	for _, f := range frames {
+		var buf bytes.Buffer
+		if err := f.write(&buf); err != nil {
+			t.Fatalf("failed to build seed frame %#v: %v", f, err)
+		}
+		seeds = append(seeds, buf.Bytes())
+	}
+	return seeds
+}
+
+func fuzzSeedFields(t testing.TB) [][]byte {
+	var nested any = Table{}
+	for i := 0; i <= maxFieldDepth; i++ {
+		nested = Table{"n": nested}
+	}
+
+	var seeds [][]byte
+	for _, v := range []any{fuzzSeedTable(), []any{fuzzSeedTable(), fuzzSeedTable()}, nested} {
+		var buf bytes.Buffer
+		if err := writeField(&buf, v); err != nil {
+			t.Fatalf("failed to build seed field: %v", err)
+		}
+		seeds = append(seeds, buf.Bytes())
+	}
+
+	for _, tag := range []byte("tBbsIluifdDSATFxV?") {
+		seeds = append(seeds, []byte{tag})
+	}
+
+	return append(seeds,
+		[]byte{},
+		[]byte{'x', 0xff, 0xff, 0xff, 0xff},
+		[]byte{'S', 0x80, 0x00, 0x00, 0x00},
+		[]byte{'A', 0x80, 0x00, 0x00, 0x00},
+		[]byte{'F', 0x7f, 0xff, 0xff, 0xff},
+	)
+}
+
+// containsNaN reports whether v holds a NaN float anywhere, since
+// reflect.DeepEqual never considers NaN equal to itself.
+func containsNaN(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Float32, reflect.Float64:
+		return math.IsNaN(v.Float())
+	case reflect.Pointer, reflect.Interface:
+		return !v.IsNil() && containsNaN(v.Elem())
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if containsNaN(v.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if containsNaN(v.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			if containsNaN(iter.Value()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func assertRoundTrip(t *testing.T, want, got any) {
+	t.Helper()
+	if !containsNaN(reflect.ValueOf(want)) && !reflect.DeepEqual(want, got) {
+		t.Fatalf("round-trip mismatch:\nwant %#v\ngot  %#v", want, got)
+	}
+}
+
+func checkFieldLimits(t *testing.T, v any, level int) {
+	t.Helper()
+	switch v := v.(type) {
+	case Table:
+		level++
+		if len(v) > maxContainerElements {
+			t.Fatalf("table has %d entries, limit is %d", len(v), maxContainerElements)
+		}
+		for _, e := range v {
+			checkFieldLimits(t, e, level)
+		}
+	case []any:
+		level++
+		if len(v) > maxContainerElements {
+			t.Fatalf("array has %d elements, limit is %d", len(v), maxContainerElements)
+		}
+		for _, e := range v {
+			checkFieldLimits(t, e, level)
+		}
+	}
+	if level > maxFieldDepth+1 {
+		t.Fatalf("nesting level %d exceeds limit %d", level, maxFieldDepth+1)
+	}
+}
+
+func FuzzReadFrame(f *testing.F) {
+	for _, seed := range fuzzSeedFrames(f) {
+		f.Add(seed, uint32(0))
+		f.Add(seed, uint32(frameMinSize))
+	}
+	f.Add([]byte("\x02\x00\x01\x00\x00\x00\x12\x00\x3c\x00\x00\x00\x00\x00\x00\x00\x00\x0a\x54\x00\x00\x00\x00\x00\x00\xce"), uint32(0))
+	f.Add([]byte("\b000000"), uint32(0))
+	f.Add([]byte("\x02\x16\x10�[��\t\xbdui�"+"\x10\x01\x00\xff\xbf\xef\xbfｻn\x99\x00\x10r"), uint32(0))
+	f.Add([]byte("\x0300\x00\x00\x00\x040000"), uint32(0))
+
+	f.Fuzz(func(t *testing.T, data []byte, maxFrameSize uint32) {
+		// ReadFrame relies on any nonzero limit being at least frameMinSize.
+		if maxFrameSize != 0 && maxFrameSize < frameMinSize {
+			maxFrameSize = frameMinSize
+		}
+		var max atomic.Uint32
+		max.Store(maxFrameSize)
+
+		r := reader{r: bytes.NewReader(data), maxFrameSize: &max}
+		f1, err := r.ReadFrame()
+		if err != nil {
+			if f1 != nil {
+				t.Fatalf("frame is not nil on error %v: %#v", err, f1)
+			}
+			return
+		}
+
+		if size := binary.BigEndian.Uint32(data[3:7]); maxFrameSize > 0 && size > maxFrameSize-frameHeaderSize {
+			t.Fatalf("accepted frame of size %d with limit %d", size, maxFrameSize)
+		}
+		if channel := binary.BigEndian.Uint16(data[1:3]); f1.channel() != channel {
+			t.Fatalf("frame channel %d, header channel %d", f1.channel(), channel)
+		}
+
+		rewrite := func(in frame) frame {
+			t.Helper()
+			var buf bytes.Buffer
+			if err := in.write(&buf); err != nil {
+				t.Fatalf("writing decoded frame %#v: %v", in, err)
+			}
+			out, err := (&reader{r: &buf}).ReadFrame()
+			if err != nil {
+				t.Fatalf("re-reading written frame %#v: %v", in, err)
+			}
+			if buf.Len() != 0 {
+				t.Fatalf("%d trailing bytes after re-reading frame %#v", buf.Len(), in)
+			}
+			return out
+		}
+
+		// Writing normalizes some fields (e.g. empty properties), so compare
+		// the second and third decodes.
+		f2 := rewrite(f1)
+		f3 := rewrite(f2)
+		assertRoundTrip(t, f2, f3)
+	})
+}
+
+func FuzzReadBytes(f *testing.F) {
+	f.Add([]byte{}, int64(0))
+	f.Add([]byte("abc"), int64(-1))
+	f.Add([]byte("abc"), int64(2))
+	f.Add([]byte("abc"), int64(4))
+	f.Add(make([]byte, readAllocChunk+1), int64(readAllocChunk+1))
+	f.Add([]byte("abc"), int64(math.MaxInt64))
+
+	f.Fuzz(func(t *testing.T, data []byte, n int64) {
+		got, err := readBytes(bytes.NewReader(data), n)
+		switch {
+		case n < 0:
+			if !errors.Is(err, ErrSyntax) {
+				t.Fatalf("expected ErrSyntax for n=%d, got %v", n, err)
+			}
+		case int64(len(data)) >= n:
+			if err != nil {
+				t.Fatalf("unexpected error for n=%d with %d bytes: %v", n, len(data), err)
+			}
+			if !bytes.Equal(got, data[:n]) {
+				t.Fatalf("expected %q, got %q", data[:n], got)
+			}
+		default:
+			if err == nil {
+				t.Fatalf("expected error for n=%d with only %d bytes", n, len(data))
+			}
+		}
+	})
+}
+
+func FuzzReadShortstr(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte{0})
+	f.Add([]byte("\x05hello"))
+	f.Add([]byte("\x05hell"))
+	f.Add(append([]byte{0xff}, bytes.Repeat([]byte{'a'}, 255)...))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		got, err := readShortstr(bytes.NewReader(data))
+		if len(data) == 0 || len(data) < 1+int(data[0]) {
+			if err == nil {
+				t.Fatalf("expected error for truncated shortstr %q", data)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		encoded := data[:1+int(data[0])]
+		if got != string(encoded[1:]) {
+			t.Fatalf("expected %q, got %q", encoded[1:], got)
+		}
+
+		var buf bytes.Buffer
+		if err := writeShortstr(&buf, got); err != nil {
+			t.Fatalf("writeShortstr: %v", err)
+		}
+		if !bytes.Equal(buf.Bytes(), encoded) {
+			t.Fatalf("expected encoding %q, got %q", encoded, buf.Bytes())
+		}
+	})
+}
+
+func FuzzReadLongstr(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte{0, 0, 0, 0})
+	f.Add([]byte("\x00\x00\x00\x05hello"))
+	f.Add([]byte("\x00\x00\x00\x05hell"))
+	f.Add([]byte{0x80, 0, 0, 0})
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		got, err := readLongstr(bytes.NewReader(data))
+		if len(data) < 4 {
+			if err == nil {
+				t.Fatalf("expected error for truncated length %q", data)
+			}
+			return
+		}
+
+		length := binary.BigEndian.Uint32(data[:4])
+		switch {
+		case length > math.MaxInt32:
+			if !errors.Is(err, ErrSyntax) {
+				t.Fatalf("expected ErrSyntax for length %d, got %v", length, err)
+			}
+			return
+		case uint64(len(data)) < 4+uint64(length):
+			if err == nil {
+				t.Fatalf("expected error for length %d with only %d bytes", length, len(data))
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		encoded := data[:4+length]
+		if got != string(encoded[4:]) {
+			t.Fatalf("expected %q, got %q", encoded[4:], got)
+		}
+
+		var buf bytes.Buffer
+		if err := writeLongstr(&buf, got); err != nil {
+			t.Fatalf("writeLongstr: %v", err)
+		}
+		if !bytes.Equal(buf.Bytes(), encoded) {
+			t.Fatalf("expected encoding %q, got %q", encoded, buf.Bytes())
+		}
+	})
+}
+
+func FuzzReadDecimal(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte{2, 0, 0, 0x30, 0x39})
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0xff})
+	f.Add([]byte{2, 0, 0, 0x30})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		got, err := readDecimal(bytes.NewReader(data))
+		if len(data) < 5 {
+			if err == nil {
+				t.Fatalf("expected error for %d bytes", len(data))
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		want := Decimal{Scale: data[0], Value: int32(binary.BigEndian.Uint32(data[1:5]))}
+		if got != want {
+			t.Fatalf("expected %#v, got %#v", want, got)
+		}
+	})
+}
+
+func FuzzReadTimestamp(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte{0, 0, 0, 0, 0x65, 0x53, 0xf1, 0x00})
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+	f.Add([]byte{0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+	f.Add([]byte{0, 0, 0, 0, 0, 0, 0})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		got, err := readTimestamp(bytes.NewReader(data))
+		if len(data) < 8 {
+			if err == nil {
+				t.Fatalf("expected error for %d bytes", len(data))
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if want := int64(binary.BigEndian.Uint64(data[:8])); got.Unix() != want {
+			t.Fatalf("expected %d, got %d", want, got.Unix())
+		}
+	})
+}
+
+func FuzzReadField(f *testing.F) {
+	for _, seed := range fuzzSeedFields(f) {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		v, err := readField(bytes.NewReader(data))
+		if err != nil {
+			return
+		}
+		checkFieldLimits(t, v, 0)
+
+		var buf bytes.Buffer
+		if err := writeField(&buf, v); err != nil {
+			t.Fatalf("writeField(%#v): %v", v, err)
+		}
+		got, err := readField(&buf)
+		if err != nil {
+			t.Fatalf("re-reading %#v: %v", v, err)
+		}
+		assertRoundTrip(t, v, got)
+	})
+}
+
+func FuzzReadTable(f *testing.F) {
+	for _, seed := range fuzzSeedFields(f) {
+		if len(seed) > 0 && seed[0] == 'F' {
+			f.Add(seed[1:])
+		}
+	}
+	f.Add([]byte{})
+	f.Add([]byte{0, 0, 0, 0})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		v, err := readTable(bytes.NewReader(data))
+		if err != nil {
+			return
+		}
+		checkFieldLimits(t, v, 0)
+
+		var buf bytes.Buffer
+		if err := writeTable(&buf, v); err != nil {
+			t.Fatalf("writeTable(%#v): %v", v, err)
+		}
+		got, err := readTable(&buf)
+		if err != nil {
+			t.Fatalf("re-reading %#v: %v", v, err)
+		}
+		assertRoundTrip(t, v, got)
+	})
+}
+
+func FuzzReadArray(f *testing.F) {
+	for _, seed := range fuzzSeedFields(f) {
+		if len(seed) > 0 && seed[0] == 'A' {
+			f.Add(seed[1:])
+		}
+	}
+	f.Add([]byte{})
+	f.Add([]byte{0, 0, 0, 0})
+	f.Add([]byte{0, 0, 0, 5, 'S', 0, 0, 0, 9})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		v, err := readArray(bytes.NewReader(data))
+		if err != nil {
+			return
+		}
+		checkFieldLimits(t, v, 0)
+
+		var buf bytes.Buffer
+		if err := writeField(&buf, v); err != nil {
+			t.Fatalf("writeField(%#v): %v", v, err)
+		}
+		if tag, _ := buf.ReadByte(); tag != 'A' {
+			t.Fatalf("expected array tag 'A', got %q", tag)
+		}
+		got, err := readArray(&buf)
+		if err != nil {
+			t.Fatalf("re-reading %#v: %v", v, err)
+		}
+		assertRoundTrip(t, v, got)
+	})
 }
