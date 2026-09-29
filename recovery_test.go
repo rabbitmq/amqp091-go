@@ -2827,11 +2827,11 @@ func TestConnectionRecoverySkipAndContinue(t *testing.T) {
 // times RecoverTopology is invoked, so a test can detect a self-sustaining
 // recovery loop (a growing count) versus a single settled pass.
 type countingTopologyRecovery struct {
-	calls int32
+	calls atomic.Int32
 }
 
 func (c *countingTopologyRecovery) RecoverTopology(conn *Connection, channels []*Channel) ([]TopologyRecoveryEntity, error) {
-	atomic.AddInt32(&c.calls, 1)
+	c.calls.Add(1)
 	return (&DefaultTopologyRecovery{}).RecoverTopology(conn, channels)
 }
 
@@ -2945,7 +2945,7 @@ waitOpen:
 	// Give any in-flight goroutines (e.g. shutdown's background fallback
 	// delivery) a moment to finish before taking the first snapshot.
 	time.Sleep(1 * time.Second)
-	firstCount := atomic.LoadInt32(&counter.calls)
+	firstCount := counter.calls.Load()
 	if firstCount == 0 {
 		t.Fatalf("expected at least one RecoverTopology call, got 0")
 	}
@@ -2955,7 +2955,7 @@ waitOpen:
 	// permanently conflicting. Wait several multiples of that period and
 	// confirm the call count does not grow.
 	time.Sleep(3 * notifyTimeout)
-	secondCount := atomic.LoadInt32(&counter.calls)
+	secondCount := counter.calls.Load()
 	if secondCount != firstCount {
 		t.Fatalf("RecoverTopology call count grew from %d to %d after settling — self-sustaining recovery loop detected", firstCount, secondCount)
 	}
@@ -2980,13 +2980,13 @@ waitOpen:
 // panics once the test has returned.
 type blockingTopologyRecovery struct {
 	targetQueue string
-	passes      int32
+	passes      atomic.Int32
 }
 
 func (b *blockingTopologyRecovery) RecoverTopology(conn *Connection, channels []*Channel) ([]TopologyRecoveryEntity, error) {
 	// Only obstruct the first pass. Later passes run unobstructed so the test can
 	// tell "permanently forgotten" from "still blocked".
-	if atomic.AddInt32(&b.passes, 1) == 1 {
+	if b.passes.Add(1) == 1 {
 		if blockerConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale}); err != nil {
 			Logger.Printf("test blocker: DialConfig failed: %v", err)
 		} else {
