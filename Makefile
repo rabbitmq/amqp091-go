@@ -22,7 +22,7 @@ tests: ## Run all tests and requires a running rabbitmq-server. Use GO_TEST_FLAG
 FUZZTIME ?= 60s
 
 .PHONY: fuzz
-fuzz: ## Run each fuzz test for FUZZTIME (default 120s), one after another
+fuzz: ## Run each fuzz test for FUZZTIME (default 60s), one after another
 	@set -e; for target in $$(go test -list '^Fuzz' . | grep '^Fuzz'); do \
 		echo "==> $$target"; \
 		go test -run '^$$' -fuzz "^$$target\$$" -fuzztime $(FUZZTIME) .; \
