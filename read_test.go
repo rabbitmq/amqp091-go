@@ -101,6 +101,23 @@ func TestReadFrameAllowsAnySizeWhenMaxFrameSizeIsZero(t *testing.T) {
 	}
 }
 
+// TestReadFrameRejectsHeartbeatOnNonZeroChannel verifies that a heartbeat
+// frame declaring a non-zero channel is rejected
+func TestReadFrameRejectsHeartbeatOnNonZeroChannel(t *testing.T) {
+	header := make([]byte, 7)
+	header[0] = frameHeartbeat
+	binary.BigEndian.PutUint16(header[1:3], 1) // non-zero channel
+	binary.BigEndian.PutUint32(header[3:7], 0) // no payload
+
+	buf := append(header, frameEnd)
+
+	r := reader{r: bytes.NewReader(buf)}
+	frame, err := r.ReadFrame()
+	if err != errHeartbeatChannel {
+		t.Fatalf("expected errHeartbeatChannel, got frame=%#v err=%v", frame, err)
+	}
+}
+
 func TestReadFieldUnsignedTypes(t *testing.T) {
 	testCases := []struct {
 		name     string
