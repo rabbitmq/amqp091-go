@@ -553,8 +553,14 @@ func (r *reader) parseBodyFrame(channel uint16, size uint32) (frame frame, err e
 }
 
 var errHeartbeatPayload = errors.New("heartbeats should not have a payload")
+var errHeartbeatChannel = errors.New("heartbeats must be sent on channel 0")
 
 func (r *reader) parseHeartbeatFrame(channel uint16, size uint32) (frame frame, err error) {
+	// Per the AMQP 0-9-1 spec, heartbeats are only ever sent on channel 0.
+	if channel != 0 {
+		return nil, errHeartbeatChannel
+	}
+
 	hf := &heartbeatFrame{
 		ChannelId: channel,
 	}
