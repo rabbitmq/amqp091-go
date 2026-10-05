@@ -100,11 +100,19 @@ func newConnURL(s string) *connURL {
 	return &u
 }
 
-func TestConnectionFormattingDoesNotExposeURLPassword(t *testing.T) {
-	rawURL := "amqp://user:secretpassword@localhost:5672/"
-	c := &Connection{url: newConnURL(rawURL)}
+func newOriginalSASL(auths ...Authentication) *[]Authentication {
+	return &auths
+}
 
-	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
+func TestConnectionFormattingDoesNotExposeCredentials(t *testing.T) {
+	rawURL := "amqp://user:secretpassword@localhost:5672/"
+	c := &Connection{
+		url:          newConnURL(rawURL),
+		originalSASL: newOriginalSASL(&PlainAuth{Username: "user", Password: "secretpassword"}),
+		Config:       Config{SASL: []Authentication{&PlainAuth{Username: "user", Password: "secretpassword"}}},
+	}
+
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
 		if s := fmt.Sprintf(verb, c); strings.Contains(s, "secretpassword") {
 			t.Errorf("%s formatting of *Connection exposes password: %s", verb, s)
 		}
@@ -231,7 +239,7 @@ func TestReconnectRestoresCustomSASLFromOriginalClone(t *testing.T) {
 				return nil, errors.New("mock dial error")
 			},
 		},
-		originalSASL: []Authentication{custom},
+		originalSASL: newOriginalSASL(custom),
 	}
 	c.closed.Store(true)
 
@@ -274,7 +282,7 @@ func TestReconnectRestoresOutOfBandPlainAuthOverURL(t *testing.T) {
 				return nil, errors.New("mock dial error")
 			},
 		},
-		originalSASL: []Authentication{pa},
+		originalSASL: newOriginalSASL(pa),
 	}
 	c.closed.Store(true)
 

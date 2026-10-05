@@ -206,9 +206,12 @@ type Connection struct {
 	// openComplete zeroes its credentials. Reconnect() restores Config.SASL
 	// from this instead of re-deriving credentials from the URL, so it
 	// honors whatever Authentication the caller actually configured.
-	originalSASL []Authentication
+	// It is a pointer so that formatting a Connection with any verb prints its
+	// address instead of the credentials.
+	originalSASL *[]Authentication
 
-	// Connection URL stored for recovery.
+	// Connection URL stored for recovery. It is a pointer so that formatting a
+	// Connection with any verb prints its address instead of the credentials.
 	url *connURL
 
 	Major      int      // Server's major version
@@ -432,7 +435,8 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 	c.maxFrameSize.Store(frameMinSize)
 	// Only Reconnect() reads originalSASL
 	if c.IsRecoveryEnabled() {
-		c.originalSASL = cloneAuthentications(config.SASL)
+		originalSASL := cloneAuthentications(config.SASL)
+		c.originalSASL = &originalSASL
 	}
 	go c.reader(conn)
 	err := c.open(config)
@@ -1699,14 +1703,14 @@ func (c *Connection) Reconnect() (err error) {
 		// Only fall back to deriving credentials from the URL if none was
 		// ever configured, matching setSASL's own "if not already set"
 		// contract.
-		if len(c.originalSASL) > 0 {
+		if originalSASL := c.originalAuthentications(); len(originalSASL) > 0 {
 			// Clone again rather than aliasing c.originalSASL directly:
 			// Config.SASL is a public field, so external code (or a future
 			// change here) could read/mutate conn.Config.SASL in place. If
 			// that slice were originalSASL itself, such a mutation would
 			// permanently corrupt the retained original and break every
 			// later reconnect, not just this attempt.
-			c.Config.SASL = cloneAuthentications(c.originalSASL)
+			c.Config.SASL = cloneAuthentications(originalSASL)
 		} else {
 			c.Config.SASL = nil
 			if err = c.Config.setSASL(uri); err != nil {
@@ -1844,6 +1848,14 @@ func (c *Connection) rawURL() string {
 		return ""
 	}
 	return string(*c.url)
+}
+
+// originalAuthentications returns the SASL candidates retained for recovery.
+func (c *Connection) originalAuthentications() []Authentication {
+	if c.originalSASL == nil {
+		return nil
+	}
+	return *c.originalSASL
 }
 
 // IsRecoveryEnabled checks if the recovery is enabled.

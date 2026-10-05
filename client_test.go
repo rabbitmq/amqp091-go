@@ -433,13 +433,14 @@ func TestOpenCapturesOriginalSASLClone(t *testing.T) {
 		t.Fatalf("could not create connection: %v (%s)", c, err)
 	}
 
-	if len(c.originalSASL) != 1 {
-		t.Fatalf("expected 1 captured original SASL candidate, got %d", len(c.originalSASL))
+	originalSASL := c.originalAuthentications()
+	if len(originalSASL) != 1 {
+		t.Fatalf("expected 1 captured original SASL candidate, got %d", len(originalSASL))
 	}
 
-	clonedPa, ok := c.originalSASL[0].(*PlainAuth)
+	clonedPa, ok := originalSASL[0].(*PlainAuth)
 	if !ok {
-		t.Fatalf("expected *PlainAuth, got %T", c.originalSASL[0])
+		t.Fatalf("expected *PlainAuth, got %T", originalSASL[0])
 	}
 
 	if clonedPa == pa {
@@ -527,7 +528,7 @@ func TestOpenDoesNotRetainSASLWithoutRecovery(t *testing.T) {
 	}
 
 	if c.originalSASL != nil {
-		t.Fatalf("expected no retained SASL candidates without recovery, got %v", c.originalSASL)
+		t.Fatalf("expected no retained SASL candidates without recovery, got %v", c.originalAuthentications())
 	}
 }
 

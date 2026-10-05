@@ -54,6 +54,7 @@ type URI struct {
 // connURL is a connection URL that redacts its password when formatted.
 type connURL string
 
+// String redacts the password for dumpers that call Stringer.
 func (u connURL) String() string {
 	parsedURL, err := url.Parse(string(u))
 	if err != nil {
