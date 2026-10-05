@@ -129,9 +129,15 @@ type Channel struct {
 
 // QosConfig holds QoS configuration settings for recovery.
 type QosConfig struct {
+	// PrefetchCount and PrefetchSize hold the per-consumer limits (global=false).
 	PrefetchCount uint16
 	PrefetchSize  uint32
-	Global        bool
+	// GlobalPrefetchCount and GlobalPrefetchSize hold the per-channel limits (global=true).
+	GlobalPrefetchCount uint16
+	GlobalPrefetchSize  uint32
+	// Deprecated: Global is no longer set or read. Use GlobalPrefetchCount and
+	// GlobalPrefetchSize for the per-channel limits.
+	Global bool
 }
 
 // ExchangeConfig holds Exchange configuration settings for recovery.
@@ -953,11 +959,7 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 		&basicQosOk{},
 	)
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
-		ch.connection.recordQos(ch.id, QosConfig{
-			PrefetchCount: uint16(prefetchCount),
-			PrefetchSize:  uint32(prefetchSize),
-			Global:        global,
-		})
+		ch.connection.recordQos(ch.id, uint16(prefetchCount), uint32(prefetchSize), global)
 	}
 	return err
 }
@@ -2478,9 +2480,17 @@ func (ch *Channel) setupChannelBasic() error {
 	// Reset QoS if it was configured
 	config := ch.connection.getTopologyConfiguration(ch.id, false)
 	if config.Qos != nil {
-		if err = ch.Qos(int(config.Qos.PrefetchCount), int(config.Qos.PrefetchSize), config.Qos.Global); err != nil {
-			Logger.Printf("Channel %d recovery QoS error: %v", ch.id, err)
-			return err
+		if config.Qos.PrefetchCount != 0 || config.Qos.PrefetchSize != 0 {
+			if err = ch.Qos(int(config.Qos.PrefetchCount), int(config.Qos.PrefetchSize), false); err != nil {
+				Logger.Printf("Channel %d recovery QoS error: %v", ch.id, err)
+				return err
+			}
+		}
+		if config.Qos.GlobalPrefetchCount != 0 || config.Qos.GlobalPrefetchSize != 0 {
+			if err = ch.Qos(int(config.Qos.GlobalPrefetchCount), int(config.Qos.GlobalPrefetchSize), true); err != nil {
+				Logger.Printf("Channel %d recovery global QoS error: %v", ch.id, err)
+				return err
+			}
 		}
 	}
 

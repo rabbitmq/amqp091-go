@@ -2179,10 +2179,20 @@ func (c *Connection) removeExchangeBinding(ebc ExchangeBindingConfig) {
 	}
 }
 
-func (c *Connection) recordQos(channelID uint16, qos QosConfig) {
+func (c *Connection) recordQos(channelID uint16, prefetchCount uint16, prefetchSize uint32, global bool) {
 	c.topologyM.Lock()
 	defer c.topologyM.Unlock()
-	c.channelTopology(channelID).Qos = &qos
+	topology := c.channelTopology(channelID)
+	if topology.Qos == nil {
+		topology.Qos = &QosConfig{}
+	}
+	if global {
+		topology.Qos.GlobalPrefetchCount = prefetchCount
+		topology.Qos.GlobalPrefetchSize = prefetchSize
+	} else {
+		topology.Qos.PrefetchCount = prefetchCount
+		topology.Qos.PrefetchSize = prefetchSize
+	}
 }
 
 func (c *Connection) removeChannelTopology(channelID uint16) {
@@ -2219,11 +2229,8 @@ func (c *Connection) getTopologyConfiguration(channelID uint16, global bool) Top
 	// QoS is per-channel; pin channelID's QoS onto the merged result.
 	var qos *QosConfig
 	if config, ok := c.topologyConfiguration[channelID]; ok && config.Qos != nil {
-		qos = &QosConfig{
-			PrefetchCount: config.Qos.PrefetchCount,
-			PrefetchSize:  config.Qos.PrefetchSize,
-			Global:        config.Qos.Global,
-		}
+		q := *config.Qos
+		qos = &q
 	}
 
 	// Merge entities from ALL channels into a single connection-level view.

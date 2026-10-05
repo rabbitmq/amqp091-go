@@ -1304,14 +1304,17 @@ func TestGetTopologyConfigurationQoSIsChannelScoped(t *testing.T) {
 	}
 
 	conn.topologyConfiguration[1] = newTopologyConfiguration()
-	conn.topologyConfiguration[1].Qos = &QosConfig{PrefetchCount: 10}
+	conn.topologyConfiguration[1].Qos = &QosConfig{PrefetchCount: 10, GlobalPrefetchCount: 100}
 	conn.topologyConfiguration[2] = newTopologyConfiguration()
-	conn.topologyConfiguration[2].Qos = &QosConfig{PrefetchCount: 20}
+	conn.topologyConfiguration[2].Qos = &QosConfig{PrefetchCount: 20, GlobalPrefetchCount: 200}
 
 	// Channel-local: should return channel 1's QoS.
 	local := conn.getTopologyConfiguration(1, false)
 	if local.Qos == nil || local.Qos.PrefetchCount != 10 {
 		t.Errorf("expected channel 1 QoS prefetch=10, got %+v", local.Qos)
+	}
+	if local.Qos == nil || local.Qos.GlobalPrefetchCount != 100 {
+		t.Errorf("expected channel 1 global QoS prefetch=100, got %+v", local.Qos)
 	}
 
 	// Global merge should still return channel 1's QoS, not channel 2's.
@@ -1319,11 +1322,17 @@ func TestGetTopologyConfigurationQoSIsChannelScoped(t *testing.T) {
 	if global.Qos == nil || global.Qos.PrefetchCount != 10 {
 		t.Errorf("expected global view to carry channel 1 QoS prefetch=10, got %+v", global.Qos)
 	}
+	if global.Qos == nil || global.Qos.GlobalPrefetchCount != 100 {
+		t.Errorf("expected global view to carry channel 1 global QoS prefetch=100, got %+v", global.Qos)
+	}
 
 	// Global merge for channel 2 should return channel 2's QoS.
 	global2 := conn.getTopologyConfiguration(2, true)
 	if global2.Qos == nil || global2.Qos.PrefetchCount != 20 {
 		t.Errorf("expected global view to carry channel 2 QoS prefetch=20, got %+v", global2.Qos)
+	}
+	if global2.Qos == nil || global2.Qos.GlobalPrefetchCount != 200 {
+		t.Errorf("expected global view to carry channel 2 global QoS prefetch=200, got %+v", global2.Qos)
 	}
 }
 
@@ -1562,5 +1571,22 @@ func TestConnectionCallPrefersShutdownReasonOverClosedRPC(t *testing.T) {
 		if err := c.call(nil, &connectionOpenOk{}); err != ErrClosed {
 			t.Fatalf("iteration %d: expected ErrClosed, got %v", i, err)
 		}
+	}
+}
+
+func TestRecordQosKeepsConsumerAndGlobalSeparate(t *testing.T) {
+	conn := &Connection{
+		topologyConfiguration: make(map[uint16]*TopologyConfiguration),
+	}
+
+	conn.recordQos(1, 10, 0, false)
+	conn.recordQos(1, 100, 0, true)
+
+	config := conn.getTopologyConfiguration(1, false)
+	if config.Qos == nil || config.Qos.PrefetchCount != 10 {
+		t.Errorf("expected consumer QoS prefetch=10, got %+v", config.Qos)
+	}
+	if config.Qos == nil || config.Qos.GlobalPrefetchCount != 100 {
+		t.Errorf("expected global QoS prefetch=100, got %+v", config.Qos)
 	}
 }
