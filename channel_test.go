@@ -5,6 +5,7 @@
 package amqp091
 
 import (
+	"bytes"
 	"testing"
 	"time"
 )
@@ -41,7 +42,7 @@ func TestBasicCancelDispatchDropsNotificationOnFullListener(t *testing.T) {
 	listener := make(chan string, 1)
 	listener <- "existing-tag" // pre-fill to capacity
 
-	ch := &Channel{consumers: makeConsumers()}
+	ch := &Channel{connection: &Connection{}, consumers: makeConsumers()}
 	ch.cancels = append(ch.cancels, listener)
 	ch.closed.Store(true)
 
@@ -58,6 +59,78 @@ func TestBasicCancelDispatchDropsNotificationOnFullListener(t *testing.T) {
 		}
 	case <-time.After(6 * time.Second):
 		t.Fatal("basicCancel dispatch blocked on full listener for more than 6 seconds")
+	}
+}
+
+func TestBasicCancelDispatchAcknowledgesOnlyWhenServerAccepts(t *testing.T) {
+	testCases := []struct {
+		name       string
+		properties Table
+		wantReply  bool
+	}{
+		{"enabled", Table{"capabilities": Table{serverCapabilityAcceptConsumerCancelOk: true}}, true},
+		{"disabled", Table{"capabilities": Table{serverCapabilityAcceptConsumerCancelOk: false}}, false},
+		{"missing capability", Table{"capabilities": Table{serverCapabilityConsumerCancelNotify: true}}, false},
+		{"missing capabilities", Table{}, false},
+		{"nil properties", nil, false},
+		{"invalid capabilities", Table{"capabilities": "true"}, false},
+		{"non-boolean capability", Table{"capabilities": Table{serverCapabilityAcceptConsumerCancelOk: "true"}}, false},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, registered := range []bool{true, false} {
+				name := "unknown consumer"
+				if registered {
+					name = "registered consumer"
+				}
+				t.Run(name, func(t *testing.T) {
+					var output bytes.Buffer
+					conn := &Connection{Properties: tc.properties, writer: &writer{w: &output}}
+					ch := newChannel(conn, 1)
+					t.Cleanup(func() { ch.consumers.close() })
+					const tag = "ctag"
+					if registered {
+						ch.consumers.add(tag, make(chan Delivery), consumerConfig{Consumer: tag})
+					}
+					listener := ch.NotifyCancel(make(chan string, 1))
+
+					ch.dispatch(&basicCancel{ConsumerTag: tag})
+
+					select {
+					case got := <-listener:
+						if got != tag {
+							t.Fatalf("cancel notification = %q, want %q", got, tag)
+						}
+					default:
+						t.Fatal("missing cancel notification")
+					}
+					if _, ok := ch.consumers.queueForTag(tag); ok {
+						t.Fatal("cancelled consumer remains registered")
+					}
+					if !tc.wantReply {
+						if output.Len() != 0 {
+							t.Fatal("sent a response without server capability support")
+						}
+						return
+					}
+					f, err := (&reader{r: &output}).ReadFrame()
+					if err != nil {
+						t.Fatalf("read cancel response: %v", err)
+					}
+					method, ok := f.(*methodFrame)
+					if !ok || method.ChannelId != ch.id {
+						t.Fatalf("unexpected response frame: %#v", f)
+					}
+					reply, ok := method.Method.(*basicCancelOk)
+					if !ok || reply.ConsumerTag != tag {
+						t.Fatalf("unexpected cancel response: %#v", method.Method)
+					}
+					if output.Len() != 0 {
+						t.Fatal("sent more than one response")
+					}
+				})
+			}
+		})
 	}
 }
 
