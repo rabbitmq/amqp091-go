@@ -43,6 +43,20 @@ const (
 	defaultFrameSize = 131072
 )
 
+// Known server capabilities advertised in the connection.start properties table.
+const (
+	serverCapabilityPublisherConfirms          = "publisher_confirms"
+	serverCapabilityExchangeExchangeBindings   = "exchange_exchange_bindings"
+	serverCapabilityBasicNack                  = "basic.nack"
+	serverCapabilityConsumerCancelNotify       = "consumer_cancel_notify"
+	serverCapabilityConnectionBlocked          = "connection.blocked"
+	serverCapabilityConsumerPriorities         = "consumer_priorities"
+	serverCapabilityAuthenticationFailureClose = "authentication_failure_close"
+	serverCapabilityPerConsumerQos             = "per_consumer_qos"
+	serverCapabilityDirectReplyTo              = "direct_reply_to"
+	serverCapabilityAcceptConsumerCancelOk     = "accept_consumer_cancel_ok"
+)
+
 const (
 	// FrameSizeUnlimited is a canonical value to use in Config.FrameSize to intentionally
 	// request unlimited frame size. Note that the server has to agree in Tune.
@@ -1305,10 +1319,10 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 	}
 
 	config.Properties["capabilities"] = Table{
-		"connection.blocked":     true,
-		"consumer_cancel_notify": true,
-		"basic.nack":             true,
-		"publisher_confirms":     true,
+		serverCapabilityConnectionBlocked:    true,
+		serverCapabilityConsumerCancelNotify: true,
+		serverCapabilityBasicNack:            true,
+		serverCapabilityPublisherConfirms:    true,
 	}
 
 	ok := &connectionStartOk{
