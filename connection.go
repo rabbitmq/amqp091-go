@@ -220,9 +220,13 @@ type Connection struct {
 	// openComplete zeroes its credentials. Reconnect() restores Config.SASL
 	// from this instead of re-deriving credentials from the URL, so it
 	// honors whatever Authentication the caller actually configured.
-	originalSASL []Authentication
+	// It is a pointer so that formatting a Connection with any verb prints its
+	// address instead of the credentials.
+	originalSASL *[]Authentication
 
-	url string // Connection URL stored for recovery
+	// Connection URL stored for recovery. It is a pointer so that formatting a
+	// Connection with any verb prints its address instead of the credentials.
+	url *connURL
 
 	Major      int      // Server's major version
 	Minor      int      // Server's minor version
@@ -413,7 +417,8 @@ func DialConfig(url string, config Config) (*Connection, error) {
 
 	c, err := Open(conn, config)
 	if c != nil && c.IsRecoveryEnabled() {
-		c.url = url
+		u := connURL(url)
+		c.url = &u
 		c.watchConnection()
 	}
 
@@ -442,7 +447,11 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 	}
 	// Before max frame size is negotiated in Tune, the spec sets a ceiling of 4096 bytes
 	c.maxFrameSize.Store(frameMinSize)
-	c.originalSASL = cloneAuthentications(config.SASL)
+	// Only Reconnect() reads originalSASL
+	if c.IsRecoveryEnabled() {
+		originalSASL := cloneAuthentications(config.SASL)
+		c.originalSASL = &originalSASL
+	}
 	go c.reader(conn)
 	err := c.open(config)
 	if err == nil {
@@ -1696,7 +1705,7 @@ func (c *Connection) Reconnect() (err error) {
 
 		// We need to parse URL to get addr
 		var uri URI
-		uri, err = ParseURI(c.url)
+		uri, err = ParseURI(c.rawURL())
 		if err != nil {
 			Logger.Printf("Connection recovery failed to parse URI: %v", err)
 			return err
@@ -1708,14 +1717,14 @@ func (c *Connection) Reconnect() (err error) {
 		// Only fall back to deriving credentials from the URL if none was
 		// ever configured, matching setSASL's own "if not already set"
 		// contract.
-		if len(c.originalSASL) > 0 {
+		if originalSASL := c.originalAuthentications(); len(originalSASL) > 0 {
 			// Clone again rather than aliasing c.originalSASL directly:
 			// Config.SASL is a public field, so external code (or a future
 			// change here) could read/mutate conn.Config.SASL in place. If
 			// that slice were originalSASL itself, such a mutation would
 			// permanently corrupt the retained original and break every
 			// later reconnect, not just this attempt.
-			c.Config.SASL = cloneAuthentications(c.originalSASL)
+			c.Config.SASL = cloneAuthentications(originalSASL)
 		} else {
 			c.Config.SASL = nil
 			if err = c.Config.setSASL(uri); err != nil {
@@ -1845,6 +1854,22 @@ func (c *Connection) resetState() {
 
 	// Re-create the rpc channel so we don't read stale messages from the previous connection
 	c.rpc = make(chan message)
+}
+
+// rawURL returns the connection URL string.
+func (c *Connection) rawURL() string {
+	if c.url == nil {
+		return ""
+	}
+	return string(*c.url)
+}
+
+// originalAuthentications returns the SASL candidates retained for recovery.
+func (c *Connection) originalAuthentications() []Authentication {
+	if c.originalSASL == nil {
+		return nil
+	}
+	return *c.originalSASL
 }
 
 // IsRecoveryEnabled checks if the recovery is enabled.

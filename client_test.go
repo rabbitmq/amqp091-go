@@ -417,6 +417,9 @@ func TestOpenCapturesOriginalSASLClone(t *testing.T) {
 		SASL:   []Authentication{pa},
 		Vhost:  "/",
 		Locale: defaultLocale,
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: 1},
+		},
 	}
 
 	rwc, srv := newSession(t)
@@ -430,13 +433,14 @@ func TestOpenCapturesOriginalSASLClone(t *testing.T) {
 		t.Fatalf("could not create connection: %v (%s)", c, err)
 	}
 
-	if len(c.originalSASL) != 1 {
-		t.Fatalf("expected 1 captured original SASL candidate, got %d", len(c.originalSASL))
+	originalSASL := c.originalAuthentications()
+	if len(originalSASL) != 1 {
+		t.Fatalf("expected 1 captured original SASL candidate, got %d", len(originalSASL))
 	}
 
-	clonedPa, ok := c.originalSASL[0].(*PlainAuth)
+	clonedPa, ok := originalSASL[0].(*PlainAuth)
 	if !ok {
-		t.Fatalf("expected *PlainAuth, got %T", c.originalSASL[0])
+		t.Fatalf("expected *PlainAuth, got %T", originalSASL[0])
 	}
 
 	if clonedPa == pa {
@@ -500,6 +504,31 @@ func TestChannelOpen(t *testing.T) {
 	ch, err := c.Channel()
 	if err != nil {
 		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+}
+
+// TestOpenDoesNotRetainSASLWithoutRecovery guards against keeping a plaintext
+// copy of the credentials on connections that can never call Reconnect().
+func TestOpenDoesNotRetainSASLWithoutRecovery(t *testing.T) {
+	config := Config{
+		SASL:   []Authentication{&PlainAuth{Username: defaultLogin, Password: defaultPassword}},
+		Vhost:  "/",
+		Locale: defaultLocale,
+	}
+
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { _ = rwc.Close() })
+	go func() {
+		srv.connectionOpen()
+	}()
+
+	c, err := Open(rwc, config)
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	if c.originalSASL != nil {
+		t.Fatalf("expected no retained SASL candidates without recovery, got %v", c.originalAuthentications())
 	}
 }
 

@@ -249,7 +249,7 @@ type DefaultConnectionRecovery struct{}
 func (d *DefaultConnectionRecovery) OnConnectionClose(conn *Connection, err *Error) {
 	Logger.Printf("Connection closed with error: %v", err)
 
-	parsedURL, err1 := url.Parse(conn.url)
+	parsedURL, err1 := url.Parse(conn.rawURL())
 	if err1 != nil {
 		Logger.Printf("Error parsing connection URL: %v", err1)
 		return
