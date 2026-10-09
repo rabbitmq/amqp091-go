@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -208,6 +209,10 @@ func (uri URI) AMQPlainAuth() *AMQPlainAuth {
 	}
 }
 
+// String returns the AMQP URI. Query parameters that DialConfig reads are
+// included: certfile, keyfile, cacertfile, server_name_indication,
+// auth_mechanism, heartbeat, connection_timeout, and channel_max.
+// An explicit heartbeat of 0 is kept, because that disables heartbeats.
 func (uri URI) String() string {
 	authority, err := url.Parse("")
 	if err != nil {
@@ -244,20 +249,35 @@ func (uri URI) String() string {
 		authority.Path = "/"
 	}
 
-	if uri.CertFile != "" || uri.KeyFile != "" || uri.CACertFile != "" || uri.ServerName != "" {
-		q := url.Values{}
-		if uri.CertFile != "" {
-			q.Set("certfile", uri.CertFile)
-		}
-		if uri.KeyFile != "" {
-			q.Set("keyfile", uri.KeyFile)
-		}
-		if uri.CACertFile != "" {
-			q.Set("cacertfile", uri.CACertFile)
-		}
-		if uri.ServerName != "" {
-			q.Set("server_name_indication", uri.ServerName)
-		}
+	q := url.Values{}
+	if uri.CertFile != "" {
+		q.Set("certfile", uri.CertFile)
+	}
+	if uri.KeyFile != "" {
+		q.Set("keyfile", uri.KeyFile)
+	}
+	if uri.CACertFile != "" {
+		q.Set("cacertfile", uri.CACertFile)
+	}
+	if uri.ServerName != "" {
+		q.Set("server_name_indication", uri.ServerName)
+	}
+	for _, mechanism := range uri.AuthMechanism {
+		q.Add("auth_mechanism", mechanism)
+	}
+	// heartbeat=0 is meaningful: DialConfig treats a missing heartbeat as the
+	// 10s default, and an explicit 0 as disabled. hasValue keeps those apart.
+	if uri.Heartbeat.hasValue {
+		seconds := int64(uri.Heartbeat.value / time.Second)
+		q.Set("heartbeat", strconv.FormatInt(seconds, 10))
+	}
+	if uri.ConnectionTimeout != 0 {
+		q.Set("connection_timeout", strconv.Itoa(uri.ConnectionTimeout))
+	}
+	if uri.ChannelMax != 0 {
+		q.Set("channel_max", strconv.FormatUint(uint64(uri.ChannelMax), 10))
+	}
+	if len(q) > 0 {
 		authority.RawQuery = q.Encode()
 	}
 
