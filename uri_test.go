@@ -463,3 +463,40 @@ func TestURIStringEncodesSpecialCharsInPaths(t *testing.T) {
 		t.Fatalf("round-trip failed: %v / %+v", err, u2)
 	}
 }
+
+func TestURIStringKeepsDialQueryParameters(t *testing.T) {
+	raw := "amqps://foo.bar/?auth_mechanism=external&heartbeat=0&connection_timeout=5000&channel_max=8"
+	uri, err := ParseURI(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := uri.String()
+	want := "amqps://foo.bar/?auth_mechanism=external&channel_max=8&connection_timeout=5000&heartbeat=0"
+	if got != want {
+		t.Fatalf("String() = %s, want %s", got, want)
+	}
+	again, err := ParseURI(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(again.AuthMechanism, []string{"external"}) {
+		t.Fatalf("auth mechanism %#v", again.AuthMechanism)
+	}
+	if !again.Heartbeat.hasValue || again.Heartbeat.value != 0 {
+		t.Fatalf("heartbeat %#v", again.Heartbeat)
+	}
+	if again.ConnectionTimeout != 5000 || again.ChannelMax != 8 {
+		t.Fatalf("timeout %d channel max %d", again.ConnectionTimeout, again.ChannelMax)
+	}
+
+	both := "amqp://foo.bar/?auth_mechanism=plain&auth_mechanism=amqplain&heartbeat=2"
+	uri, err = ParseURI(both)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = uri.String()
+	want = "amqp://foo.bar/?auth_mechanism=plain&auth_mechanism=amqplain&heartbeat=2"
+	if got != want {
+		t.Fatalf("String() = %s, want %s", got, want)
+	}
+}
