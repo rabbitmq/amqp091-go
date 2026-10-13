@@ -9,11 +9,13 @@ import (
 	"bytes"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,6 +95,55 @@ func TestConnectionOpenCompleteZerosSASLCredentials(t *testing.T) {
 	}
 }
 
+func newConnURL(s string) *connURL {
+	u := connURL(s)
+	return &u
+}
+
+func newOriginalSASL(auths ...Authentication) *[]Authentication {
+	return &auths
+}
+
+func TestConnectionFormattingDoesNotExposeCredentials(t *testing.T) {
+	rawURL := "amqp://user:secretpassword@localhost:5672/"
+	c := &Connection{
+		url:          newConnURL(rawURL),
+		originalSASL: newOriginalSASL(&PlainAuth{Username: "user", Password: "secretpassword"}),
+		Config:       Config{SASL: []Authentication{&PlainAuth{Username: "user", Password: "secretpassword"}}},
+	}
+
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
+		if s := fmt.Sprintf(verb, c); strings.Contains(s, "secretpassword") {
+			t.Errorf("%s formatting of *Connection exposes password: %s", verb, s)
+		}
+	}
+
+	if got := c.rawURL(); got != rawURL {
+		t.Errorf("expected stored URL %q, got %q", rawURL, got)
+	}
+}
+
+func TestConnURLStringRedactsPassword(t *testing.T) {
+	u := connURL("amqp://user:secretpassword@localhost:5672/")
+	want := "amqp://user:xxxxx@localhost:5672/"
+	for _, verb := range []string{"%v", "%+v", "%s"} {
+		if got := fmt.Sprintf(verb, u); got != want {
+			t.Errorf("%s formatting of connURL: got %q, want %q", verb, got, want)
+		}
+	}
+
+	if got := connURL("amqp://user:secret@%zz").String(); got != "[REDACTED]" {
+		t.Errorf("expected unparsable connURL to format as [REDACTED], got %q", got)
+	}
+}
+
+func TestConnectionRawURLWithoutStoredURL(t *testing.T) {
+	c := &Connection{}
+	if got := c.rawURL(); got != "" {
+		t.Errorf("expected empty URL when none is stored, got %q", got)
+	}
+}
+
 func TestConfigSetSASL(t *testing.T) {
 	uri, err := ParseURI("amqp://guest:secret@localhost:5672/")
 	if err != nil {
@@ -122,7 +173,7 @@ func TestConfigSetSASL(t *testing.T) {
 func TestReconnectRestoresSASLCredentials(t *testing.T) {
 	pa := &PlainAuth{Username: "user", Password: ""} // zeroed out
 	c := &Connection{
-		url:       "amqp://user:mysecretpassword@localhost:5672/",
+		url:       newConnURL("amqp://user:mysecretpassword@localhost:5672/"),
 		lifeCycle: newLifeCycle(),
 		Config: Config{
 			SASL: []Authentication{pa},
@@ -175,7 +226,7 @@ func (a *customAuth) Response() string  { return a.token }
 func TestReconnectRestoresCustomSASLFromOriginalClone(t *testing.T) {
 	custom := &customAuth{token: "opaque-token"}
 	c := &Connection{
-		url:       "amqp://guest:guest@localhost:5672/",
+		url:       newConnURL("amqp://guest:guest@localhost:5672/"),
 		lifeCycle: newLifeCycle(),
 		Config: Config{
 			Recovery: &Recovery{
@@ -188,7 +239,7 @@ func TestReconnectRestoresCustomSASLFromOriginalClone(t *testing.T) {
 				return nil, errors.New("mock dial error")
 			},
 		},
-		originalSASL: []Authentication{custom},
+		originalSASL: newOriginalSASL(custom),
 	}
 	c.closed.Store(true)
 
@@ -218,7 +269,7 @@ func TestReconnectRestoresCustomSASLFromOriginalClone(t *testing.T) {
 func TestReconnectRestoresOutOfBandPlainAuthOverURL(t *testing.T) {
 	pa := &PlainAuth{Username: "vault-user", Password: "vault-password"}
 	c := &Connection{
-		url:       "amqp://urluser:urlpassword@localhost:5672/",
+		url:       newConnURL("amqp://urluser:urlpassword@localhost:5672/"),
 		lifeCycle: newLifeCycle(),
 		Config: Config{
 			Recovery: &Recovery{
@@ -231,7 +282,7 @@ func TestReconnectRestoresOutOfBandPlainAuthOverURL(t *testing.T) {
 				return nil, errors.New("mock dial error")
 			},
 		},
-		originalSASL: []Authentication{pa},
+		originalSASL: newOriginalSASL(pa),
 	}
 	c.closed.Store(true)
 
@@ -364,7 +415,7 @@ func TestCloseWaitsForInFlightReconnectThenClosesRecoveredConnection(t *testing.
 	t.Cleanup(func() { _ = rwc.Close() })
 
 	conn := &Connection{
-		url:                   "amqp://guest:guest@localhost:5672/",
+		url:                   newConnURL("amqp://guest:guest@localhost:5672/"),
 		conn:                  dummyReadWriteCloser{},
 		writer:                &writer{bufio.NewWriter(&bytes.Buffer{})},
 		channels:              make(map[uint16]*Channel),

@@ -51,6 +51,18 @@ type URI struct {
 	ChannelMax        uint16
 }
 
+// connURL is a connection URL that redacts its password when formatted.
+type connURL string
+
+// String redacts the password for dumpers that call Stringer.
+func (u connURL) String() string {
+	parsedURL, err := url.Parse(string(u))
+	if err != nil {
+		return "[REDACTED]"
+	}
+	return parsedURL.Redacted()
+}
+
 // ParseURI attempts to parse the given AMQP URI according to the spec.
 // See http://www.rabbitmq.com/uri-spec.html.
 //
