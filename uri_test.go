@@ -463,3 +463,19 @@ func TestURIStringEncodesSpecialCharsInPaths(t *testing.T) {
 		t.Fatalf("round-trip failed: %v / %+v", err, u2)
 	}
 }
+
+func TestURIHeartbeatOutOfRange(t *testing.T) {
+	for _, heartbeat := range []string{"-1", "65536", "9223372037"} {
+		if _, err := ParseURI("amqp://foo.bar/?heartbeat=" + heartbeat); err == nil {
+			t.Errorf("heartbeat=%s: expected an error", heartbeat)
+		}
+	}
+
+	uri, err := ParseURI("amqp://foo.bar/?heartbeat=65535")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !uri.Heartbeat.hasValue || uri.Heartbeat.value != 65535*time.Second {
+		t.Fatalf("heartbeat %#v", uri.Heartbeat)
+	}
+}

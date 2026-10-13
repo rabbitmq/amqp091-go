@@ -70,7 +70,7 @@ type URI struct {
 //	cacertfile: <path/to/ca.pem>
 //	server_name_indication: <server name>
 //	auth_mechanism: <one or more: plain, amqplain, external>
-//	heartbeat: <seconds (integer)>
+//	heartbeat: <seconds (integer, 0 to 65535)>
 //	connection_timeout: <milliseconds (integer)>
 //	channel_max: <max number of channels (integer)>
 //
@@ -164,11 +164,11 @@ func ParseURI(uri string) (URI, error) {
 	builder.AuthMechanism = params["auth_mechanism"]
 
 	if params.Has("heartbeat") {
-		value, err := strconv.Atoi(params.Get("heartbeat"))
+		value, err := strconv.ParseUint(params.Get("heartbeat"), 10, 16)
 		if err != nil {
-			return builder, fmt.Errorf("heartbeat is not an integer: %v", err)
+			return builder, fmt.Errorf("heartbeat is not an uint16: %v", err)
 		}
-		builder.Heartbeat = newHeartbeatDurationFromSeconds(value)
+		builder.Heartbeat = newHeartbeatDurationFromSeconds(int(value))
 	}
 
 	if params.Has("connection_timeout") {
