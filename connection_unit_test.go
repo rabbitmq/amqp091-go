@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 func TestConnectionBlockedDispatchDropsNotificationOnFullListener(t *testing.T) {
@@ -570,6 +572,61 @@ func TestDialConfigDefaultsFrameSizeWhenUnset(t *testing.T) {
 
 	if c.Config.FrameSize != defaultFrameSize {
 		t.Fatalf("expected negotiated FrameSize %d (defaultFrameSize), got %d", defaultFrameSize, c.Config.FrameSize)
+	}
+}
+
+// TestDialConfigFailedHandshakeWithRecoveryDoesNotLeak covers
+// https://github.com/rabbitmq/amqp091-go/issues/408: a failed handshake never
+// reaches StateOpen, so there is nothing to recover and DialConfig must not
+// start the recovery watcher, whose close listener would never be released.
+func TestDialConfigFailedHandshakeWithRecoveryDoesNotLeak(t *testing.T) {
+	tests := []struct {
+		name   string
+		reject func(srv *server)
+	}{
+		{
+			name: "broker sends connection.close",
+			reject: func(srv *server) {
+				srv.send(0, &connectionClose{ReplyCode: AccessRefused, ReplyText: "ACCESS_REFUSED - Login was refused"})
+				srv.recv(0, &connectionCloseOk{})
+			},
+		},
+		{
+			name: "broker drops the socket",
+			reject: func(srv *server) {
+				srv.S.Close()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+			rwc, srv := newSession(t)
+			defer rwc.Close()
+
+			go func() {
+				srv.expectAMQP()
+				srv.connectionStart()
+				tt.reject(srv)
+			}()
+
+			config := defaultConfig()
+			config.Recovery = &Recovery{}
+			config.Dial = func(network, addr string) (net.Conn, error) {
+				return fakeNetConn{rwc}, nil
+			}
+
+			c, err := DialConfig("amqp://guest:guest@localhost/", config)
+			var amqpErr *Error
+			if !errors.As(err, &amqpErr) || amqpErr.Code != AccessRefused {
+				t.Fatalf("expected ACCESS_REFUSED, got %v", err)
+			}
+			if err := c.Close(); err != ErrClosed {
+				t.Fatalf("expected ErrClosed from Close() after a failed handshake, got %v", err)
+			}
+		})
 	}
 }
 
