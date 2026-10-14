@@ -412,7 +412,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 	}
 
 	c, err := Open(conn, config)
-	if c != nil && c.IsRecoveryEnabled() {
+	if err == nil && c.IsRecoveryEnabled() {
 		c.url = url
 		c.watchConnection()
 	}
