@@ -24,6 +24,7 @@
 
 **Merged pull requests:**
 
+- Fix golangci-lint v2.15.0 errcheck failures [\#411](https://github.com/rabbitmq/amqp091-go/pull/411) ([suchitd](https://github.com/suchitd))
 - chore\(deps\): bump github/codeql-action from 4.38.2 to 4.38.3 in the github-actions group [\#410](https://github.com/rabbitmq/amqp091-go/pull/410) ([dependabot[bot]](https://github.com/apps/dependabot))
 - chore\(deps\): bump github/codeql-action from 4.38.1 to 4.38.2 in the github-actions group [\#401](https://github.com/rabbitmq/amqp091-go/pull/401) ([dependabot[bot]](https://github.com/apps/dependabot))
 - Add Fuzzy tests for reader [\#399](https://github.com/rabbitmq/amqp091-go/pull/399) ([Zerpet](https://github.com/Zerpet))
