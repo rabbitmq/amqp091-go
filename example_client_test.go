@@ -218,8 +218,8 @@ func (client *Client) handleReInit(conn *amqp.Connection) bool {
 			select {
 			case <-client.done:
 				return true
-			case <-client.notifyConnClose:
-				client.logger.Println("Connection closed. Reconnecting...")
+			case err := <-client.notifyConnClose:
+				client.logger.Printf("Connection closed: %v. Reconnecting...", err)
 				return false
 			case <-time.After(reInitDelay):
 			}
@@ -229,11 +229,11 @@ func (client *Client) handleReInit(conn *amqp.Connection) bool {
 		select {
 		case <-client.done:
 			return true
-		case <-client.notifyConnClose:
-			client.logger.Println("Connection closed. Reconnecting...")
+		case err := <-client.notifyConnClose:
+			client.logger.Printf("Connection closed: %v. Reconnecting...", err)
 			return false
-		case <-client.notifyChanClose:
-			client.logger.Println("Channel closed. Re-running init...")
+		case err := <-client.notifyChanClose:
+			client.logger.Printf("Channel closed: %v. Re-running init...", err)
 		}
 	}
 }

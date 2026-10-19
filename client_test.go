@@ -890,13 +890,19 @@ func TestNotifyClosesAllChansAfterConnectionClose(t *testing.T) {
 	}
 
 	select {
-	case <-c.NotifyClose(make(chan *Error)):
+	case err := <-c.NotifyClose(make(chan *Error)):
+		if err != nil {
+			t.Errorf("expected no error on NotifyClose after Connection.Close, got: %v", err)
+		}
 	case <-time.After(time.Millisecond):
 		t.Errorf("expected to close NotifyClose chan after Connection.Close")
 	}
 
 	select {
-	case <-ch.NotifyClose(make(chan *Error)):
+	case err := <-ch.NotifyClose(make(chan *Error)):
+		if err != nil {
+			t.Errorf("expected no error on Channel.NotifyClose after Connection.Close, got: %v", err)
+		}
 	case <-time.After(time.Millisecond):
 		t.Errorf("expected to close Connection.NotifyClose chan after Connection.Close")
 	}

@@ -1047,8 +1047,8 @@ func TestIntegrationNonBlockingClose(t *testing.T) {
 		}()
 
 		select {
-		case <-errs:
-			t.Fatalf("Close produced an error when it shouldn't")
+		case err := <-errs:
+			t.Fatalf("Close produced an error when it shouldn't: %v", err)
 		case <-succeed:
 			break
 		case <-time.After(1 * time.Second):
@@ -2595,7 +2595,8 @@ func TestShouldNotWaitAfterConnectionClosedIssue44(t *testing.T) {
 	}
 	closed := conn.NotifyClose(make(chan *Error, 1))
 	go func() {
-		<-closed
+		for range closed {
+		}
 	}()
 
 	confirm, err := ch.PublishWithDeferredConfirmWithContext(context.TODO(), "test-issue44", "issue44", false, false, Publishing{Body: []byte("abc")})
