@@ -130,6 +130,7 @@ type Channel struct {
 // QosConfig holds QoS configuration settings for recovery.
 type QosConfig struct {
 	PrefetchCount uint16
+	// Deprecated: PrefetchSize is unsupported by RabbitMQ and must be 0.
 	PrefetchSize  uint32
 	Global        bool
 }
@@ -913,22 +914,22 @@ func (ch *Channel) NotifyPublish(confirm chan Confirmation) chan Confirmation {
 }
 
 /*
-Qos controls how many messages or how many bytes the server will try to keep on
-the network for consumers before receiving delivery acks.  The intent of Qos is
-to make sure the network buffers stay full between the server and client.
+Qos controls how many messages the server will try to keep on the network for
+consumers before receiving delivery acks. The intent of Qos is to keep network
+buffers full between the server and client.
 
 With a prefetch count greater than zero, the server will deliver that many
-messages to consumers before acknowledgments are received.  The server ignores
+messages to consumers before acknowledgments are received. The server ignores
 this option when consumers are started with noAck because no acknowledgments
 are expected or sent.
 
-With a prefetch size greater than zero, the server will try to keep at least
-that many bytes of deliveries flushed to the network before receiving
-acknowledgments from the consumers.  This option is ignored when consumers are
-started with noAck.
+The prefetchSize parameter is unsupported by RabbitMQ server brokers. Setting
+prefetchSize to anything other than 0 returns an error, as the server does not
+implement octet-based prefetch limits and closes the channel if a non-zero
+prefetchSize is received. Always pass 0 for prefetchSize.
 
 When global is true, these Qos settings apply to all existing and future
-consumers on all channels on the same connection.  When false, the Channel.Qos
+consumers on all channels on the same connection. When false, the Channel.Qos
 settings will apply to all existing and future consumers on this channel.
 
 Please see the RabbitMQ Consumer Prefetch documentation for an explanation of
@@ -946,17 +947,18 @@ throughput improvements starting with a prefetch count of 2 or slightly
 greater as described by benchmarks on RabbitMQ.
 
 http://www.rabbitmq.com/blog/2012/04/25/rabbitmq-performance-measurements-part-2/
+
+Deprecated: prefetchSize is unsupported by RabbitMQ and must be 0. It will be removed in a future major version.
 */
 func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
-	// TODO: Change prefetchCount and prefetchSize types from int to uint16 and uint32 respectively.
-	// This will be a breaking change and should be done in a future major release.
+	// TODO: In a future major release, remove prefetchSize parameter and change prefetchCount type to uint16.
 	if err := ch.validateQos(prefetchCount, prefetchSize); err != nil {
 		return err
 	}
 	err := ch.call(
 		&basicQos{
 			PrefetchCount: uint16(prefetchCount),
-			PrefetchSize:  uint32(prefetchSize),
+			PrefetchSize:  0,
 			Global:        global,
 		},
 		&basicQosOk{},
@@ -964,7 +966,7 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
 		ch.connection.recordQos(ch.id, QosConfig{
 			PrefetchCount: uint16(prefetchCount),
-			PrefetchSize:  uint32(prefetchSize),
+			PrefetchSize:  0,
 			Global:        global,
 		})
 	}
@@ -974,6 +976,9 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 func (ch *Channel) validateQos(prefetchCount, prefetchSize int) error {
 	if prefetchCount < 0 || prefetchSize < 0 {
 		return fmt.Errorf("amqp: Qos values must be non-negative (got prefetchCount=%d, prefetchSize=%d)", prefetchCount, prefetchSize)
+	}
+	if prefetchSize != 0 {
+		return fmt.Errorf("amqp: prefetchSize is unsupported by RabbitMQ, must be 0 (got %d)", prefetchSize)
 	}
 	return nil
 }
