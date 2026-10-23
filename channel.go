@@ -948,7 +948,7 @@ greater as described by benchmarks on RabbitMQ.
 
 http://www.rabbitmq.com/blog/2012/04/25/rabbitmq-performance-measurements-part-2/
 
-Deprecated: prefetchSize is unsupported by RabbitMQ and must be 0. It will be removed in a future major version.
+Note: prefetchSize is unsupported by RabbitMQ and must be 0. It will be removed in a future major version.
 */
 func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 	// TODO: In a future major release, remove prefetchSize parameter and change prefetchCount type to uint16.
