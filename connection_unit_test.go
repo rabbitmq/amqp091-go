@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -323,6 +324,56 @@ func TestOpenMaxFrameSizeIsNotZero(t *testing.T) {
 	got := c.maxFrameSize.Load()
 	if got == 0 {
 		t.Error("maxFrameSize was not initialized; still at zero value")
+	}
+}
+
+// TestReconnectResetsMaxFrameSize verifies that Reconnect() re-applies the
+// frameMinSize ceiling before the new handshake, rather than reusing the
+// frame_max negotiated on the previous connection (or 0, meaning unlimited).
+func TestReconnectResetsMaxFrameSize(t *testing.T) {
+	for _, previous := range []uint32{131072, 0} {
+		c := &Connection{
+			url:       "amqp://guest:guest@localhost:5672/",
+			lifeCycle: newLifeCycle(),
+			Config: Config{
+				Recovery: &Recovery{
+					ReconnectionConfig: &ReconnectionConfig{
+						MaxRetryCount: 1,
+						RetryInterval: 1 * time.Millisecond,
+					},
+				},
+				Dial: func(network, addr string) (net.Conn, error) {
+					client, server := net.Pipe()
+					go func() {
+						defer server.Close()
+						if _, err := io.ReadFull(server, make([]byte, 8)); err != nil {
+							return
+						}
+						// A method frame header declaring a payload over the pre-negotiation limit.
+						header := []byte{frameMethod, 0, 0, 0, 0, 0, 0}
+						binary.BigEndian.PutUint32(header[3:], frameMinSize)
+						_, _ = server.Write(header)
+						_, _ = io.Copy(io.Discard, server)
+					}()
+					return client, nil
+				},
+			},
+		}
+		c.maxFrameSize.Store(previous)
+		c.closed.Store(true)
+
+		done := make(chan error, 1)
+		go func() { done <- c.Reconnect() }()
+
+		select {
+		case err := <-done:
+			var amqpErr *Error
+			if !errors.As(err, &amqpErr) || amqpErr.Reason != ErrFrameTooLarge.Error() {
+				t.Errorf("previous maxFrameSize %d: expected Reconnect to fail with %v, got %v", previous, ErrFrameTooLarge, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("previous maxFrameSize %d: Reconnect did not reject the oversized pre-negotiation frame", previous)
+		}
 	}
 }
 
