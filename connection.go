@@ -1840,6 +1840,10 @@ func (c *Connection) resetState() {
 	c.closed.Store(false)
 	c.destructed = false
 
+	// Re-apply the spec's pre-negotiation ceiling, as Open() does, so the new
+	// reader does not inherit the frame_max negotiated on the previous connection.
+	c.maxFrameSize.Store(frameMinSize)
+
 	c.errors = make(chan *Error, 1)
 	c.close = make(chan struct{})
 
