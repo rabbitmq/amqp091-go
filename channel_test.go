@@ -6,6 +6,7 @@ package amqp091
 
 import (
 	"bytes"
+	"math"
 	"testing"
 	"time"
 )
@@ -160,12 +161,12 @@ func TestBasicReturnDispatchDropsNotificationOnFullListener(t *testing.T) {
 	}
 }
 
-func TestRecvContentBodyPreallocationIsCappedToFrameSize(t *testing.T) {
+func TestRecvContentBodyPreallocationIsBounded(t *testing.T) {
 	testCases := []struct {
 		name       string
 		headerSize uint64
 		frameSize  int
-		wantMaxCap int
+		wantCap    int
 	}{
 		{
 			// A server advertising a 1 MiB body into a connection negotiated
@@ -173,13 +174,13 @@ func TestRecvContentBodyPreallocationIsCappedToFrameSize(t *testing.T) {
 			name:       "header size larger than FrameSize is capped",
 			headerSize: 1 << 20, // 1 MiB declared body
 			frameSize:  131072,  // 128 KiB negotiated FrameSize
-			wantMaxCap: 131072,
+			wantCap:    131072,
 		},
 		{
 			name:       "header size equal to FrameSize is not inflated",
 			headerSize: 131072,
 			frameSize:  131072,
-			wantMaxCap: 131072,
+			wantCap:    131072,
 		},
 		{
 			// When the declared body fits within FrameSize, use the exact
@@ -187,15 +188,37 @@ func TestRecvContentBodyPreallocationIsCappedToFrameSize(t *testing.T) {
 			name:       "header size smaller than FrameSize uses header size",
 			headerSize: 1024,
 			frameSize:  131072,
-			wantMaxCap: 1024,
+			wantCap:    1024,
 		},
 		{
-			// FrameSize == 0 means "unlimited" per Config docs; fall back to
-			// the declared header size.
-			name:       "FrameSize zero uses header size",
+			name:       "header size larger than FrameSize above defaultFrameSize is capped",
+			headerSize: 10 << 20,
+			frameSize:  1 << 20,
+			wantCap:    1 << 20,
+		},
+		{
+			name:       "FrameSize zero uses header size within defaultFrameSize",
 			headerSize: 1024,
 			frameSize:  0,
-			wantMaxCap: 1024,
+			wantCap:    1024,
+		},
+		{
+			name:       "FrameSize zero caps header size just above defaultFrameSize",
+			headerSize: defaultFrameSize + 1,
+			frameSize:  0,
+			wantCap:    defaultFrameSize,
+		},
+		{
+			name:       "FrameSize zero caps hostile header size",
+			headerSize: math.MaxUint64,
+			frameSize:  0,
+			wantCap:    defaultFrameSize,
+		},
+		{
+			name:       "FrameSizeUnlimited caps hostile header size",
+			headerSize: math.MaxUint64,
+			frameSize:  FrameSizeUnlimited,
+			wantCap:    defaultFrameSize,
 		},
 	}
 
@@ -210,8 +233,8 @@ func TestRecvContentBodyPreallocationIsCappedToFrameSize(t *testing.T) {
 			// dispatch is not triggered; we only want to inspect the cap.
 			ch.recvContent(&bodyFrame{Body: []byte("hello")})
 
-			if cap(ch.body) > tc.wantMaxCap {
-				t.Fatalf("body buffer cap = %d, want <= %d", cap(ch.body), tc.wantMaxCap)
+			if cap(ch.body) != tc.wantCap {
+				t.Fatalf("body buffer cap = %d, want %d", cap(ch.body), tc.wantCap)
 			}
 		})
 	}

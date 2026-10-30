@@ -631,11 +631,16 @@ func (ch *Channel) recvContent(f frame) {
 
 	case *bodyFrame:
 		if cap(ch.body) == 0 {
-			headerSize := ch.header.Size
-			if fs := uint64(ch.connection.Config.FrameSize); fs > 0 && headerSize > fs {
-				headerSize = fs
+			// The declared size is peer-controlled, so bound it even with unlimited framing.
+			limit := uint64(defaultFrameSize)
+			if fs := ch.connection.Config.FrameSize; fs > 0 {
+				limit = uint64(fs)
 			}
-			ch.body = make([]byte, 0, headerSize)
+			hint := ch.header.Size
+			if hint > limit {
+				hint = limit
+			}
+			ch.body = make([]byte, 0, hint)
 		}
 		ch.body = append(ch.body, frame.Body...)
 
