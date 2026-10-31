@@ -254,8 +254,50 @@ func TestQosNegativeReturnsError(t *testing.T) {
 	if err := ch.validateQos(0, 0); err != nil {
 		t.Fatalf("unexpected error for zero values: %v", err)
 	}
-	if err := ch.validateQos(10, 100); err != nil {
-		t.Fatalf("unexpected error for positive values: %v", err)
+	if err := ch.validateQos(10, 0); err != nil {
+		t.Fatalf("unexpected error for positive prefetchCount with zero prefetchSize: %v", err)
+	}
+}
+
+func TestQosPrefetchSizeUnsupported(t *testing.T) {
+	ch := &Channel{}
+	testCases := []struct {
+		name          string
+		prefetchCount int
+		prefetchSize  int
+		expectedErr   string
+	}{
+		{
+			name:          "zero prefetchCount with positive prefetchSize",
+			prefetchCount: 0,
+			prefetchSize:  1,
+			expectedErr:   "amqp: prefetchSize is unsupported by RabbitMQ, must be 0 (got 1)",
+		},
+		{
+			name:          "positive prefetchCount with positive prefetchSize",
+			prefetchCount: 10,
+			prefetchSize:  1024,
+			expectedErr:   "amqp: prefetchSize is unsupported by RabbitMQ, must be 0 (got 1024)",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ch.validateQos(tc.prefetchCount, tc.prefetchSize)
+			if err == nil {
+				t.Fatalf("expected error for non-zero prefetchSize %d, got nil", tc.prefetchSize)
+			}
+			if err.Error() != tc.expectedErr {
+				t.Fatalf("expected error %q, got %q", tc.expectedErr, err.Error())
+			}
+
+			// Validate that Channel.Qos returns early without contacting the broker.
+			if qosErr := ch.Qos(tc.prefetchCount, tc.prefetchSize, false); qosErr == nil {
+				t.Fatalf("expected Channel.Qos to fail for non-zero prefetchSize %d, got nil", tc.prefetchSize)
+			} else if qosErr.Error() != tc.expectedErr {
+				t.Fatalf("expected Channel.Qos error %q, got %q", tc.expectedErr, qosErr.Error())
+			}
+		})
 	}
 }
 
