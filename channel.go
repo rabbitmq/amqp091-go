@@ -131,8 +131,8 @@ type Channel struct {
 type QosConfig struct {
 	PrefetchCount uint16
 	// Deprecated: PrefetchSize is unsupported by RabbitMQ and must be 0.
-	PrefetchSize  uint32
-	Global        bool
+	PrefetchSize uint32
+	Global       bool
 }
 
 // ExchangeConfig holds Exchange configuration settings for recovery.
@@ -958,7 +958,7 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 	err := ch.call(
 		&basicQos{
 			PrefetchCount: uint16(prefetchCount),
-			PrefetchSize:  0,
+			PrefetchSize:  uint32(prefetchSize),
 			Global:        global,
 		},
 		&basicQosOk{},
@@ -966,7 +966,7 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
 		ch.connection.recordQos(ch.id, QosConfig{
 			PrefetchCount: uint16(prefetchCount),
-			PrefetchSize:  0,
+			PrefetchSize:  uint32(prefetchSize),
 			Global:        global,
 		})
 	}
