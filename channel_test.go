@@ -283,19 +283,13 @@ func TestQosPrefetchSizeUnsupported(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ch.validateQos(tc.prefetchCount, tc.prefetchSize)
+			// Validate that Channel.Qos returns early without contacting the broker.
+			err := ch.Qos(tc.prefetchCount, tc.prefetchSize, false)
 			if err == nil {
 				t.Fatalf("expected error for non-zero prefetchSize %d, got nil", tc.prefetchSize)
 			}
 			if err.Error() != tc.expectedErr {
 				t.Fatalf("expected error %q, got %q", tc.expectedErr, err.Error())
-			}
-
-			// Validate that Channel.Qos returns early without contacting the broker.
-			if qosErr := ch.Qos(tc.prefetchCount, tc.prefetchSize, false); qosErr == nil {
-				t.Fatalf("expected Channel.Qos to fail for non-zero prefetchSize %d, got nil", tc.prefetchSize)
-			} else if qosErr.Error() != tc.expectedErr {
-				t.Fatalf("expected Channel.Qos error %q, got %q", tc.expectedErr, qosErr.Error())
 			}
 		})
 	}
