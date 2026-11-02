@@ -923,10 +923,11 @@ messages to consumers before acknowledgments are received. The server ignores
 this option when consumers are started with noAck because no acknowledgments
 are expected or sent.
 
-The prefetchSize parameter is unsupported by RabbitMQ server brokers. Setting
-prefetchSize to anything other than 0 returns an error, as the server does not
-implement octet-based prefetch limits and closes the channel if a non-zero
-prefetchSize is received. Always pass 0 for prefetchSize.
+The prefetchSize parameter is unsupported by RabbitMQ. Setting prefetchSize to
+anything other than 0 returns an error, as the server does not implement
+octet-based prefetch limits and closes the connection if a non-zero
+prefetchSize is received. Always pass 0 for prefetchSize. It will be removed in
+a future major version.
 
 When global is true, these Qos settings apply to all existing and future
 consumers on all channels on the same connection. When false, the Channel.Qos
@@ -947,8 +948,6 @@ throughput improvements starting with a prefetch count of 2 or slightly
 greater as described by benchmarks on RabbitMQ.
 
 http://www.rabbitmq.com/blog/2012/04/25/rabbitmq-performance-measurements-part-2/
-
-Note: prefetchSize is unsupported by RabbitMQ and must be 0. It will be removed in a future major version.
 */
 func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 	// TODO: In a future major release, remove prefetchSize parameter and change prefetchCount type to uint16.
