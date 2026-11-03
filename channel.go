@@ -133,7 +133,9 @@ type QosConfig struct {
 	PrefetchCount uint16
 	// Deprecated: PrefetchSize is unsupported by RabbitMQ and must be 0.
 	PrefetchSize uint32
-	Global       bool
+	// Deprecated: Global QoS is deprecated in RabbitMQ and ignored by default
+	// starting with RabbitMQ 4.3.
+	Global bool
 }
 
 // ExchangeConfig holds Exchange configuration settings for recovery.
@@ -933,17 +935,20 @@ AMQP 0.9.1 spec. A prefetchCount of 0 means unlimited.
 The prefetchSize parameter is unsupported by RabbitMQ. Setting prefetchSize to
 anything other than 0 returns an error, as the server does not implement
 octet-based prefetch limits and closes the connection if a non-zero
-prefetchSize is received. Always pass 0 for prefetchSize. It will be removed in
-a future major version.
+prefetchSize is received. Always pass 0 for prefetchSize.
 
-When global is true, these Qos settings apply to all existing and future
-consumers on all channels on the same connection. When false, the Channel.Qos
-settings will apply to all existing and future consumers on this channel.
+The global parameter is deprecated. When global is false, the prefetch count
+applies separately to each consumer subsequently started on this channel.
+Starting with RabbitMQ 4.3, global Qos is denied by default: the server accepts
+global set to true but treats it as false, so each consumer gets its own
+prefetch count instead of sharing one. Always pass false for global.
 
-Please see the RabbitMQ Consumer Prefetch documentation for an explanation of
-how the global flag is implemented in RabbitMQ, as it differs from the
-AMQP 0.9.1 specification in that global Qos settings are limited in scope to
-channels, not connections (https://www.rabbitmq.com/consumer-prefetch.html).
+On servers older than 4.3, or when the global_qos deprecated feature is
+explicitly permitted (https://www.rabbitmq.com/docs/deprecated-features),
+setting global to true makes RabbitMQ share the prefetch count across all
+consumers on this channel. This differs from the AMQP 0.9.1 specification,
+where global applies to the whole connection
+(https://www.rabbitmq.com/docs/consumer-prefetch).
 
 To get round-robin behavior between consumers consuming from the same queue on
 different connections, set the prefetch count to 1, and the next available
@@ -957,7 +962,7 @@ greater as described by benchmarks on RabbitMQ.
 http://www.rabbitmq.com/blog/2012/04/25/rabbitmq-performance-measurements-part-2/
 */
 func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
-	// TODO: In a future major release, remove prefetchSize parameter and change prefetchCount type to uint16.
+	// TODO: In a future major release, remove the prefetchSize and global parameters and change prefetchCount type to uint16.
 	if err := ch.validateQos(prefetchCount, prefetchSize); err != nil {
 		return err
 	}
