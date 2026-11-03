@@ -8,6 +8,7 @@ package amqp091
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"reflect"
 	"sync"
@@ -926,7 +927,8 @@ buffers full between the server and client.
 With a prefetch count greater than zero, the server will deliver that many
 messages to consumers before acknowledgments are received. The server ignores
 this option when consumers are started with noAck because no acknowledgments
-are expected or sent.
+are expected or sent. The prefetchCount must be between 0 and 65535 as per the
+AMQP 0.9.1 spec. A prefetchCount of 0 means unlimited.
 
 The prefetchSize parameter is unsupported by RabbitMQ. Setting prefetchSize to
 anything other than 0 returns an error, as the server does not implement
@@ -980,6 +982,9 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 func (ch *Channel) validateQos(prefetchCount, prefetchSize int) error {
 	if prefetchCount < 0 || prefetchSize < 0 {
 		return fmt.Errorf("amqp: Qos values must be non-negative (got prefetchCount=%d, prefetchSize=%d)", prefetchCount, prefetchSize)
+	}
+	if prefetchCount > math.MaxUint16 {
+		return fmt.Errorf("amqp: prefetchCount must not exceed %d (got %d)", math.MaxUint16, prefetchCount)
 	}
 	if prefetchSize != 0 {
 		return fmt.Errorf("amqp: prefetchSize is unsupported by RabbitMQ, must be 0 (got %d)", prefetchSize)

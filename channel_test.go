@@ -6,6 +6,7 @@ package amqp091
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -256,6 +257,26 @@ func TestQosNegativeReturnsError(t *testing.T) {
 	}
 	if err := ch.validateQos(10, 0); err != nil {
 		t.Fatalf("unexpected error for positive prefetchCount with zero prefetchSize: %v", err)
+	}
+}
+
+func TestQosPrefetchCountUpperBound(t *testing.T) {
+	ch := &Channel{}
+	// Call validateQos directly, as a valid Qos would proceed to send to the
+	// broker and panic on the nil connection.
+	if err := ch.validateQos(math.MaxUint16, 0); err != nil {
+		t.Fatalf("unexpected error for prefetchCount=%d: %v", math.MaxUint16, err)
+	}
+	for _, prefetchCount := range []int{math.MaxUint16 + 1, math.MaxInt32} {
+		// Validate that Channel.Qos returns early without contacting the broker.
+		err := ch.Qos(prefetchCount, 0, false)
+		if err == nil {
+			t.Fatalf("expected error for prefetchCount=%d, got nil", prefetchCount)
+		}
+		expectedErr := fmt.Sprintf("amqp: prefetchCount must not exceed 65535 (got %d)", prefetchCount)
+		if err.Error() != expectedErr {
+			t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
+		}
 	}
 }
 
