@@ -109,9 +109,9 @@ func TestBasicCancelDispatchAcknowledgesOnlyWhenServerAccepts(t *testing.T) {
 					if _, ok := ch.consumers.queueForTag(tag); ok {
 						t.Fatal("cancelled consumer remains registered")
 					}
-					if !tc.wantReply {
+					if !tc.wantReply || !registered {
 						if output.Len() != 0 {
-							t.Fatal("sent a response without server capability support")
+							t.Fatal("sent an unexpected response")
 						}
 						return
 					}

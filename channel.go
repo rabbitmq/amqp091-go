@@ -507,8 +507,8 @@ func (ch *Channel) dispatch(msg message) {
 		ch.notifyM.RLock()
 		notifyAll(ch.cancels, m.ConsumerTag)
 		ch.notifyM.RUnlock()
-		ch.consumers.cancel(m.ConsumerTag)
-		if ch.connection.isCapable(serverCapabilityAcceptConsumerCancelOk) {
+		registered := ch.consumers.cancel(m.ConsumerTag)
+		if registered && ch.connection.isCapable(serverCapabilityAcceptConsumerCancelOk) {
 			// Older servers cannot handle client-sent basic.cancel-ok.
 			// Serialize the response with concurrent basic.publish frames.
 			ch.m.Lock()
