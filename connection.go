@@ -379,6 +379,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		if config.TLSClientConfig == nil {
 			tlsConfig, err := tlsConfigFromURI(uri)
 			if err != nil {
+				conn.Close()
 				return nil, fmt.Errorf("create TLS config from URI: %w", err)
 			}
 			config.TLSClientConfig = tlsConfig
