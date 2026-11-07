@@ -377,6 +377,59 @@ func TestReconnectResetsMaxFrameSize(t *testing.T) {
 	}
 }
 
+// TestReconnectHonorsURIConnectionTimeout checks that recovery dials with the
+// connection_timeout from the URI, as DialConfig does, instead of the 30s default.
+func TestReconnectHonorsURIConnectionTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	// Accept the connection but never answer the AMQP handshake.
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		accepted <- conn
+	}()
+	defer func() {
+		select {
+		case conn := <-accepted:
+			conn.Close()
+		default:
+		}
+	}()
+
+	c := &Connection{
+		url:       "amqp://guest:guest@" + ln.Addr().String() + "/?connection_timeout=100",
+		lifeCycle: newLifeCycle(),
+		Config: Config{
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount: 1,
+					RetryInterval: 1 * time.Millisecond,
+				},
+			},
+		},
+	}
+	c.closed.Store(true)
+
+	done := make(chan error, 1)
+	go func() { done <- c.Reconnect() }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected Reconnect to fail against a silent broker")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reconnect ignored connection_timeout=100 and kept waiting for the handshake")
+	}
+}
+
 type dummyReadWriteCloser struct{}
 
 func (d dummyReadWriteCloser) Read(p []byte) (n int, err error)  { return 0, nil }
