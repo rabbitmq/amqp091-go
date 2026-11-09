@@ -385,22 +385,23 @@ func TestReconnectHonorsURIConnectionTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
 
 	// Accept the connection but never answer the AMQP handshake.
 	accepted := make(chan net.Conn, 1)
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
+			close(accepted)
 			return
 		}
 		accepted <- conn
 	}()
 	defer func() {
-		select {
-		case conn := <-accepted:
+		// Closing the listener unblocks a pending Accept, so the receive
+		// below cannot hang.
+		ln.Close()
+		if conn, ok := <-accepted; ok {
 			conn.Close()
-		default:
 		}
 	}()
 
