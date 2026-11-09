@@ -266,9 +266,9 @@ func DefaultDial(connectionTimeout time.Duration) func(network, addr string) (ne
 }
 
 // connectionTimeout returns the dial and handshake timeout set by the URI's
-// connection_timeout parameter, or the default when it is not set.
+// connection_timeout parameter, or the default when it is not positive.
 func (uri URI) connectionTimeout() time.Duration {
-	if uri.ConnectionTimeout != 0 {
+	if uri.ConnectionTimeout > 0 {
 		return time.Duration(uri.ConnectionTimeout) * time.Millisecond
 	}
 	return defaultConnectionTimeout
