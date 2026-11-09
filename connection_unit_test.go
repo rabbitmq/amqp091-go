@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -422,8 +423,9 @@ func TestReconnectHonorsURIConnectionTimeout(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("expected Reconnect to fail against a silent broker")
+		var amqpErr *Error
+		if !errors.As(err, &amqpErr) || amqpErr.Code != FrameError || !strings.HasSuffix(amqpErr.Reason, "i/o timeout") {
+			t.Fatalf("expected Reconnect to fail with a handshake i/o timeout, got %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Reconnect ignored connection_timeout=100 and kept waiting for the handshake")
