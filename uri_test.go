@@ -479,3 +479,15 @@ func TestURIHeartbeatOutOfRange(t *testing.T) {
 		t.Fatalf("heartbeat %#v", uri.Heartbeat)
 	}
 }
+
+func TestURIConnectionTimeoutDefaultsWhenNotPositive(t *testing.T) {
+	for _, timeout := range []string{"0", "-1"} {
+		uri, err := ParseURI("amqp://foo.bar/?connection_timeout=" + timeout)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := uri.connectionTimeout(); got != defaultConnectionTimeout {
+			t.Errorf("connection_timeout=%s: got %v, want %v", timeout, got, defaultConnectionTimeout)
+		}
+	}
+}

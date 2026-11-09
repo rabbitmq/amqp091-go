@@ -265,6 +265,15 @@ func DefaultDial(connectionTimeout time.Duration) func(network, addr string) (ne
 	}
 }
 
+// connectionTimeout returns the dial and handshake timeout set by the URI's
+// connection_timeout parameter, or the default when it is not positive.
+func (uri URI) connectionTimeout() time.Duration {
+	if uri.ConnectionTimeout > 0 {
+		return time.Duration(uri.ConnectionTimeout) * time.Millisecond
+	}
+	return defaultConnectionTimeout
+}
+
 // Dial accepts a string in the AMQP URI format and returns a new Connection
 // over TCP using PlainAuth.  Defaults to a server heartbeat interval of 10
 // seconds and sets the handshake deadline to 30 seconds. After handshake,
@@ -358,16 +367,11 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		config.FrameSize = defaultFrameSize
 	}
 
-	connectionTimeout := defaultConnectionTimeout
-	if uri.ConnectionTimeout != 0 {
-		connectionTimeout = time.Duration(uri.ConnectionTimeout) * time.Millisecond
-	}
-
 	addr := net.JoinHostPort(uri.Host, strconv.FormatInt(int64(uri.Port), 10))
 
 	dialer := config.Dial
 	if dialer == nil {
-		dialer = DefaultDial(connectionTimeout)
+		dialer = DefaultDial(uri.connectionTimeout())
 	}
 
 	conn, err = dialer("tcp", addr)
@@ -1687,19 +1691,19 @@ func (c *Connection) Reconnect() (err error) {
 		case <-time.After(c.RetryInterval() + jitter):
 		}
 
-		// Re-dial
-		var conn net.Conn
-		dialer := c.Config.Dial
-		if dialer == nil {
-			dialer = DefaultDial(defaultConnectionTimeout)
-		}
-
 		// We need to parse URL to get addr
 		var uri URI
 		uri, err = ParseURI(c.url)
 		if err != nil {
 			Logger.Printf("Connection recovery failed to parse URI: %v", err)
 			return err
+		}
+
+		// Re-dial
+		var conn net.Conn
+		dialer := c.Config.Dial
+		if dialer == nil {
+			dialer = DefaultDial(uri.connectionTimeout())
 		}
 
 		// Restore SASL from the clone captured at initial Open, before the
