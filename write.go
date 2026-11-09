@@ -97,7 +97,7 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 	if f.Properties.ContentEncoding != "" {
 		mask |= flagContentEncoding
 	}
-	if len(f.Properties.Headers) > 0 {
+	if len(f.Properties.Headers) > 0 || f.Properties.returnID != 0 {
 		mask |= flagHeaders
 	}
 	if f.Properties.DeliveryMode > 0 {
@@ -146,7 +146,7 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 		}
 	}
 	if hasProperty(mask, flagHeaders) {
-		if err = writeTable(&payload, f.Properties.Headers); err != nil {
+		if err = writeTableWithReturnID(&payload, f.Properties.Headers, f.Properties.returnID); err != nil {
 			return
 		}
 	}
@@ -426,16 +426,43 @@ func writeField(w io.Writer, value any) (err error) {
 }
 
 // writeTable serializes a Table to the given writer.
-// It writes each key-value pair and returns the serialized data as a longstr.
+// It preserves all keys and returns the data as a longstr.
 func writeTable(w io.Writer, table Table) (err error) {
+	return writeTableEncoded(w, table, 0, false)
+}
+
+// writeTableWithReturnID replaces the top-level return-ID header,
+// appending returnID when nonzero and preserving nested tables.
+func writeTableWithReturnID(w io.Writer, table Table, returnID uint64) (err error) {
+	return writeTableEncoded(w, table, returnID, true)
+}
+
+// writeTableEncoded serializes a table, optionally replacing its return-ID key.
+func writeTableEncoded(w io.Writer, table Table, returnID uint64, replaceReturnID bool) (err error) {
 	var buf bytes.Buffer
 
+	// Replace the return ID while encoding to avoid copying or mutating
+	// caller-owned headers, which may be shared across channels.
 	for key, val := range table {
+		if replaceReturnID && key == returnIDHeader {
+			continue
+		}
+
 		if err = writeShortstr(&buf, key); err != nil {
 			return fmt.Errorf("writing key %q: %w", key, err)
 		}
 		if err = writeField(&buf, val); err != nil {
 			return fmt.Errorf("writing value for key %q: %w", key, err)
+		}
+	}
+
+	if returnID != 0 {
+		if err = writeShortstr(&buf, returnIDHeader); err != nil {
+			return fmt.Errorf("writing key %q: %w", returnIDHeader, err)
+		}
+
+		if err = writeField(&buf, binary.BigEndian.AppendUint64(nil, returnID)); err != nil {
+			return fmt.Errorf("writing value for key %q: %w", returnIDHeader, err)
 		}
 	}
 

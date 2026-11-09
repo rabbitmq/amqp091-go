@@ -174,6 +174,9 @@ type properties struct {
 	UserId          string    // application use - creating user id
 	AppId           string    // application use - creating application
 	reserved1       string    // was cluster-id - process for buffer consumption
+
+	// Client-only metadata for replacing the return header during encoding.
+	returnID uint64
 }
 
 // DeliveryMode.  Transient means higher throughput but messages will not be
@@ -280,8 +283,9 @@ type Blocking struct {
 type DeferredConfirmation struct {
 	DeliveryTag uint64
 
-	done chan struct{}
-	ack  bool
+	done     chan struct{}
+	ack      bool
+	returned *Return
 }
 
 // Confirmation notifies the acknowledgment or negative acknowledgement of a
@@ -404,6 +408,10 @@ const (
 //
 // Functions taking a table will immediately fail when the table contains a
 // value of an unsupported type.
+//
+// The key "amqp091-go-return-id" is reserved in top-level publishing headers.
+// Caller-provided entries there are omitted or replaced with a generated ID.
+// The key is preserved in nested tables and other AMQP tables.
 //
 // The caller must be specific in which precision of integer it wishes to
 // encode.

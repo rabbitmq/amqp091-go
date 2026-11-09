@@ -7,6 +7,7 @@ package amqp091
 
 import (
 	"context"
+	"encoding/binary"
 	"sync"
 	"testing"
 	"time"
@@ -206,6 +207,10 @@ func TestDeferredConfirmationsConfirmMultiple(t *testing.T) {
 	dc1 := dcs.Add(1)
 	dc2 := dcs.Add(2)
 	dc3 := dcs.Add(3)
+
+	ret := &Return{Headers: Table{returnIDHeader: binary.BigEndian.AppendUint64(nil, dc1.DeliveryTag)}}
+	dcs.Return(ret)
+
 	wg.Add(1)
 	go func() {
 		result = dc1.Wait() && dc2.Wait() && dc3.Wait()
@@ -216,6 +221,14 @@ func TestDeferredConfirmationsConfirmMultiple(t *testing.T) {
 	if !result {
 		t.Fatal("expected to receive true for result, received false")
 	}
+
+	if dc1.Returned() != ret {
+		t.Fatal("expected completion to preserve the returned publishing")
+	}
+
+	if dc2.Returned() != nil || dc3.Returned() != nil {
+		t.Fatal("expected no returns for the other publishings")
+	}
 }
 
 func TestDeferredConfirmationsClose(t *testing.T) {
@@ -225,6 +238,9 @@ func TestDeferredConfirmationsClose(t *testing.T) {
 	dc1 := dcs.Add(1)
 	dc2 := dcs.Add(2)
 	dc3 := dcs.Add(3)
+	ret := &Return{Headers: Table{returnIDHeader: binary.BigEndian.AppendUint64(nil, dc1.DeliveryTag)}}
+	dcs.Return(ret)
+
 	wg.Add(1)
 	go func() {
 		result = !dc1.Wait() && !dc2.Wait() && !dc3.Wait()
@@ -234,6 +250,14 @@ func TestDeferredConfirmationsClose(t *testing.T) {
 	wg.Wait()
 	if !result {
 		t.Fatal("expected to receive false for nacked confirmations, received true")
+	}
+
+	if dc1.Returned() != ret {
+		t.Fatal("expected completion to preserve the returned publishing")
+	}
+
+	if dc2.Returned() != nil || dc3.Returned() != nil {
+		t.Fatal("expected no returns for the other publishings")
 	}
 }
 
@@ -257,9 +281,74 @@ func TestDeferredConfirmationsDoneAcked(t *testing.T) {
 	}
 }
 
+func TestDeferredConfirmationsReturned(t *testing.T) {
+	dcs := newDeferredConfirmations()
+	dc := dcs.Add(1)
+	withoutReturn := dcs.Add(2)
+	ret := &Return{Headers: Table{returnIDHeader: binary.BigEndian.AppendUint64(nil, dc.DeliveryTag)}}
+
+	if dc.Returned() != nil {
+		t.Fatal("expected no return for a pending publishing")
+	}
+
+	dcs.Return(ret)
+
+	if dc.Returned() != nil {
+		t.Fatal("expected no visible return before confirmation")
+	}
+
+	dcs.Confirm(Confirmation{dc.DeliveryTag, true})
+	dcs.Confirm(Confirmation{withoutReturn.DeliveryTag, true})
+
+	select {
+	case <-dc.Done():
+	default:
+		t.Fatal("expected the confirmation to be complete")
+	}
+
+	if !dc.Acked() || !withoutReturn.Acked() {
+		t.Fatal("expected both publishings to be acknowledged")
+	}
+
+	if dc.Returned() != ret {
+		t.Fatal("expected the returned publishing after confirmation")
+	}
+
+	if withoutReturn.Returned() != nil {
+		t.Fatal("expected no return for the other publishing")
+	}
+}
+
+func TestDeferredConfirmationsReturnedDuplicate(t *testing.T) {
+	dcs := newDeferredConfirmations()
+	dc := dcs.Add(1)
+	ret := &Return{Headers: Table{returnIDHeader: binary.BigEndian.AppendUint64(nil, dc.DeliveryTag)}, Body: []byte("first")}
+	duplicate := &Return{Headers: ret.Headers, Body: []byte("duplicate")}
+
+	dcs.Return(ret)
+	dcs.Return(duplicate)
+	dcs.Confirm(Confirmation{dc.DeliveryTag, true})
+
+	if dc.Returned() != ret {
+		t.Fatal("expected duplicate returns to preserve the first return")
+	}
+
+	dcs.Return(duplicate)
+
+	if dc.Returned() != ret {
+		t.Fatal("a late return changed the completed confirmation")
+	}
+
+	if len(dcs.confirmations) != 0 {
+		t.Fatal("expected no pending confirmations after completion")
+	}
+}
+
 func TestDeferredConfirmationsWaitContextNack(t *testing.T) {
 	dcs := newDeferredConfirmations()
 	dc := dcs.Add(1)
+	ret := &Return{Headers: Table{returnIDHeader: binary.BigEndian.AppendUint64(nil, dc.DeliveryTag)}}
+	dcs.Return(ret)
 
 	dcs.Confirm(Confirmation{dc.DeliveryTag, false})
 
@@ -269,6 +358,10 @@ func TestDeferredConfirmationsWaitContextNack(t *testing.T) {
 	}
 	if ack {
 		t.Fatal("expected to receive false for nacked confirmations, received true")
+	}
+
+	if dc.Returned() != ret {
+		t.Fatal("expected a negative acknowledgment to preserve the returned publishing")
 	}
 }
 

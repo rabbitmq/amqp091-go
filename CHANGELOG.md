@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Implemented enhancements:**
+
+- Add `DeferredConfirmation.Returned()` to inspect returned publishings without requiring `NotifyReturn`.
+
 ## [v1.16.0](https://github.com/rabbitmq/amqp091-go/tree/v1.16.0) (2026-10-19)
 
 [Full Changelog](https://github.com/rabbitmq/amqp091-go/compare/v1.15.0...v1.16.0)

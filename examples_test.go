@@ -587,3 +587,40 @@ func ExampleChannel_QueueDeclare_consumerTimeout() {
 	)
 	log.Printf("Declared Classic Queue v2: %s", q.Name)
 }
+
+func ExampleDeferredConfirmation_Returned() {
+	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := ch.Confirm(false); err != nil {
+		log.Fatal(err)
+	}
+
+	confirmation, err := ch.PublishWithDeferredConfirm("", "destination", true, false, amqp.Publishing{Body: []byte("hello")})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ack, err := confirmation.WaitContext(ctx)
+	if err != nil {
+		log.Printf("Confirmation still pending: %v", err)
+		return
+	}
+
+	if ret := confirmation.Returned(); ret != nil {
+		log.Printf("Publish returned: %d %s", ret.ReplyCode, ret.ReplyText)
+	}
+
+	log.Printf("Publish acknowledged: %v", ack)
+}

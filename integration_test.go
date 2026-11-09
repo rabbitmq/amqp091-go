@@ -2896,3 +2896,147 @@ func generateCrc32Random(t *testing.T, size int) []byte {
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
+
+// TestIntegrationDeferredConfirmationReturns checks routed publishes and retries.
+func TestIntegrationDeferredConfirmationReturns(t *testing.T) {
+	for _, listen := range []bool{false, true} {
+		t.Run(fmt.Sprintf("listener=%v", listen), func(t *testing.T) {
+			conn := integrationConnection(t, t.Name())
+			defer conn.Close()
+
+			ch, err := conn.Channel()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			q, err := ch.QueueDeclare("", false, true, true, false, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := ch.Confirm(false); err != nil {
+				t.Fatal(err)
+			}
+
+			var notifications chan Return
+			if listen {
+				notifications = ch.NotifyReturn(make(chan Return, 4))
+			}
+
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+
+			confirmations := make([]*DeferredConfirmation, 8)
+			var publishers sync.WaitGroup
+			for i := range confirmations {
+				publishers.Add(1)
+				go func(i int) {
+					defer publishers.Done()
+
+					key := q.Name
+					if i%2 != 0 {
+						key += ".missing"
+					}
+
+					var err error
+					confirmations[i], err = ch.PublishWithDeferredConfirm("", key, true, false, Publishing{Body: []byte(strconv.Itoa(i))})
+					if err != nil {
+						t.Error(err)
+						return
+					}
+				}(i)
+			}
+
+			publishers.Wait()
+
+			if t.Failed() {
+				return
+			}
+
+			for i, dc := range confirmations {
+				if ack, err := dc.WaitContext(ctx); err != nil || !ack {
+					t.Fatalf("publish %d: ack=%v, err=%v", i, ack, err)
+				}
+
+				ret := dc.Returned()
+				if i%2 == 0 {
+					if ret != nil {
+						t.Fatalf("routable publish %d returned", i)
+					}
+				} else {
+					if ret == nil {
+						t.Fatalf("expected return for publish %d, got nil", i)
+					}
+					if ret.ReplyCode != NoRoute {
+						t.Fatalf("expected return for publish %d to have reply code %d, got %d", i, NoRoute, ret.ReplyCode)
+					}
+					if string(ret.Body) != strconv.Itoa(i) {
+						t.Fatalf("expected return for publish %d to have body %q, got %q", i, strconv.Itoa(i), string(ret.Body))
+					}
+					if !reflect.DeepEqual(ret.Headers[returnIDHeader], binary.BigEndian.AppendUint64(nil, dc.DeliveryTag)) {
+						t.Fatalf("expected return for publish %d to have header %q, got %q", i, binary.BigEndian.AppendUint64(nil, dc.DeliveryTag), ret.Headers[returnIDHeader])
+					}
+				}
+			}
+
+			// Make sure that NotifyReturn works as expected.
+			if listen {
+				for i := 0; i < 4; i++ {
+					select {
+					case ret := <-notifications:
+						if ret.ReplyCode != NoRoute || ret.Headers[returnIDHeader] == nil {
+							t.Fatalf("unexpected notification: %+v", ret)
+						}
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					}
+				}
+			}
+
+			delivery, ok, err := ch.Get(q.Name, true)
+			if err != nil || !ok {
+				t.Fatalf("get routed message: ok=%v, err=%v", ok, err)
+			}
+
+			retryCh, err := conn.Channel()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := retryCh.Confirm(false); err != nil {
+				t.Fatal(err)
+			}
+
+			// Retries use their own delivery tags without modifying the source headers.
+			for _, headers := range []Table{delivery.Headers, confirmations[1].Returned().Headers} {
+				before := Table(cloneMap(headers))
+				if id, ok := before[returnIDHeader].([]byte); ok {
+					before[returnIDHeader] = bytes.Clone(id)
+				}
+
+				dc, err := retryCh.PublishWithDeferredConfirm("", q.Name+".missing", true, false, Publishing{Headers: headers, Body: []byte("retry")})
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if ack, err := dc.WaitContext(ctx); err != nil || !ack {
+					t.Fatalf("retry: ack=%v, err=%v", ack, err)
+				}
+
+				ret := dc.Returned()
+				if ret == nil {
+					t.Fatal("expected return for retry, got nil")
+				}
+
+				want := binary.BigEndian.AppendUint64(nil, dc.DeliveryTag)
+				if !reflect.DeepEqual(ret.Headers[returnIDHeader], want) {
+					t.Fatalf("expected return for retry to have header %q, got %q", want, ret.Headers[returnIDHeader])
+				}
+
+				if !reflect.DeepEqual(headers, before) {
+					t.Fatal("retry modified the source headers")
+				}
+			}
+		})
+	}
+}

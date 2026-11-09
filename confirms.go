@@ -7,8 +7,13 @@ package amqp091
 
 import (
 	"context"
+	"encoding/binary"
 	"sync"
 )
+
+// returnIDHeader correlates a returned mandatory publishing with its deferred
+// confirmation using the channel-scoped delivery tag encoded as eight big-endian bytes.
+const returnIDHeader = "amqp091-go-return-id"
 
 // confirms resequences and notifies one or multiple publisher confirmation listeners
 type confirms struct {
@@ -157,6 +162,26 @@ func (d *deferredConfirmations) Add(tag uint64) *DeferredConfirmation {
 	return dc
 }
 
+// Return attaches a returned publishing to its pending confirmation.
+func (d *deferredConfirmations) Return(ret *Return) {
+	id, ok := ret.Headers[returnIDHeader].([]byte)
+	if !ok || len(id) != 8 {
+		return
+	}
+
+	tag := binary.BigEndian.Uint64(id)
+	if tag == 0 {
+		return
+	}
+
+	d.m.Lock()
+	defer d.m.Unlock()
+
+	if dc := d.confirmations[tag]; dc != nil && dc.returned == nil {
+		dc.returned = ret
+	}
+}
+
 // remove is only used to drop a tag whose publish failed
 func (d *deferredConfirmations) remove(tag uint64) {
 	d.m.Lock()
@@ -229,6 +254,19 @@ func (d *DeferredConfirmation) Acked() bool {
 		return false
 	}
 	return d.ack
+}
+
+// Returned returns the message returned by the broker, or nil if no return was
+// received or the confirmation is still pending. Wait for the confirmation
+// before inspecting the result. The returned message, including its body and
+// headers, is shared with NotifyReturn listeners.
+func (d *DeferredConfirmation) Returned() *Return {
+	select {
+	case <-d.done:
+		return d.returned
+	default:
+		return nil
+	}
 }
 
 // Wait blocks until the publisher confirmation. It returns true if the server

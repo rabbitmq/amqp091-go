@@ -523,6 +523,11 @@ func (ch *Channel) dispatch(msg message) {
 
 	case *basicReturn:
 		ret := newReturn(*m)
+
+		if ch.confirming.Load() {
+			ch.confirms.deferredConfirmations.Return(ret)
+		}
+
 		ch.notifyM.RLock()
 		notifyAll(ch.returns, *ret)
 		ch.notifyM.RUnlock()
@@ -823,6 +828,9 @@ immediate flags.
 
 A return struct has a copy of the Publishing along with some error
 information about why the publishing failed.
+
+The returned body and headers are shared with other listeners and any deferred
+confirmation.
 */
 func (ch *Channel) NotifyReturn(c chan Return) chan Return {
 	ch.notifyM.Lock()
@@ -1849,6 +1857,9 @@ by the server.  Add a listener with Channel.NotifyReturn to handle any
 undeliverable message when calling publish with either the mandatory or
 immediate parameters as true.
 
+Mandatory publishings in confirm mode include a reserved "amqp091-go-return-id"
+header. See [Channel.PublishWithDeferredConfirm] for details.
+
 Publishings can be undeliverable when the mandatory flag is true and no queue is
 bound that matches the routing key, or when the immediate flag is true and no
 consumer on the matched queue is ready to accept the delivery.
@@ -1925,6 +1936,12 @@ PublishWithDeferredConfirm behaves identically to Publish, but additionally
 returns a DeferredConfirmation, allowing the caller to wait on the publisher
 confirmation for this message. If the channel has not been put into confirm
 mode, the DeferredConfirmation will be nil.
+
+For mandatory publishings in confirm mode, call [DeferredConfirmation.Returned]
+after the confirmation completes to inspect returned messages without
+registering [Channel.NotifyReturn]. These publishings include a reserved
+"amqp091-go-return-id" header in the outgoing message. The caller's msg.Headers
+is not modified.
 */
 func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
 	if err := msg.Headers.Validate(); err != nil {
@@ -1935,8 +1952,13 @@ func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, i
 	defer ch.m.Unlock()
 
 	var dc *DeferredConfirmation
+	var returnID uint64
 	if ch.confirming.Load() {
 		dc = ch.confirms.publish()
+
+		if mandatory {
+			returnID = dc.DeliveryTag
+		}
 	}
 
 	if err := ch.send(&basicPublish{
@@ -1959,6 +1981,7 @@ func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, i
 			Type:            msg.Type,
 			UserId:          msg.UserId,
 			AppId:           msg.AppId,
+			returnID:        returnID,
 		},
 	}); err != nil {
 		if ch.confirming.Load() {
