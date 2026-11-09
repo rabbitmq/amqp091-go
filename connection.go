@@ -370,21 +370,22 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		dialer = DefaultDial(connectionTimeout)
 	}
 
+	// Build the TLS config from the URI before dialing: it only reads the
+	// URI and local files, so a failure here must not leave a socket open.
+	if uri.Scheme == "amqps" && config.TLSClientConfig == nil {
+		tlsConfig, err := tlsConfigFromURI(uri)
+		if err != nil {
+			return nil, fmt.Errorf("create TLS config from URI: %w", err)
+		}
+		config.TLSClientConfig = tlsConfig
+	}
+
 	conn, err = dialer("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 
 	if uri.Scheme == "amqps" {
-		if config.TLSClientConfig == nil {
-			tlsConfig, err := tlsConfigFromURI(uri)
-			if err != nil {
-				conn.Close()
-				return nil, fmt.Errorf("create TLS config from URI: %w", err)
-			}
-			config.TLSClientConfig = tlsConfig
-		}
-
 		// If ServerName has not been specified in TLSClientConfig,
 		// set it to the URI host used for this connection.
 		if config.TLSClientConfig.ServerName == "" {
