@@ -662,6 +662,9 @@ func (ch *Channel) Close() error {
 	// instead of running its full retry loop while this call waits behind
 	// it. See Connection.Close() for the analogous connection-level fix.
 	ch.closeInit.Store(true)
+	// Publish may be blocked in waitReadyToPublish. Close can return here
+	// without a state change when the channel is already shut, so wake it.
+	ch.lifeCycle.broadcast()
 
 	// Wait for any in-flight reconnectChannel() to fully settle before
 	// inspecting/tearing down state. See Connection.Close() for the analogous
@@ -1840,9 +1843,13 @@ confirmations start at 1.  Exit when all publishings are confirmed.
 
 When Publish does not return an error and the channel is in confirm mode, the
 internal counter for DeliveryTags with the first confirmation starts at 1.
+
+When Config.Recovery is enabled, Publish blocks while the connection or this
+channel is reconnecting and sends once both are open again. It returns
+ErrClosed if recovery finishes closed or Close is called while waiting.
 */
 func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg Publishing) error {
-	_, err := ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
+	_, err := ch.publishWithDeferredConfirm(context.Background(), exchange, key, mandatory, immediate, msg)
 	return err
 }
 
@@ -1850,9 +1857,14 @@ func (ch *Channel) Publish(exchange, key string, mandatory, immediate bool, msg 
 PublishWithContext sends a Publishing from the client to an exchange on the server.
 
 If the context is already cancelled when PublishWithContext is called, it
-returns the context error immediately without attempting to publish.  Context
-cancellation after the call has started does not interrupt an in-flight
-Publish, as the underlying I/O is not context-aware.
+returns the context error immediately without attempting to publish.
+Cancellation while waiting out a reconnect also returns the context error.
+Cancellation after the publish has started does not interrupt the socket
+write, as the underlying I/O is not context-aware.
+
+When Config.Recovery is enabled, PublishWithContext blocks while the
+connection or this channel is reconnecting and sends once both are open
+again, or returns ErrClosed if recovery finishes closed.
 
 When you want a single message to be delivered to a single queue, you can
 publish to the default exchange with the routingKey of the queue name.  This is
@@ -1884,12 +1896,8 @@ When Publish does not return an error and the channel is in confirm mode, the
 internal counter for DeliveryTags with the first confirmation starts at 1.
 */
 func (ch *Channel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		return ch.Publish(exchange, key, mandatory, immediate, msg)
-	}
+	_, err := ch.publishWithDeferredConfirm(ctx, exchange, key, mandatory, immediate, msg)
+	return err
 }
 
 /*
@@ -1899,7 +1907,15 @@ confirmation for this message. If the channel has not been put into confirm
 mode, the DeferredConfirmation will be nil.
 */
 func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
+	return ch.publishWithDeferredConfirm(context.Background(), exchange, key, mandatory, immediate, msg)
+}
+
+// publishWithDeferredConfirm validates, waits out an in-progress recovery, then sends.
+func (ch *Channel) publishWithDeferredConfirm(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
 	if err := msg.Headers.Validate(); err != nil {
+		return nil, err
+	}
+	if err := ch.waitReadyToPublish(ctx); err != nil {
 		return nil, err
 	}
 
@@ -1949,16 +1965,108 @@ for this message. If the channel has not been put into confirm mode,
 the DeferredConfirmation will be nil.
 
 If the context is already cancelled when PublishWithDeferredConfirmWithContext is called, it
-returns the context error immediately without attempting to publish.  Context
-cancellation after the call has started does not interrupt an in-flight
-PublishWithDeferredConfirm, as the underlying I/O is not context-aware.
+returns the context error immediately without attempting to publish.
+Cancellation while waiting out a reconnect also returns the context error.
+Cancellation after the publish has started does not interrupt the socket
+write, as the underlying I/O is not context-aware.
+
+When Config.Recovery is enabled, this blocks while the connection or this
+channel is reconnecting and sends once both are open again.
 */
 func (ch *Channel) PublishWithDeferredConfirmWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	return ch.publishWithDeferredConfirm(ctx, exchange, key, mandatory, immediate, msg)
+}
+
+// waitReadyToPublish returns when this channel can send a publish.
+//
+// Recovery disabled: return immediately so Publish keeps its old fail-fast
+// behavior. Recovery enabled: block while the connection or channel is
+// reconnecting. ErrClosed means recovery ended closed or Close was called.
+// A cancelled ctx ends the wait.
+//
+// The cond check runs under the channel lifecycle mutex. Connection state is
+// read second (channel mutex, then connection mutex). Connection recovery
+// wakes these waiters only after it has released its lifecycle mutex.
+func (ch *Channel) waitReadyToPublish(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	conn := ch.connection
+	if conn == nil || !conn.IsRecoveryEnabled() {
+		return nil
+	}
+	if ready, dead := ch.publishGate(); ready {
+		return nil
+	} else if dead {
+		return ErrClosed
+	}
+
+	if done := ctx.Done(); done != nil {
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			select {
+			case <-done:
+				ch.lifeCycle.broadcast()
+			case <-stop:
+			}
+		}()
+	}
+
+	l := ch.lifeCycle
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ready, dead := ch.publishGateLocked()
+		if ready {
+			return nil
+		}
+		if dead {
+			return ErrClosed
+		}
+		l.cond.Wait()
+	}
+}
+
+// publishGate reports whether a publish can proceed or should fail now.
+// ready and dead are both false while recovery is still in progress.
+func (ch *Channel) publishGate() (ready, dead bool) {
+	if ch.closeInit.Load() {
+		return false, true
+	}
+	switch ch.lifeCycle.State() {
+	case StateClosing, StateClosed:
+		return false, true
+	}
+	switch ch.connection.lifeCycle.State() {
+	case StateClosing, StateClosed:
+		return false, true
+	case StateOpen:
+		return ch.lifeCycle.State() == StateOpen && !ch.IsClosed(), false
 	default:
-		return ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
+		return false, false
+	}
+}
+
+// publishGateLocked is publishGate with the channel lifecycle mutex already held.
+func (ch *Channel) publishGateLocked() (ready, dead bool) {
+	if ch.closeInit.Load() {
+		return false, true
+	}
+	switch ch.lifeCycle.state {
+	case StateClosing, StateClosed:
+		return false, true
+	}
+	switch ch.connection.lifeCycle.State() {
+	case StateClosing, StateClosed:
+		return false, true
+	case StateOpen:
+		return ch.lifeCycle.state == StateOpen && !ch.IsClosed(), false
+	default:
+		return false, false
 	}
 }
 

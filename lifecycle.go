@@ -90,12 +90,15 @@ type lifeCycle struct {
 	state     LifeCycleState   // The current state of the connection or channel.
 	listeners []*stateListener // The registered state change listeners.
 	mutex     *sync.Mutex      // The mutex to protect the state changes.
+	cond      *sync.Cond       // Wakes waitReadyToPublish. Shares mutex.
 }
 
 func newLifeCycle() *lifeCycle {
+	mu := &sync.Mutex{}
 	return &lifeCycle{
 		state: StateClosed,
-		mutex: &sync.Mutex{},
+		mutex: mu,
+		cond:  sync.NewCond(mu),
 	}
 }
 
@@ -114,6 +117,7 @@ func (l *lifeCycle) SetState(value LifeCycleState, err error) {
 
 	oldState := l.state
 	l.state = value
+	l.cond.Broadcast()
 
 	sc := &StateChanged{
 		From: oldState,
@@ -140,6 +144,7 @@ func (l *lifeCycle) setStateOpen(skippedTopologyEntities []TopologyRecoveryEntit
 	}
 	oldState := l.state
 	l.state = StateOpen
+	l.cond.Broadcast()
 	sc := &StateChanged{
 		From: oldState,
 		To:   StateOpen,
@@ -195,6 +200,14 @@ func (l *lifeCycle) removeListener(listener *stateListener) {
 			break
 		}
 	}
+}
+
+// broadcast wakes every waitReadyToPublish blocked on this lifecycle.
+// Safe to call without holding l.mutex.
+func (l *lifeCycle) broadcast() {
+	l.mutex.Lock()
+	l.cond.Broadcast()
+	l.mutex.Unlock()
 }
 
 func (l *lifeCycle) notifyStateChange(channel chan *StateChanged) {

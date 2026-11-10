@@ -1730,7 +1730,7 @@ func (c *Connection) Reconnect() (err error) {
 		} else {
 			Logger.Printf("Connection recovery successful")
 		}
-		c.lifeCycle.setStateOpen(skippedTopologyEntities)
+		c.markRecovered(skippedTopologyEntities)
 		return nil
 	}
 
@@ -1740,6 +1740,29 @@ func (c *Connection) Reconnect() (err error) {
 	}
 
 	return err
+}
+
+// markRecovered records a successful reconnect and wakes publishes blocked
+// in waitReadyToPublish. Channel sessions are already StateOpen by this point;
+// those waiters are blocked on the connection still being StateReconnecting.
+func (c *Connection) markRecovered(skipped []TopologyRecoveryEntity) {
+	c.lifeCycle.setStateOpen(skipped)
+	c.wakePublishWaiters()
+}
+
+// wakePublishWaiters unblocks Publish calls waiting on channel lifecycles.
+// Lock order is c.m then Channel.lifeCycle.mutex. waitReadyToPublish holds the
+// channel lifecycle mutex and then the connection lifecycle mutex, never c.m.
+func (c *Connection) wakePublishWaiters() {
+	c.m.Lock()
+	channels := make([]*Channel, 0, len(c.channels))
+	for _, ch := range c.channels {
+		channels = append(channels, ch)
+	}
+	c.m.Unlock()
+	for _, ch := range channels {
+		ch.lifeCycle.broadcast()
+	}
 }
 
 // resetState clears the shutdown flag and re-initializes the internal channels

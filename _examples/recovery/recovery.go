@@ -39,8 +39,6 @@ func main() {
 	}
 	defer conn.Close()
 
-	signalBlock := sync.Cond{L: &sync.Mutex{}}
-	var isReconnecting bool
 	stateChanged := make(chan *amqp.StateChanged, 1)
 	conn.NotifyStateChange(stateChanged)
 
@@ -48,26 +46,14 @@ func main() {
 		for statusChanged := range ch {
 			log.Printf("[connection] Status changed: %v", statusChanged)
 			switch statusChanged.To {
-			case amqp.StateOpen:
-				signalBlock.L.Lock()
-				isReconnecting = false
-				signalBlock.Broadcast()
-				signalBlock.L.Unlock()
 			case amqp.StateReconnecting:
 				log.Printf("[connection] Reconnecting to the AMQP server")
-				signalBlock.L.Lock()
-				isReconnecting = true
-				signalBlock.L.Unlock()
 			case amqp.StateClosed:
 				if statusChanged.Err != nil {
 					log.Printf("[connection] Connection closed with error: %v", statusChanged.Err)
 				} else {
 					log.Printf("[connection] Connection closed normally")
 				}
-				signalBlock.L.Lock()
-				isReconnecting = false
-				signalBlock.Broadcast()
-				signalBlock.L.Unlock()
 				cancel()
 			}
 		}
@@ -158,6 +144,9 @@ func main() {
 				return
 			case <-ticker.C:
 				body := fmt.Sprintf("Message %d", counter)
+				// Publish blocks while Recovery is reconnecting and sends once the
+				// connection is open again. An error here means recovery ended
+				// or the context was cancelled.
 				err := ch.PublishWithContext(ctx,
 					"",     // exchange
 					q.Name, // routing key
@@ -169,19 +158,9 @@ func main() {
 					})
 				if err != nil {
 					log.Printf("Failed to publish message %d: %v", counter, err)
-					log.Println("Publisher is blocked, waiting for recovery...")
-					time.Sleep(10 * time.Millisecond) // Let the notifier run to update the state
-					signalBlock.L.Lock()
-					for isReconnecting { // Avoid spurious wakeups
-						signalBlock.Wait()
-					}
-					signalBlock.L.Unlock()
-					log.Println("Publisher is unblocked")
-					// Retry publishing the same message
 					continue
-				} else {
-					log.Printf("Published: %s", body)
 				}
+				log.Printf("Published: %s", body)
 				counter++
 			}
 		}

@@ -5,6 +5,8 @@
 package amqp091
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -231,5 +233,145 @@ func TestReconnectChannelAbortsWhenCloseWonTheRace(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("reconnectChannel() did not return within 2s — it did not abort on closeInit and is stuck in its retry loop")
+	}
+}
+
+func recoveryConn() *Connection {
+	conn := &Connection{
+		channels:  make(map[uint16]*Channel),
+		lifeCycle: newLifeCycle(),
+		Config: Config{
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount: 5,
+					RetryInterval: time.Millisecond,
+				},
+			},
+		},
+	}
+	conn.lifeCycle.SetState(StateOpen, nil)
+	return conn
+}
+
+func TestWaitReadyToPublishBlocksUntilConnectionRecovers(t *testing.T) {
+	conn := recoveryConn()
+	conn.lifeCycle.SetState(StateReconnecting, nil)
+
+	ch := &Channel{
+		connection: conn,
+		id:         1,
+		lifeCycle:  newLifeCycle(),
+	}
+	conn.channels[ch.id] = ch
+	ch.lifeCycle.SetState(StateOpen, nil)
+	ch.closed.Store(true)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- ch.waitReadyToPublish(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("publish wait returned before recovery: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	ch.closed.Store(false)
+	conn.markRecovered(nil)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("publish wait: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("publish wait did not return after recovery")
+	}
+}
+
+func TestWaitReadyToPublishContextCancel(t *testing.T) {
+	conn := recoveryConn()
+	conn.lifeCycle.SetState(StateReconnecting, nil)
+
+	ch := &Channel{
+		connection: conn,
+		lifeCycle:  newLifeCycle(),
+	}
+	ch.lifeCycle.SetState(StateReconnecting, nil)
+	ch.closed.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := ch.waitReadyToPublish(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("wait ignored context, took %s", time.Since(start))
+	}
+}
+
+func TestWaitReadyToPublishClosed(t *testing.T) {
+	conn := recoveryConn()
+	ch := &Channel{
+		connection: conn,
+		lifeCycle:  newLifeCycle(),
+	}
+	ch.lifeCycle.SetState(StateClosed, nil)
+
+	err := ch.waitReadyToPublish(context.Background())
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected ErrClosed, got %v", err)
+	}
+}
+
+func TestWaitReadyToPublishSkipsWaitWhenRecoveryDisabled(t *testing.T) {
+	conn := recoveryConn()
+	conn.Config.Recovery = nil
+	conn.lifeCycle.SetState(StateReconnecting, nil)
+
+	ch := &Channel{
+		connection: conn,
+		lifeCycle:  newLifeCycle(),
+	}
+	ch.closed.Store(true)
+	ch.lifeCycle.SetState(StateReconnecting, nil)
+
+	err := ch.waitReadyToPublish(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil without recovery, got %v", err)
+	}
+}
+
+func TestWaitReadyToPublishCloseUnblocks(t *testing.T) {
+	conn := recoveryConn()
+	conn.lifeCycle.SetState(StateReconnecting, nil)
+
+	ch := &Channel{
+		connection: conn,
+		lifeCycle:  newLifeCycle(),
+	}
+	ch.lifeCycle.SetState(StateReconnecting, nil)
+	ch.closed.Store(true)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- ch.waitReadyToPublish(context.Background())
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	ch.closeInit.Store(true)
+	ch.lifeCycle.broadcast()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("expected ErrClosed, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("close did not unblock publish wait")
 	}
 }
