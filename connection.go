@@ -1137,7 +1137,9 @@ func (c *Connection) releaseChannel(ch *Channel) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	if !c.IsClosed() {
+	// The allocator is nil once closeResources has torn down the registry. A
+	// closed connection that may still be recovered keeps its registry.
+	if c.allocator != nil {
 		got, ok := c.channels[ch.id]
 		if ok && got == ch {
 			delete(c.channels, ch.id)

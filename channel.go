@@ -688,6 +688,10 @@ func (ch *Channel) Close() error {
 	defer ch.reconnecting.Unlock()
 
 	if ch.IsClosed() {
+		// A channel closed by a connection failure stays registered so that
+		// recovery can reopen it. Unregister it, or recovery will fail on it.
+		ch.connection.releaseChannel(ch)
+		ch.cleanup(nil)
 		return nil
 	}
 

@@ -648,6 +648,105 @@ func TestReconnectAbortsWhenCloseWonTheRace(t *testing.T) {
 	}
 }
 
+// waitForLifeCycleState returns the first state in want that states reports,
+// failing the test if none arrives within the timeout.
+func waitForLifeCycleState(t *testing.T, states chan *StateChanged, want ...LifeCycleState) LifeCycleState {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case sc := <-states:
+			for _, w := range want {
+				if sc.To == w {
+					return sc.To
+				}
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for state %v", want)
+		}
+	}
+}
+
+// TestChannelCloseDuringConnectionRecovery covers
+// https://github.com/rabbitmq/amqp091-go/issues/426: closing one channel while
+// the connection is recovering must not make recovery fail for the others.
+func TestChannelCloseDuringConnectionRecovery(t *testing.T) {
+	rwc1, srv1 := newSession(t)
+	rwc2, srv2 := newSession(t)
+	t.Cleanup(func() {
+		_ = rwc1.Close()
+		_ = rwc2.Close()
+	})
+
+	allowRedial := make(chan struct{})
+	var dials atomic.Int32
+	dial := func(network, addr string) (net.Conn, error) {
+		switch dials.Add(1) {
+		case 1:
+			return fakeNetConn{rwc1}, nil
+		case 2:
+			<-allowRedial
+			return fakeNetConn{rwc2}, nil
+		default:
+			return nil, errors.New("unexpected redial")
+		}
+	}
+
+	go func() {
+		srv1.connectionOpen()
+		srv1.channelOpen(1)
+		srv1.channelOpen(2)
+	}()
+
+	conn, err := DialConfig("amqp://guest:guest@localhost:5672/", Config{
+		Dial: dial,
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: 2, RetryInterval: time.Millisecond},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DialConfig: %v", err)
+	}
+	ch1, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("ch1: %v", err)
+	}
+	ch2, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("ch2: %v", err)
+	}
+
+	states := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(states)
+
+	_ = srv1.S.Close()
+	waitForLifeCycleState(t, states, StateReconnecting)
+
+	if err := ch1.Close(); err != nil {
+		t.Fatalf("ch1.Close() during recovery: %v", err)
+	}
+
+	go func() {
+		srv2.connectionOpen()
+		srv2.channelOpen(2)
+		srv2.connectionClose()
+	}()
+	close(allowRedial)
+
+	if got := waitForLifeCycleState(t, states, StateOpen, StateClosed); got != StateOpen {
+		t.Fatalf("expected recovery to reach StateOpen, got %v", got)
+	}
+	if ch2.IsClosed() {
+		t.Fatal("expected ch2 to be recovered")
+	}
+	if !ch1.IsClosed() {
+		t.Fatal("expected ch1 to stay closed")
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("conn.Close(): %v", err)
+	}
+}
+
 // TestDialConfigDefaultsFrameSizeWhenUnset verifies that a caller who never
 // touches Config.FrameSize (the common case for Dial/DialTLS/DialConfig) does
 // not silently negotiate an "unlimited" frame size just because the broker
