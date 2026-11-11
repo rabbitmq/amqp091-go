@@ -1258,3 +1258,47 @@ func TestPublishWithDeferredConfirmWithContext_ContextCancelled(t *testing.T) {
 	}
 
 }
+
+// TestSetupChannelBasicReplaysTx verifies that a successful Tx() is recorded
+// and that setupChannelBasic re-sends tx.select, matching Java and .NET
+// autorecovering clients. Without this, a recovered transactional channel
+// publishes immediately and TxCommit fails.
+func TestSetupChannelBasicReplaysTx(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &txSelect{})
+		srv.send(1, &txSelectOk{})
+		srv.recv(1, &txSelect{})
+		srv.send(1, &txSelectOk{})
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+	if err := ch.Tx(); err != nil {
+		t.Fatalf("Tx failed: %v", err)
+	}
+	if !ch.transacting.Load() {
+		t.Fatal("Tx did not record transactional mode")
+	}
+	if err := ch.setupChannelBasic(); err != nil {
+		t.Fatalf("setupChannelBasic failed: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the mock broker to see the recovered tx.select")
+	}
+}
