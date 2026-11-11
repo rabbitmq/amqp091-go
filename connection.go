@@ -2446,6 +2446,10 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 		return false, fmt.Errorf("%w", e)
 	}
 
+	// Replay every entity with noWait=false: without a reply, a rejected
+	// redeclare is never reported to OnTopologyEntityError and the broker's
+	// asynchronous channel close restarts recovery in a loop.
+
 	// 1. Recover exchanges across all channels.
 	for chID, config := range topologyMap {
 		ch, ok := channelMap[chID]
@@ -2453,7 +2457,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 			continue
 		}
 		for _, ec := range config.Exchanges {
-			if err := ch.ExchangeDeclare(ec.Name, ec.Kind, ec.Durable, ec.AutoDelete, ec.Internal, ec.NoWait, ec.Args); err != nil {
+			if err := ch.ExchangeDeclare(ec.Name, ec.Kind, ec.Durable, ec.AutoDelete, ec.Internal, false, ec.Args); err != nil {
 				Logger.Printf("failed to recover exchange %s on channel %d: %v", ec.Name, chID, err)
 				e := TopologyRecoveryEntity{EntityType: TopologyEntityExchange, EntityName: ec.Name, ChannelID: chID, Err: err}
 				if cont, fatal := skipOrAbort(e); !cont {
@@ -2490,7 +2494,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				declaredQueues[qc.ActualName] = true
 			}
 
-			q, err := ch.QueueDeclare(qc.DeclaredName, qc.Durable, qc.AutoDelete, qc.Exclusive, qc.NoWait, qc.Args)
+			q, err := ch.QueueDeclare(qc.DeclaredName, qc.Durable, qc.AutoDelete, qc.Exclusive, false, qc.Args)
 			if err != nil {
 				Logger.Printf("failed to recover queue %s on channel %d: %v", qc.ActualName, chID, err)
 				e := TopologyRecoveryEntity{EntityType: TopologyEntityQueue, EntityName: qc.ActualName, ChannelID: chID, Err: err}
@@ -2505,7 +2509,12 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 			// name on every reconnect. Record the rename so bindings and consumers can be
 			// updated before they are re-created/re-subscribed below.
 			if qc.DeclaredName == "" && q.Name != qc.ActualName {
-				nameReplacements[qc.ActualName] = q.Name
+				// A queue first declared with noWait has no recorded name. ""
+				// in a binding or consumer means the channel's last declared
+				// queue, so it must not be rewritten on other channels.
+				if qc.ActualName != "" {
+					nameReplacements[qc.ActualName] = q.Name
+				}
 
 				// Patch the persistent topology store so future recoveries use the new name.
 				c.topologyM.Lock()
@@ -2567,7 +2576,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 			continue
 		}
 		for _, b := range config.Bindings {
-			if err := ch.QueueBind(b.Queue, b.Key, b.Exchange, b.NoWait, b.Args); err != nil {
+			if err := ch.QueueBind(b.Queue, b.Key, b.Exchange, false, b.Args); err != nil {
 				Logger.Printf("failed to recover binding of queue %s to exchange %s on channel %d: %v", b.Queue, b.Exchange, chID, err)
 				e := TopologyRecoveryEntity{EntityType: TopologyEntityQueueBinding, EntityName: b.Queue, SecondaryName: b.Exchange, RoutingKey: b.Key, ChannelID: chID, Err: err}
 				if cont, fatal := skipOrAbort(e); !cont {
@@ -2585,7 +2594,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 			continue
 		}
 		for _, eb := range config.ExchangeBindings {
-			if err := ch.ExchangeBind(eb.Destination, eb.Key, eb.Source, eb.NoWait, eb.Args); err != nil {
+			if err := ch.ExchangeBind(eb.Destination, eb.Key, eb.Source, false, eb.Args); err != nil {
 				Logger.Printf("failed to recover exchange binding from %s to %s on channel %d: %v", eb.Source, eb.Destination, chID, err)
 				e := TopologyRecoveryEntity{EntityType: TopologyEntityExchangeBinding, EntityName: eb.Source, SecondaryName: eb.Destination, RoutingKey: eb.Key, ChannelID: chID, Err: err}
 				if cont, fatal := skipOrAbort(e); !cont {
@@ -2619,7 +2628,7 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				NoLocal:     config.NoLocal,
 				NoAck:       config.AutoAck,
 				Exclusive:   config.Exclusive,
-				NoWait:      config.NoWait,
+				NoWait:      false,
 				Arguments:   config.Args,
 			}
 			res := &basicConsumeOk{}
