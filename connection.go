@@ -41,6 +41,11 @@ const (
 	// a broker that also proposes 0. Callers that explicitly want unlimited
 	// must set Config.FrameSize to a negative value instead.
 	defaultFrameSize = 131072
+	// rabbitmqMinFrameSize is the minimum frame_max RabbitMQ 4.1.0 and later
+	// accept (rabbitmq-server#13541). The AMQP 0-9-1 spec minimum remains
+	// frameMinSize (4096); a value in between is spec-legal but the broker
+	// closes the socket without a connection.close reply.
+	rabbitmqMinFrameSize = 8192
 )
 
 // Known server capabilities advertised in the connection.start properties table.
@@ -88,6 +93,9 @@ type Config struct {
 	//     takes effect if the broker also proposes no limit; a malicious or
 	//     misbehaving broker can then send arbitrarily large frames.
 	//   > 0: explicit cap, negotiated down to the broker's max if lower.
+	//     RabbitMQ 4.1.0 and later reject a negotiated frame_max below 8192
+	//     bytes (rabbitmqMinFrameSize) by closing the socket without a
+	//     connection.close reply. Prefer 8192 or leave this unset.
 	FrameSize int
 
 	// Heartbeat is the interval between keep-alive frames. Less than 1s uses
@@ -1422,8 +1430,16 @@ func (c *Connection) openVhost(config Config) error {
 		// text say why: 530 NOT_ALLOWED for a vhost the user may not access or
 		// for a reached per-user or per-vhost connection limit. Surface that
 		// reply; only fall back to ErrVhost when the socket was closed without
-		// one.
-		return handshakeError(err, ErrVhost)
+		// one — except when the negotiated frame_max is below the RabbitMQ
+		// 4.1.0 minimum, which produces the same silent close but is not a
+		// vhost access problem.
+		if err2 := handshakeError(err, ErrVhost); err2 != ErrVhost {
+			return err2
+		}
+		if size := c.Config.FrameSize; size > 0 && size < rabbitmqMinFrameSize {
+			return fmt.Errorf("negotiated frame_max %d is below %d, the minimum RabbitMQ 4.1.0 and later accept; the broker closed the connection. Increase Config.FrameSize or leave it unset", size, rabbitmqMinFrameSize)
+		}
+		return ErrVhost
 	}
 
 	c.Config.Vhost = config.Vhost

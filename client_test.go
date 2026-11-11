@@ -9,8 +9,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -581,6 +583,54 @@ func TestOpenFailedVhost(t *testing.T) {
 	c, err := Open(rwc, defaultConfig())
 	if err != ErrVhost {
 		t.Fatalf("expected ErrVhost got: %+v on %+v", err, c)
+	}
+}
+
+// TestOpenFailedFrameSizeBelowBrokerMinimum covers RabbitMQ 4.1.0+ closing
+// the socket without a connection.close when the negotiated frame_max is
+// below 8192. That used to surface as ErrVhost, which points at permissions
+// rather than the configured frame size.
+func TestOpenFailedFrameSizeBelowBrokerMinimum(t *testing.T) {
+	tests := []struct {
+		frameSize int
+		wantVhost bool
+	}{
+		{frameSize: 4096, wantVhost: false},
+		{frameSize: 8191, wantVhost: false},
+		{frameSize: 8192, wantVhost: true},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("FrameSize=%d", tt.frameSize), func(t *testing.T) {
+			rwc, srv := newSession(t)
+
+			go func() {
+				srv.expectAMQP()
+				srv.connectionStart()
+				srv.connectionTune()
+				srv.recv(0, &connectionOpen{})
+				rwc.Close()
+			}()
+
+			cfg := defaultConfig()
+			cfg.FrameSize = tt.frameSize
+			c, err := Open(rwc, cfg)
+			if tt.wantVhost {
+				if err != ErrVhost {
+					t.Fatalf("expected ErrVhost got: %+v on %+v", err, c)
+				}
+				return
+			}
+			if errors.Is(err, ErrVhost) {
+				t.Fatalf("FrameSize=%d was reported as a vhost access error: %v", tt.frameSize, err)
+			}
+			if err == nil {
+				t.Fatalf("FrameSize=%d unexpectedly connected: %+v", tt.frameSize, c)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "frame_max") || !strings.Contains(msg, "8192") {
+				t.Fatalf("FrameSize=%d error %q does not name the frame size minimum", tt.frameSize, msg)
+			}
+		})
 	}
 }
 
