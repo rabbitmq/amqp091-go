@@ -433,6 +433,70 @@ func TestReconnectHonorsURIConnectionTimeout(t *testing.T) {
 	}
 }
 
+// TestConnectionRecoveryDoesNotRestartAfterGivingUp covers
+// https://github.com/rabbitmq/amqp091-go/issues/425: a close error that
+// reaches OnConnectionClose after recovery gave up, such as one buffered by an
+// earlier attempt's reader, must not start recovery again.
+func TestConnectionRecoveryDoesNotRestartAfterGivingUp(t *testing.T) {
+	rwc1, srv1 := newSession(t)
+	rwc2, srv2 := newSession(t)
+	t.Cleanup(func() {
+		_ = rwc1.Close()
+		_ = rwc2.Close()
+	})
+
+	var dials atomic.Int32
+	dial := func(network, addr string) (net.Conn, error) {
+		switch dials.Add(1) {
+		case 1:
+			return fakeNetConn{rwc1}, nil
+		case 2:
+			return nil, errors.New("broker unavailable")
+		default:
+			go srv2.connectionOpen()
+			return fakeNetConn{rwc2}, nil
+		}
+	}
+
+	go srv1.connectionOpen()
+
+	conn, err := DialConfig("amqp://guest:guest@localhost:5672/", Config{
+		Dial: dial,
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: 1, RetryInterval: time.Millisecond},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DialConfig: %v", err)
+	}
+
+	states := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(states)
+
+	_ = srv1.S.Close()
+	waitForClosed := time.After(5 * time.Second)
+	for closed := false; !closed; {
+		select {
+		case sc := <-states:
+			closed = sc.To == StateClosed
+		case <-waitForClosed:
+			t.Fatal("recovery never gave up")
+		}
+	}
+
+	conn.Config.Recovery.ConnectionRecovery.OnConnectionClose(conn, &Error{Code: FrameError, Reason: "stale"})
+
+	if got := dials.Load(); got != 2 {
+		t.Fatalf("expected no redial after recovery gave up, got %d dials", got)
+	}
+	if !conn.IsClosed() {
+		t.Fatal("expected the connection to stay closed")
+	}
+	if _, err := conn.Channel(); err != ErrClosed {
+		t.Fatalf("expected Channel() to return ErrClosed, got %v", err)
+	}
+}
+
 type dummyReadWriteCloser struct{}
 
 func (d dummyReadWriteCloser) Read(p []byte) (n int, err error)  { return 0, nil }

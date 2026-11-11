@@ -1592,6 +1592,13 @@ func (c *Connection) closeResources(err error) {
 
 // cleanup releases registered resources and performs final teardown of the connection.
 func (c *Connection) cleanup(err error) {
+	// Disable recovery for good, so that a close error delivered after this
+	// point, such as one buffered by an earlier reconnect attempt, cannot
+	// reopen the connection.
+	c.closeM.Lock()
+	c.closeInit = true
+	c.closeM.Unlock()
+
 	c.m.Lock()
 	defer c.m.Unlock()
 
