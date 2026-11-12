@@ -2126,7 +2126,7 @@ exception could occur if the server does not support this method.
 */
 func (ch *Channel) Confirm(noWait bool) error {
 	if err := ch.call(
-		&confirmSelect{Nowait: noWait},
+		&confirmSelect{NoWait: noWait},
 		&confirmSelectOk{},
 	); err != nil {
 		return err

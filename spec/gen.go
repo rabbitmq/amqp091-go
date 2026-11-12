@@ -439,6 +439,12 @@ func (renderer *renderer) Domain(field Field) (domain Domain, err error) {
 }
 
 func (renderer *renderer) FieldName(field Field) (t string) {
+	// "nowait" and "no-wait" are the same AMQP flag; export both as NoWait
+	// so confirm.select.wait() honors Channel.Confirm(true).
+	if !field.Reserved && (field.Name == "nowait" || field.Name == "no-wait") {
+		return "NoWait"
+	}
+
 	t = public(field.Name)
 
 	if field.Reserved {
