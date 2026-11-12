@@ -648,29 +648,18 @@ func TestReconnectAbortsWhenCloseWonTheRace(t *testing.T) {
 	}
 }
 
-// waitForLifeCycleState returns the first state in want that states reports,
-// failing the test if none arrives within the timeout.
-func waitForLifeCycleState(t *testing.T, states chan *StateChanged, want ...LifeCycleState) LifeCycleState {
-	t.Helper()
-	timeout := time.After(5 * time.Second)
-	for {
-		select {
-		case sc := <-states:
-			for _, w := range want {
-				if sc.To == w {
-					return sc.To
-				}
-			}
-		case <-timeout:
-			t.Fatalf("timed out waiting for state %v", want)
-		}
-	}
+// recoveringPair is a connection with two open channels whose first socket
+// can be dropped, and whose redial blocks until allowRedial is closed.
+type recoveringPair struct {
+	conn        *Connection
+	ch1, ch2    *Channel
+	srv1, srv2  *server
+	allowRedial chan struct{}
+	states      chan *StateChanged
 }
 
-// TestChannelCloseDuringConnectionRecovery covers
-// https://github.com/rabbitmq/amqp091-go/issues/426: closing one channel while
-// the connection is recovering must not make recovery fail for the others.
-func TestChannelCloseDuringConnectionRecovery(t *testing.T) {
+func newRecoveringPair(t *testing.T) *recoveringPair {
+	t.Helper()
 	rwc1, srv1 := newSession(t)
 	rwc2, srv2 := newSession(t)
 	t.Cleanup(func() {
@@ -719,29 +708,160 @@ func TestChannelCloseDuringConnectionRecovery(t *testing.T) {
 	states := make(chan *StateChanged, 10)
 	conn.NotifyStateChange(states)
 
-	_ = srv1.S.Close()
-	waitForLifeCycleState(t, states, StateReconnecting)
+	return &recoveringPair{conn: conn, ch1: ch1, ch2: ch2, srv1: srv1, srv2: srv2, allowRedial: allowRedial, states: states}
+}
 
-	if err := ch1.Close(); err != nil {
+// recoverOnlyCh2 lets the redial through, serves a recovery that reopens only
+// channel 2, and waits for the connection to reach StateOpen.
+func (p *recoveringPair) recoverOnlyCh2(t *testing.T) {
+	t.Helper()
+	go func() {
+		p.srv2.connectionOpen()
+		p.srv2.channelOpen(2)
+		p.srv2.connectionClose()
+	}()
+	close(p.allowRedial)
+
+	if got := waitForLifeCycleState(t, p.states, StateOpen, StateClosed); got != StateOpen {
+		t.Fatalf("expected recovery to reach StateOpen, got %v", got)
+	}
+	if p.ch2.IsClosed() {
+		t.Fatal("expected ch2 to be recovered")
+	}
+}
+
+func assertChannelTornDown(t *testing.T, conn *Connection, ch *Channel, closes chan *Error) {
+	t.Helper()
+	if state := ch.lifeCycle.State(); state != StateClosed {
+		t.Fatalf("expected channel %d in StateClosed, got %v", ch.id, state)
+	}
+	select {
+	case _, ok := <-closes:
+		if ok {
+			t.Fatalf("expected channel %d NotifyClose listener to be closed", ch.id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("channel %d NotifyClose listener was not closed", ch.id)
+	}
+	conn.m.Lock()
+	_, registered := conn.channels[ch.id]
+	conn.m.Unlock()
+	if registered {
+		t.Fatalf("expected channel %d to be removed from the connection", ch.id)
+	}
+}
+
+// waitForLifeCycleState returns the first state in want that states reports,
+// failing the test if none arrives within the timeout.
+func waitForLifeCycleState(t *testing.T, states chan *StateChanged, want ...LifeCycleState) LifeCycleState {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case sc := <-states:
+			for _, w := range want {
+				if sc.To == w {
+					return sc.To
+				}
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for state %v", want)
+		}
+	}
+}
+
+// TestChannelCloseDuringConnectionRecovery covers
+// https://github.com/rabbitmq/amqp091-go/issues/426: closing one channel while
+// the connection is recovering must not make recovery fail for the others.
+func TestChannelCloseDuringConnectionRecovery(t *testing.T) {
+	p := newRecoveringPair(t)
+	closes := p.ch1.NotifyClose(make(chan *Error, 1))
+
+	_ = p.srv1.S.Close()
+	waitForLifeCycleState(t, p.states, StateReconnecting)
+	// Drain the error the connection drop delivered.
+	<-closes
+
+	if err := p.ch1.Close(); err != nil {
 		t.Fatalf("ch1.Close() during recovery: %v", err)
 	}
 
-	go func() {
-		srv2.connectionOpen()
-		srv2.channelOpen(2)
-		srv2.connectionClose()
-	}()
-	close(allowRedial)
+	p.recoverOnlyCh2(t)
+	assertChannelTornDown(t, p.conn, p.ch1, closes)
 
-	if got := waitForLifeCycleState(t, states, StateOpen, StateClosed); got != StateOpen {
-		t.Fatalf("expected recovery to reach StateOpen, got %v", got)
+	if err := p.conn.Close(); err != nil {
+		t.Fatalf("conn.Close(): %v", err)
 	}
-	if ch2.IsClosed() {
-		t.Fatal("expected ch2 to be recovered")
+}
+
+// TestChannelCloseRacingConnectionDrop covers a Close() whose channel.close is
+// cut off by the connection dropping: recovery must skip the channel and tear
+// it down.
+func TestChannelCloseRacingConnectionDrop(t *testing.T) {
+	p := newRecoveringPair(t)
+	closes := p.ch1.NotifyClose(make(chan *Error, 1))
+
+	closed := make(chan error, 1)
+	go func() { closed <- p.ch1.Close() }()
+
+	p.srv1.recv(1, &channelClose{})
+	_ = p.srv1.S.Close()
+
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ch1.Close() did not return after the connection dropped")
 	}
-	if !ch1.IsClosed() {
-		t.Fatal("expected ch1 to stay closed")
+	waitForLifeCycleState(t, p.states, StateReconnecting)
+	// Drain the error the connection drop delivered.
+	<-closes
+
+	p.recoverOnlyCh2(t)
+	assertChannelTornDown(t, p.conn, p.ch1, closes)
+
+	if err := p.conn.Close(); err != nil {
+		t.Fatalf("conn.Close(): %v", err)
 	}
+}
+
+// TestReopenIfClosedSkipsClosedChannel covers
+// https://github.com/rabbitmq/amqp091-go/issues/442: topology recovery must
+// not re-register a channel the application closed.
+func TestReopenIfClosedSkipsClosedChannel(t *testing.T) {
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { _ = rwc.Close() })
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.connectionClose()
+	}()
+
+	conn, err := DialConfig("amqp://guest:guest@localhost:5672/", Config{
+		Dial:     func(network, addr string) (net.Conn, error) { return fakeNetConn{rwc}, nil },
+		Recovery: &Recovery{},
+	})
+	if err != nil {
+		t.Fatalf("DialConfig: %v", err)
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel: %v", err)
+	}
+	closes := ch.NotifyClose(make(chan *Error, 1))
+
+	// Simulate a broker soft error during topology recovery, which leaves the
+	// channel closed but registered, followed by an application Close().
+	ch.recoveringTopology.Store(true)
+	ch.shutdown(&Error{Code: PreconditionFailed, Reason: "test"})
+	if err := ch.Close(); err != nil {
+		t.Fatalf("ch.Close(): %v", err)
+	}
+
+	ch.reopenIfClosed()
+	ch.recoveringTopology.Store(false)
+	assertChannelTornDown(t, conn, ch, closes)
+
 	if err := conn.Close(); err != nil {
 		t.Fatalf("conn.Close(): %v", err)
 	}
