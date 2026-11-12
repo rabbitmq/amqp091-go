@@ -8,6 +8,7 @@ package amqp091
 import (
 	"context"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -3201,5 +3202,292 @@ waitOpen:
 	case <-time.After(15 * time.Second):
 		t.Fatalf("no post-recovery delivery: queue %q is no longer consumed on an open connection",
 			queueName)
+	}
+}
+
+// TestConnectionRecoveryNoWaitRedeclareRejected verifies that when the
+// recovery-time redeclare of an entity originally declared with noWait is
+// rejected, it is reported through OnTopologyEntityError and the channel
+// settles instead of redeclaring it in a loop.
+func TestConnectionRecoveryNoWaitRedeclareRejected(t *testing.T) {
+	const consumerQueue = "test_nowait_rejected_consumer_q"
+
+	// Each setup declares an entity with noWait on ch and makes its replay
+	// fail, using admin for everything that must not be recorded. The passive
+	// declares wait until the broker has processed the noWait method.
+	cases := []struct {
+		name       string
+		entityType TopologyRecoveryEntityType
+		setup      func(t *testing.T, ch, admin *Channel) (cleanup func())
+	}{
+		{
+			name:       "queue",
+			entityType: TopologyEntityQueue,
+			setup: func(t *testing.T, ch, admin *Channel) func() {
+				q := "test_nowait_rejected_q"
+				_, _ = admin.QueueDelete(q, false, false, false)
+				if _, err := ch.QueueDeclare(q, true, false, false, true, Table{"x-max-length": int32(10)}); err != nil {
+					t.Fatalf("QueueDeclare failed: %v", err)
+				}
+				if _, err := ch.QueueDeclarePassive(q, true, false, false, false, nil); err != nil {
+					t.Fatalf("QueueDeclarePassive failed: %v", err)
+				}
+				if _, err := admin.QueueDelete(q, false, false, false); err != nil {
+					t.Fatalf("admin QueueDelete failed: %v", err)
+				}
+				if _, err := admin.QueueDeclare(q, true, false, false, false, Table{"x-max-length": int32(99)}); err != nil {
+					t.Fatalf("admin QueueDeclare (conflicting) failed: %v", err)
+				}
+				return func() { _, _ = admin.QueueDelete(q, false, false, false) }
+			},
+		},
+		{
+			name:       "exchange",
+			entityType: TopologyEntityExchange,
+			setup: func(t *testing.T, ch, admin *Channel) func() {
+				ex := "test_nowait_rejected_ex"
+				_ = admin.ExchangeDelete(ex, false, false)
+				if err := ch.ExchangeDeclare(ex, "direct", true, false, false, true, nil); err != nil {
+					t.Fatalf("ExchangeDeclare failed: %v", err)
+				}
+				if err := ch.ExchangeDeclarePassive(ex, "direct", true, false, false, false, nil); err != nil {
+					t.Fatalf("ExchangeDeclarePassive failed: %v", err)
+				}
+				if err := admin.ExchangeDelete(ex, false, false); err != nil {
+					t.Fatalf("admin ExchangeDelete failed: %v", err)
+				}
+				if err := admin.ExchangeDeclare(ex, "fanout", true, false, false, false, nil); err != nil {
+					t.Fatalf("admin ExchangeDeclare (conflicting) failed: %v", err)
+				}
+				return func() { _ = admin.ExchangeDelete(ex, false, false) }
+			},
+		},
+		{
+			name:       "queue binding",
+			entityType: TopologyEntityQueueBinding,
+			setup: func(t *testing.T, ch, admin *Channel) func() {
+				ex := "test_nowait_rejected_qb_ex"
+				q := "test_nowait_rejected_qb_q"
+				_ = admin.ExchangeDelete(ex, false, false)
+				_, _ = admin.QueueDelete(q, false, false, false)
+				if err := admin.ExchangeDeclare(ex, "direct", true, false, false, false, nil); err != nil {
+					t.Fatalf("admin ExchangeDeclare failed: %v", err)
+				}
+				if _, err := admin.QueueDeclare(q, true, false, false, false, nil); err != nil {
+					t.Fatalf("admin QueueDeclare failed: %v", err)
+				}
+				if err := ch.QueueBind(q, "k", ex, true, nil); err != nil {
+					t.Fatalf("QueueBind failed: %v", err)
+				}
+				if _, err := ch.QueueDeclarePassive(q, true, false, false, false, nil); err != nil {
+					t.Fatalf("QueueDeclarePassive failed: %v", err)
+				}
+				if err := admin.ExchangeDelete(ex, false, false); err != nil {
+					t.Fatalf("admin ExchangeDelete failed: %v", err)
+				}
+				return func() { _, _ = admin.QueueDelete(q, false, false, false) }
+			},
+		},
+		{
+			name:       "exchange binding",
+			entityType: TopologyEntityExchangeBinding,
+			setup: func(t *testing.T, ch, admin *Channel) func() {
+				src := "test_nowait_rejected_eb_src"
+				dst := "test_nowait_rejected_eb_dst"
+				for _, ex := range []string{src, dst} {
+					_ = admin.ExchangeDelete(ex, false, false)
+					if err := admin.ExchangeDeclare(ex, "direct", true, false, false, false, nil); err != nil {
+						t.Fatalf("admin ExchangeDeclare failed: %v", err)
+					}
+				}
+				if err := ch.ExchangeBind(dst, "k", src, true, nil); err != nil {
+					t.Fatalf("ExchangeBind failed: %v", err)
+				}
+				if err := ch.ExchangeDeclarePassive(dst, "direct", true, false, false, false, nil); err != nil {
+					t.Fatalf("ExchangeDeclarePassive failed: %v", err)
+				}
+				if err := admin.ExchangeDelete(src, false, false); err != nil {
+					t.Fatalf("admin ExchangeDelete failed: %v", err)
+				}
+				return func() { _ = admin.ExchangeDelete(dst, false, false) }
+			},
+		},
+		{
+			// The queue is deleted after the connection is dropped (below): while
+			// the consumer is live the broker would cancel it and the client
+			// would forget it.
+			name:       "consumer",
+			entityType: TopologyEntityConsumer,
+			setup: func(t *testing.T, ch, admin *Channel) func() {
+				_, _ = admin.QueueDelete(consumerQueue, false, false, false)
+				if _, err := admin.QueueDeclare(consumerQueue, true, false, false, false, nil); err != nil {
+					t.Fatalf("admin QueueDeclare failed: %v", err)
+				}
+				if _, err := ch.Consume(consumerQueue, "test-nowait-rejected-consumer", true, false, false, true, nil); err != nil {
+					t.Fatalf("Consume failed: %v", err)
+				}
+				if _, err := ch.QueueDeclarePassive(consumerQueue, true, false, false, false, nil); err != nil {
+					t.Fatalf("QueueDeclarePassive failed: %v", err)
+				}
+				return func() { _, _ = admin.QueueDelete(consumerQueue, false, false, false) }
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			connectionName := "test-connection-recovery-nowait-rejected-" + strings.ReplaceAll(tc.name, " ", "-")
+			properties := NewConnectionProperties()
+			properties.SetClientConnectionName(connectionName)
+
+			var entityErrs atomic.Int32
+			reported := make(chan TopologyRecoveryEntity, 100)
+			conn, err := DialConfig(amqpURL, Config{
+				Recovery: &Recovery{
+					OnTopologyEntityError: func(_ *Connection, e TopologyRecoveryEntity) bool {
+						entityErrs.Add(1)
+						select {
+						case reported <- e:
+						default:
+						}
+						return true
+					},
+				},
+				Locale:     defaultLocale,
+				Properties: properties,
+			})
+			if err != nil {
+				t.Fatalf("DialConfig failed: %v", err)
+			}
+			defer conn.Close()
+
+			ch, err := conn.Channel()
+			if err != nil {
+				t.Fatalf("Channel creation failed: %v", err)
+			}
+
+			adminConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+			if err != nil {
+				t.Fatalf("admin DialConfig failed: %v", err)
+			}
+			defer adminConn.Close()
+			adminCh, err := adminConn.Channel()
+			if err != nil {
+				t.Fatalf("admin Channel failed: %v", err)
+			}
+			defer tc.setup(t, ch, adminCh)()
+
+			closes := ch.NotifyClose(make(chan *Error, 1000))
+			stateChanged := make(chan *StateChanged, 10)
+			conn.NotifyStateChange(stateChanged)
+			dropConnection(t, connectionName)
+			if tc.entityType == TopologyEntityConsumer {
+				if _, err := adminCh.QueueDelete(consumerQueue, false, false, false); err != nil {
+					t.Fatalf("admin QueueDelete failed: %v", err)
+				}
+			}
+			waitForConnectionOpen(t, stateChanged)
+
+			select {
+			case e := <-reported:
+				if e.EntityType != tc.entityType {
+					t.Fatalf("Expected OnTopologyEntityError for a %s, got %s %q: %v", tc.entityType, e.EntityType, e.EntityName, e.Err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("OnTopologyEntityError was not called for the rejected noWait %s", tc.entityType)
+			}
+
+			// The broker must not keep closing the channel for the same entity.
+			rejections := 0
+			window := time.After(3 * time.Second)
+		settle:
+			for {
+				select {
+				case e := <-closes:
+					if e != nil && e.Code != ConnectionForced {
+						rejections++
+					}
+				case <-window:
+					break settle
+				}
+			}
+			if rejections > 0 {
+				t.Fatalf("Channel was closed by the broker %d time(s) after recovery; the rejected %s is still being replayed", rejections, tc.entityType)
+			}
+			if n := entityErrs.Load(); n != 1 {
+				t.Fatalf("Expected OnTopologyEntityError to be called once, got %d", n)
+			}
+		})
+	}
+}
+
+// TestConnectionRecoveryNoWaitServerNamedQueue verifies that recovering a
+// server-named queue first declared with noWait, whose name was never
+// recorded, leaves "" bindings on other channels alone.
+func TestConnectionRecoveryNoWaitServerNamedQueue(t *testing.T) {
+	connectionName := "test-connection-recovery-nowait-server-named-queue"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery:   &Recovery{},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch1, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	ch2, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+
+	if _, err := ch1.QueueDeclare("", false, false, true, true, nil); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+
+	// On ch2, "" refers to ch2's last declared queue.
+	queueName := "test_nowait_server_named_other_q"
+	routingKey := "test-nowait-server-named-key"
+	if _, err := ch2.QueueDeclare(queueName, false, false, true, false, nil); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+	if err := ch2.QueueBind("", routingKey, "amq.direct", false, nil); err != nil {
+		t.Fatalf("QueueBind failed: %v", err)
+	}
+
+	stateChanged := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(stateChanged)
+	dropConnection(t, connectionName)
+	waitForConnectionOpen(t, stateChanged)
+
+	for _, b := range ch2.TopologyConfiguration(false).Bindings {
+		if b.Key == routingKey && b.Queue != "" {
+			t.Fatalf("Binding on the second channel was rewritten to queue %q", b.Queue)
+		}
+	}
+
+	if err := ch2.Confirm(false); err != nil {
+		t.Fatalf("Confirm failed: %v", err)
+	}
+	confirmation, err := ch2.PublishWithDeferredConfirm("amq.direct", routingKey, false, false, Publishing{Body: []byte("x")})
+	if err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	if !confirmation.Wait() {
+		t.Fatalf("Publish was not confirmed")
+	}
+	q, err := ch2.QueueDeclarePassive(queueName, false, false, true, false, nil)
+	if err != nil {
+		t.Fatalf("QueueDeclarePassive failed: %v", err)
+	}
+	if q.Messages != 1 {
+		t.Fatalf("Expected the message to be routed to %q after recovery, found %d message(s)", queueName, q.Messages)
 	}
 }
