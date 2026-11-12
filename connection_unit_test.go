@@ -544,23 +544,6 @@ func TestConnectionRecoveryDoesNotRestartAfterGivingUp(t *testing.T) {
 	}
 }
 
-func waitForLifeCycleState(t *testing.T, states chan *StateChanged, want ...LifeCycleState) LifeCycleState {
-	t.Helper()
-	timeout := time.After(5 * time.Second)
-	for {
-		select {
-		case sc := <-states:
-			for _, w := range want {
-				if sc.To == w {
-					return sc.To
-				}
-			}
-		case <-timeout:
-			t.Fatalf("timed out waiting for state %v", want)
-		}
-	}
-}
-
 // TestChannelRecoveryDoesNotRestartAfterGivingUp covers
 // https://github.com/rabbitmq/amqp091-go/issues/441: a close error from a
 // failed channel recovery attempt must not reopen the channel after recovery
@@ -633,8 +616,14 @@ func TestChannelRecoveryDoesNotRestartAfterGivingUp(t *testing.T) {
 	if _, err := ch.QueueDeclarePassive("missing", false, false, false, false, nil); err == nil {
 		t.Fatal("expected QueueDeclarePassive to fail")
 	}
-	if got := waitForLifeCycleState(t, states, StateClosed); got != StateClosed {
-		t.Fatalf("expected channel recovery to give up, got %v", got)
+	waitForClosed := time.After(5 * time.Second)
+	for closed := false; !closed; {
+		select {
+		case sc := <-states:
+			closed = sc.To == StateClosed
+		case <-waitForClosed:
+			t.Fatal("channel recovery never gave up")
+		}
 	}
 
 	time.Sleep(200 * time.Millisecond)
