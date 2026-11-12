@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -375,6 +376,61 @@ func TestReconnectResetsMaxFrameSize(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("previous maxFrameSize %d: Reconnect did not reject the oversized pre-negotiation frame", previous)
 		}
+	}
+}
+
+// TestReconnectHonorsURIConnectionTimeout checks that recovery dials with the
+// connection_timeout from the URI, as DialConfig does, instead of the 30s default.
+func TestReconnectHonorsURIConnectionTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	// Accept the connection but never answer the AMQP handshake.
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			close(accepted)
+			return
+		}
+		accepted <- conn
+	}()
+	defer func() {
+		// Closing the listener unblocks a pending Accept, so the receive
+		// below cannot hang.
+		ln.Close()
+		if conn, ok := <-accepted; ok {
+			conn.Close()
+		}
+	}()
+
+	c := &Connection{
+		url:       "amqp://guest:guest@" + ln.Addr().String() + "/?connection_timeout=100",
+		lifeCycle: newLifeCycle(),
+		Config: Config{
+			Recovery: &Recovery{
+				ReconnectionConfig: &ReconnectionConfig{
+					MaxRetryCount: 1,
+					RetryInterval: 1 * time.Millisecond,
+				},
+			},
+		},
+	}
+	c.closed.Store(true)
+
+	done := make(chan error, 1)
+	go func() { done <- c.Reconnect() }()
+
+	select {
+	case err := <-done:
+		var amqpErr *Error
+		if !errors.As(err, &amqpErr) || amqpErr.Code != FrameError || !strings.HasSuffix(amqpErr.Reason, "i/o timeout") {
+			t.Fatalf("expected Reconnect to fail with a handshake i/o timeout, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reconnect ignored connection_timeout=100 and kept waiting for the handshake")
 	}
 }
 
