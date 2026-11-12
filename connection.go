@@ -7,6 +7,7 @@ package amqp091
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -112,9 +113,10 @@ type Config struct {
 
 	// Dial returns a net.Conn prepared for a TLS handshake with TSLClientConfig,
 	// then an AMQP connection handshake.
-	// If Dial is nil, net.DialTimeout with a 30s connection and 30s deadline is
+	// If both of Dial/DialContext are nil, d.DialContext with a 30s connection and 30s deadline is
 	// used during TLS and AMQP handshaking.
-	Dial func(network, addr string) (net.Conn, error)
+	Dial        func(network, addr string) (net.Conn, error)
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// Recovery configuration for automatic reconnection and topology recovery.
 	//
@@ -184,13 +186,14 @@ func (config *Config) setSASL(uri URI) error {
 // multiplexed on this channel.  There must always be active receivers for
 // every asynchronous message on this connection.
 type Connection struct {
-	destructorM sync.Mutex   // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
-	destructed  bool         // true when the connection has been destructed (teardown is initiated or completed)
-	closeM      sync.Mutex   // Mutex for connection close handshake: sending a single connection.close frame to the broker
-	closeInit   bool         // true when a connection close has been initiated (connection.close frame has been or is being sent)
-	sendM       sync.Mutex   // conn writer mutex
-	m           sync.Mutex   // struct field mutex
-	notifyM     sync.RWMutex // Mutex for notifying close/block listeners; mirrors Channel.notifyM
+	ctx         context.Context // Context for the connection
+	destructorM sync.Mutex      // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
+	destructed  bool            // true when the connection has been destructed (teardown is initiated or completed)
+	closeM      sync.Mutex      // Mutex for connection close handshake: sending a single connection.close frame to the broker
+	closeInit   bool            // true when a connection close has been initiated (connection.close frame has been or is being sent)
+	sendM       sync.Mutex      // conn writer mutex
+	m           sync.Mutex      // struct field mutex
+	notifyM     sync.RWMutex    // Mutex for notifying close/block listeners; mirrors Channel.notifyM
 
 	conn io.ReadWriteCloser
 
@@ -247,10 +250,11 @@ type readDeadliner interface {
 	SetReadDeadline(time.Time) error
 }
 
-// DefaultDial establishes a connection when config.Dial is not provided
-func DefaultDial(connectionTimeout time.Duration) func(network, addr string) (net.Conn, error) {
-	return func(network, addr string) (net.Conn, error) {
-		conn, err := net.DialTimeout(network, addr, connectionTimeout)
+// DefaultDialContext establishes a connection when config.Dial and config.DialContext are not provided
+func DefaultDialContext(connectionTimeout time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		d := net.Dialer{Timeout: connectionTimeout}
+		conn, err := d.DialContext(ctx, network, addr)
 		if err != nil {
 			return nil, err
 		}
@@ -286,7 +290,14 @@ func (uri URI) connectionTimeout() time.Duration {
 // See ParseURI for the URI format, including the percent-encoding required
 // for a username or password containing reserved characters.
 func Dial(url string) (*Connection, error) {
-	return DialConfig(url, Config{
+	return dialConfig(context.Background(), url, Config{
+		Locale: defaultLocale,
+	})
+}
+
+// DialContext accepts a context and the same as Dial
+func DialContext(ctx context.Context, url string) (*Connection, error) {
+	return dialConfig(ctx, url, Config{
 		Locale: defaultLocale,
 	})
 }
@@ -300,7 +311,15 @@ func Dial(url string) (*Connection, error) {
 // MinVersion (such as tls.VersionTLS12 or tls.VersionTLS13) as the library
 // does not override it.
 func DialTLS(url string, amqps *tls.Config) (*Connection, error) {
-	return DialConfig(url, Config{
+	return dialConfig(context.Background(), url, Config{
+		TLSClientConfig: amqps,
+		Locale:          defaultLocale,
+	})
+}
+
+// DialTLSContext accepts a context and the same as DialTLS
+func DialTLSContext(ctx context.Context, url string, amqps *tls.Config) (*Connection, error) {
+	return dialConfig(ctx, url, Config{
 		TLSClientConfig: amqps,
 		Locale:          defaultLocale,
 	})
@@ -319,7 +338,16 @@ func DialTLS(url string, amqps *tls.Config) (*Connection, error) {
 // MinVersion (such as tls.VersionTLS12 or tls.VersionTLS13) as the library
 // does not override it.
 func DialTLS_ExternalAuth(url string, amqps *tls.Config) (*Connection, error) {
-	return DialConfig(url, Config{
+	return dialConfig(context.Background(), url, Config{
+		TLSClientConfig: amqps,
+		SASL:            []Authentication{&ExternalAuth{}},
+	})
+}
+
+// DialTLS_ExternalAuthContext accepts a context and the same as DialTLS_ExternalAuth
+
+func DialTLS_ExternalAuthContext(ctx context.Context, url string, amqps *tls.Config) (*Connection, error) {
+	return dialConfig(ctx, url, Config{
 		TLSClientConfig: amqps,
 		SASL:            []Authentication{&ExternalAuth{}},
 	})
@@ -332,6 +360,14 @@ func DialTLS_ExternalAuth(url string, amqps *tls.Config) (*Connection, error) {
 // over the value specified in the config. To disable heartbeats, you must use
 // the AMQP URI and set heartbeat=0 there.
 func DialConfig(url string, config Config) (*Connection, error) {
+	return dialConfig(context.Background(), url, config)
+}
+
+// DialConfigContext accepts a context and the same as DialConfigContext
+func DialConfigContext(ctx context.Context, url string, config Config) (*Connection, error) {
+	return dialConfig(ctx, url, config)
+}
+func dialConfig(ctx context.Context, url string, config Config) (*Connection, error) {
 	var err error
 	var conn net.Conn
 
@@ -370,9 +406,13 @@ func DialConfig(url string, config Config) (*Connection, error) {
 
 	addr := net.JoinHostPort(uri.Host, strconv.FormatInt(int64(uri.Port), 10))
 
-	dialer := config.Dial
-	if dialer == nil {
-		dialer = DefaultDial(uri.connectionTimeout())
+	dialer := config.DialContext
+	if config.Dial != nil {
+		dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return config.Dial(network, addr)
+		}
+	} else if dialer == nil {
+		dialer = DefaultDialContext(uri.connectionTimeout())
 	}
 
 	// Build the TLS config before dialing so a failure leaves no socket open.
@@ -392,7 +432,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		}
 	}
 
-	conn, err = dialer("tcp", addr)
+	conn, err = dialer(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +464,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		c.url = url
 		c.watchConnection()
 	}
-
+	c.ctx = ctx
 	return c, err
 }
 
@@ -1705,9 +1745,14 @@ func (c *Connection) Reconnect() (err error) {
 
 		// Re-dial
 		var conn net.Conn
-		dialer := c.Config.Dial
-		if dialer == nil {
-			dialer = DefaultDial(uri.connectionTimeout())
+
+		dialer := c.Config.DialContext
+		if c.Config.Dial != nil {
+			dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return c.Config.Dial(network, addr)
+			}
+		} else if dialer == nil {
+			dialer = DefaultDialContext(uri.connectionTimeout())
 		}
 
 		// Restore SASL from the clone captured at initial Open, before the
@@ -1734,7 +1779,7 @@ func (c *Connection) Reconnect() (err error) {
 
 		addr := net.JoinHostPort(uri.Host, strconv.FormatInt(int64(uri.Port), 10))
 
-		conn, err = dialer("tcp", addr)
+		conn, err = dialer(c.ctx, "tcp", addr)
 		if err != nil {
 			Logger.Printf("Connection recovery dial error: %v", err)
 			continue
