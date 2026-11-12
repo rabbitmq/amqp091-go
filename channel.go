@@ -669,17 +669,19 @@ code set to '200'.
 It is safe to call this method multiple times.
 */
 func (ch *Channel) Close() error {
-	ch.closeRecovery() // Stop any active recovery process
-
 	// Mark close-intent before racing for ch.reconnecting below. If
 	// reconnectChannel() hasn't started yet (e.g. it hasn't reached
-	// ch.reconnecting.Lock() and so closeRecovery() above found no cancel
+	// ch.reconnecting.Lock() and so closeRecovery() below finds no cancel
 	// channel to close), it has no other way to learn a close was
 	// requested. reconnectChannel() re-checks this immediately after
 	// acquiring ch.reconnecting, so setting it first guarantees it aborts
 	// instead of running its full retry loop while this call waits behind
-	// it. See Connection.Close() for the analogous connection-level fix.
+	// it. Setting it before closeRecovery() also means a recovery aborted by
+	// the cancel signal always sees closeInit. See Connection.Close() for the
+	// analogous connection-level fix.
 	ch.closeInit.Store(true)
+
+	ch.closeRecovery() // Stop any active recovery process
 
 	// Wait for any in-flight reconnectChannel() to fully settle before
 	// inspecting/tearing down state. See Connection.Close() for the analogous
@@ -2385,6 +2387,15 @@ func (ch *Channel) reopenIfClosed() {
 	// reopened the channel via reconnectChannel between the fast-path check above
 	// and acquiring the lock.
 	if !ch.IsClosed() {
+		return
+	}
+
+	// Close() was called on this channel, so tear it down instead of
+	// re-registering it, which would make the next connection recovery
+	// try to reopen it.
+	if ch.closeInit.Load() {
+		ch.connection.releaseChannel(ch)
+		ch.cleanup(nil)
 		return
 	}
 

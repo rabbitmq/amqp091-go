@@ -1801,18 +1801,29 @@ func (c *Connection) Reconnect() (err error) {
 		c.m.Unlock()
 
 		// Phase 1: Reconnect and open all channel sessions, apply QoS and Confirms
+		reopened := make([]*Channel, 0, len(channels))
 		for _, ch := range channels {
 			if err = ch.reconnectChannel(); err != nil {
+				// A channel closed by the application during recovery is
+				// dropped rather than failing the whole attempt.
+				if ch.closeInit.Load() && c.IsRecoveryEnabled() {
+					Logger.Printf("Connection recovery skipped channel %d: closed by the application", ch.id)
+					c.releaseChannel(ch)
+					ch.cleanup(nil)
+					err = nil
+					continue
+				}
 				Logger.Printf("Connection recovery failed to reconnect channel %d: %v", ch.id, err)
 				conn.Close()
 				break
 			}
+			reopened = append(reopened, ch)
 		}
 
 		var skippedTopologyEntities []TopologyRecoveryEntity
 		if err == nil && c.IsTopologyRecoveryEnabled() {
-			// Phase 2: Recover topology across all channels via the configured implementation
-			skippedTopologyEntities, err = c.Config.Recovery.TopologyRecovery.RecoverTopology(c, channels)
+			// Phase 2: Recover topology across all reopened channels via the configured implementation
+			skippedTopologyEntities, err = c.Config.Recovery.TopologyRecovery.RecoverTopology(c, reopened)
 			if err != nil {
 				Logger.Printf("Connection recovery failed to recover topology: %v", err)
 				conn.Close()
