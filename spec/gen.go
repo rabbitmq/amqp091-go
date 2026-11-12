@@ -439,7 +439,13 @@ func (renderer *renderer) Domain(field Field) (domain Domain, err error) {
 }
 
 func (renderer *renderer) FieldName(field Field) (t string) {
-	t = public(field.Name)
+	name := field.Name
+	// confirm.select spells the flag "nowait" instead of "no-wait".
+	if name == "nowait" {
+		name = "no-wait"
+	}
+
+	t = public(name)
 
 	if field.Reserved {
 		t = strings.ToLower(t)
