@@ -433,6 +433,224 @@ func TestReconnectHonorsURIConnectionTimeout(t *testing.T) {
 	}
 }
 
+// TestConnectionRecoveryDoesNotRestartAfterGivingUp covers
+// https://github.com/rabbitmq/amqp091-go/issues/425: when every attempt fails
+// after part of the handshake, the failed attempts' close errors must not
+// start recovery again once it gave up, and every channel must be torn down.
+func TestConnectionRecoveryDoesNotRestartAfterGivingUp(t *testing.T) {
+	const attempts = 2
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { _ = rwc.Close() })
+
+	attemptConns := make([]io.ReadWriteCloser, attempts)
+	for i := range attemptConns {
+		attemptRWC, attemptSrv := newSession(t)
+		t.Cleanup(func() { _ = attemptRWC.Close() })
+		attemptConns[i] = attemptRWC
+		// Complete the connection handshake, then drop the socket on the
+		// first channel.open so the attempt's reader reports an error.
+		go func() {
+			attemptSrv.connectionOpen()
+			for {
+				f, err := attemptSrv.r.ReadFrame()
+				if err != nil {
+					return
+				}
+				if mf, ok := f.(*methodFrame); ok {
+					if _, ok := mf.Method.(*channelOpen); ok {
+						_ = attemptSrv.S.Close()
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	var dials atomic.Int32
+	dial := func(network, addr string) (net.Conn, error) {
+		n := int(dials.Add(1))
+		switch {
+		case n == 1:
+			return fakeNetConn{rwc}, nil
+		case n <= attempts+1:
+			return fakeNetConn{attemptConns[n-2]}, nil
+		default:
+			return nil, errors.New("unexpected redial")
+		}
+	}
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.channelOpen(2)
+	}()
+
+	conn, err := DialConfig("amqp://guest:guest@localhost:5672/", Config{
+		Dial: dial,
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: attempts, RetryInterval: time.Millisecond},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DialConfig: %v", err)
+	}
+	channels := make([]*Channel, 2)
+	closes := make([]chan *Error, 2)
+	for i := range channels {
+		if channels[i], err = conn.Channel(); err != nil {
+			t.Fatalf("Channel: %v", err)
+		}
+		// Two slots, so that a duplicate close error fails the test below.
+		closes[i] = channels[i].NotifyClose(make(chan *Error, 2))
+	}
+
+	states := make(chan *StateChanged, 10)
+	conn.NotifyStateChange(states)
+
+	_ = srv.S.Close()
+	waitForClosed := time.After(10 * time.Second)
+	for closed := false; !closed; {
+		select {
+		case sc := <-states:
+			closed = sc.To == StateClosed
+		case <-waitForClosed:
+			t.Fatal("recovery never gave up")
+		}
+	}
+
+	for i, ch := range channels {
+		if state := ch.lifeCycle.State(); state != StateClosed {
+			t.Fatalf("expected channel %d in StateClosed, got %v", ch.id, state)
+		}
+		select {
+		case <-closes[i]:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("channel %d NotifyClose listener was not closed", ch.id)
+		}
+		if err, ok := <-closes[i]; ok {
+			t.Fatalf("expected one close error on channel %d, also got %v", ch.id, err)
+		}
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	if got := dials.Load(); got != attempts+1 {
+		t.Fatalf("expected no redial after recovery gave up, got %d dials", got)
+	}
+	if !conn.IsClosed() {
+		t.Fatal("expected the connection to stay closed")
+	}
+	if _, err := conn.Channel(); err != ErrClosed {
+		t.Fatalf("expected Channel() to return ErrClosed, got %v", err)
+	}
+}
+
+// TestChannelRecoveryDoesNotRestartAfterGivingUp covers
+// https://github.com/rabbitmq/amqp091-go/issues/441: a close error from a
+// failed channel recovery attempt must not reopen the channel after recovery
+// gave up and released its id.
+func TestChannelRecoveryDoesNotRestartAfterGivingUp(t *testing.T) {
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { _ = rwc.Close() })
+
+	var opens atomic.Int32
+	var qos atomic.Int32
+	connClose := make(chan *connectionClose, 1)
+	go func() {
+		srv.connectionOpen()
+		for {
+			f, err := srv.r.ReadFrame()
+			if err != nil {
+				return
+			}
+			mf, ok := f.(*methodFrame)
+			if !ok {
+				continue
+			}
+			var reply message
+			switch m := mf.Method.(type) {
+			case *channelOpen:
+				opens.Add(1)
+				reply = &channelOpenOk{}
+			case *basicQos:
+				if qos.Add(1) == 1 {
+					reply = &basicQosOk{}
+				} else {
+					reply = &channelClose{ReplyCode: NotFound, ReplyText: "NOT_FOUND"}
+				}
+			case *queueDeclare:
+				reply = &channelClose{ReplyCode: NotFound, ReplyText: "NOT_FOUND"}
+			case *channelClose:
+				reply = &channelCloseOk{}
+			case *connectionClose:
+				connClose <- m
+				_ = srv.w.WriteFrame(&methodFrame{ChannelId: 0, Method: &connectionCloseOk{}})
+				return
+			}
+			if reply != nil {
+				if err := srv.w.WriteFrame(&methodFrame{ChannelId: mf.ChannelId, Method: reply}); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	conn, err := DialConfig("amqp://guest:guest@localhost:5672/", Config{
+		Dial: func(network, addr string) (net.Conn, error) { return fakeNetConn{rwc}, nil },
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: 1, RetryInterval: time.Millisecond},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DialConfig: %v", err)
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel: %v", err)
+	}
+	states := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(states)
+	if err := ch.Qos(10, 0, false); err != nil {
+		t.Fatalf("Qos: %v", err)
+	}
+
+	if _, err := ch.QueueDeclarePassive("missing", false, false, false, false, nil); err == nil {
+		t.Fatal("expected QueueDeclarePassive to fail")
+	}
+	waitForClosed := time.After(5 * time.Second)
+	for closed := false; !closed; {
+		select {
+		case sc := <-states:
+			closed = sc.To == StateClosed
+		case <-waitForClosed:
+			t.Fatal("channel recovery never gave up")
+		}
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	closed := make(chan error, 1)
+	go func() { closed <- ch.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ch.Close() did not return")
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("conn.Close(): %v", err)
+	}
+
+	if got := opens.Load(); got != 2 {
+		t.Fatalf("expected 2 channel.open (initial and one recovery attempt), got %d", got)
+	}
+	select {
+	case m := <-connClose:
+		if m.ReplyCode != replySuccess {
+			t.Fatalf("expected a normal connection.close, got %d %q", m.ReplyCode, m.ReplyText)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server never received connection.close")
+	}
+}
+
 type dummyReadWriteCloser struct{}
 
 func (d dummyReadWriteCloser) Read(p []byte) (n int, err error)  { return 0, nil }

@@ -186,7 +186,7 @@ type Connection struct {
 	destructorM sync.Mutex   // Mutex for connection teardown: notifying close/block listeners, closing channels, and closing the underlying socket
 	destructed  bool         // true when the connection has been destructed (teardown is initiated or completed)
 	closeM      sync.Mutex   // Mutex for connection close handshake: sending a single connection.close frame to the broker
-	closeInit   bool         // true when a connection close has been initiated (connection.close frame has been or is being sent)
+	closeInit   bool         // true once the connection is closing for good: a close was initiated, or recovery gave up
 	sendM       sync.Mutex   // conn writer mutex
 	m           sync.Mutex   // struct field mutex
 	notifyM     sync.RWMutex // Mutex for notifying close/block listeners; mirrors Channel.notifyM
@@ -237,7 +237,11 @@ type Connection struct {
 	maxFrameSize atomic.Uint32
 
 	reconnecting sync.Mutex // Mutex for protecting reconnect/recovery operations to ensure serialization and prevent race conditions.
-	lifeCycle    *lifeCycle // The current state of the connection.
+	// recovering is true while Reconnect owns the connection. shutdown then
+	// skips NotifyClose listeners of the connection and its channels, so a failed
+	// attempt's close error cannot start another recovery.
+	recovering atomic.Bool
+	lifeCycle  *lifeCycle // The current state of the connection.
 
 	recoveryCancels []chan struct{} // listeners for connection recovery cancellation
 }
@@ -862,23 +866,25 @@ func (c *Connection) shutdown(err *Error) {
 	defer c.notifyM.Unlock()
 
 	if err != nil {
-		for _, listener := range c.closes {
-			select {
-			case listener <- err:
-			default:
-				// Channel is full; deliver in a background goroutine so we never deadlock
-				// the shutdown sequence. The goroutine holds notifyM.RLock() for the
-				// duration of the send, which is mutually exclusive with cleanup()'s
-				// notifyM.Lock(), preventing a concurrent send+close data race.
-				go func(listener chan *Error, err *Error) {
-					defer func() { _ = recover() }()
-					c.notifyM.RLock()
-					defer c.notifyM.RUnlock()
-					select {
-					case listener <- err:
-					case <-time.After(5 * time.Second):
-					}
-				}(listener, err)
+		if !c.recovering.Load() {
+			for _, listener := range c.closes {
+				select {
+				case listener <- err:
+				default:
+					// Channel is full; deliver in a background goroutine so we never deadlock
+					// the shutdown sequence. The goroutine holds notifyM.RLock() for the
+					// duration of the send, which is mutually exclusive with cleanup()'s
+					// notifyM.Lock(), preventing a concurrent send+close data race.
+					go func(listener chan *Error, err *Error) {
+						defer func() { _ = recover() }()
+						c.notifyM.RLock()
+						defer c.notifyM.RUnlock()
+						select {
+						case listener <- err:
+						case <-time.After(5 * time.Second):
+						}
+					}(listener, err)
+				}
 			}
 		}
 
@@ -1669,12 +1675,25 @@ func (c *Connection) Reconnect() (err error) {
 	// only past the guard clauses above, so it can't fire for a connection
 	// that was never actually touched by this attempt (already open, or
 	// recovery disabled/closing).
+	//
+	// On failure, tear the connection down while still holding c.reconnecting,
+	// then disable recovery for good, so that neither a late close error nor a
+	// concurrent Reconnect() can reopen it. closeInit is set only after
+	// cleanup(), because a reader's shutdown() that sees recovery disabled
+	// tears down the registry itself and leaves the channels open.
 	defer func() {
 		if err != nil {
 			c.closed.Store(true)
+			c.cleanup(err)
+
+			c.closeM.Lock()
+			c.closeInit = true
+			c.closeM.Unlock()
 		}
+		c.recovering.Store(false)
 	}()
 
+	c.recovering.Store(true)
 	c.lifeCycle.SetState(StateReconnecting, nil)
 
 	cancelCh := c.NotifyRecoveryCancel(make(chan struct{}))
