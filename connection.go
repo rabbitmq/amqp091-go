@@ -135,7 +135,8 @@ type Config struct {
 	//     bindings, exchange-to-exchange bindings, and consumers).
 	//   - TopologyRecoveryOnlyTransient: recovers only transient entities
 	//     (exclusive/auto-delete queues, auto-delete exchanges, and bindings to them).
-	//   - TopologyRecoveryDisabled: skips topology and consumer recovery entirely.
+	//   - TopologyRecoveryDisabled: skips topology and consumer recovery entirely. Channel QoS
+	//     and confirm mode are still restored.
 	//
 	// During the recovery process, applications can monitor state changes (such as reconnecting
 	// or closed) by registering a listener using `Connection.NotifyStateChange` and

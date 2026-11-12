@@ -2031,6 +2031,113 @@ func TestConnectionRecoveryTopologyDisabled(t *testing.T) {
 	}
 }
 
+func TestChannelRecoveryRestoresQosInEveryTopologyRecoveryMode(t *testing.T) {
+	modes := []struct {
+		name string
+		mode TopologyRecoveryMode
+	}{
+		{"AllEnabled", TopologyRecoveryAllEnabled},
+		{"OnlyTransient", TopologyRecoveryOnlyTransient},
+		{"Disabled", TopologyRecoveryDisabled},
+	}
+	triggers := []string{"ConnectionDrop", "ChannelError"}
+	for _, m := range modes {
+		for _, trigger := range triggers {
+			t.Run(m.name+"/"+trigger, func(t *testing.T) {
+				const messages = 5
+				queue := "test-qos-recovery-" + m.name + "-" + trigger
+				connectionName := queue + "-conn"
+
+				admin := integrationConnection(t, "qos recovery admin")
+				defer admin.Close()
+				adminCh, err := admin.Channel()
+				if err != nil {
+					t.Fatalf("admin Channel failed: %v", err)
+				}
+				if _, err := adminCh.QueueDeclare(queue, true, false, false, false, nil); err != nil {
+					t.Fatalf("QueueDeclare failed: %v", err)
+				}
+				defer func() { _, _ = adminCh.QueueDelete(queue, false, false, false) }()
+
+				properties := NewConnectionProperties()
+				properties.SetClientConnectionName(connectionName)
+				conn, err := DialConfig(amqpURL, Config{
+					Recovery: &Recovery{
+						TopologyRecoveryMode: m.mode,
+						ReconnectionConfig:   &ReconnectionConfig{MaxRetryCount: 5, RetryInterval: time.Second},
+					},
+					Locale:     defaultLocale,
+					Properties: properties,
+				})
+				if err != nil {
+					t.Fatalf("DialConfig failed: %v", err)
+				}
+				defer conn.Close()
+
+				ch, err := conn.Channel()
+				if err != nil {
+					t.Fatalf("Channel failed: %v", err)
+				}
+				if err := ch.Qos(1, 0, false); err != nil {
+					t.Fatalf("Qos failed: %v", err)
+				}
+
+				// A per-consumer prefetch only applies to consumers created after basic.qos,
+				// so a consumer re-subscribed by topology recovery checks the replay order.
+				recoversConsumers := m.mode != TopologyRecoveryDisabled
+				var deliveries <-chan Delivery
+				if recoversConsumers {
+					if deliveries, err = ch.Consume(queue, "", false, false, false, false, nil); err != nil {
+						t.Fatalf("Consume failed: %v", err)
+					}
+				}
+
+				chanStateChanged := make(chan *StateChanged, 10)
+				ch.NotifyStateChange(chanStateChanged)
+
+				if trigger == "ConnectionDrop" {
+					connStateChanged := make(chan *StateChanged, 10)
+					conn.NotifyStateChange(connStateChanged)
+					dropConnection(t, connectionName)
+					waitForConnectionOpen(t, connStateChanged)
+				} else if _, err := ch.QueueDeclarePassive(queue+"-missing", true, false, false, false, nil); err == nil {
+					t.Fatalf("QueueDeclarePassive of a missing queue should error")
+				}
+				waitForChannelOpen(t, chanStateChanged)
+
+				for i := 0; i < messages; i++ {
+					if err := adminCh.PublishWithContext(context.Background(), "", queue, false, false, Publishing{Body: []byte("m")}); err != nil {
+						t.Fatalf("Publish failed: %v", err)
+					}
+				}
+
+				if !recoversConsumers {
+					if deliveries, err = ch.Consume(queue, "", false, false, false, false, nil); err != nil {
+						t.Fatalf("Consume failed: %v", err)
+					}
+				}
+
+				select {
+				case _, ok := <-deliveries:
+					if !ok {
+						t.Fatalf("Deliveries channel closed before the first delivery")
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatalf("Timeout waiting for the first delivery")
+				}
+				select {
+				case _, ok := <-deliveries:
+					if !ok {
+						t.Fatalf("Deliveries channel closed while waiting for the prefetch limit")
+					}
+					t.Fatalf("Received a second unacked delivery; QoS prefetch of 1 was not restored")
+				case <-time.After(time.Second):
+				}
+			})
+		}
+	}
+}
+
 // TestConnectionRecoveryExhaustionDoesNotPanic verifies that when topology
 // recovery fails on every retry and recovery is ultimately exhausted, the final
 // cleanup() does not double-close the NotifyClose/NotifyBlocked listener channels.
