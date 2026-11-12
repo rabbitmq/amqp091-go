@@ -974,7 +974,7 @@ func (ch *Channel) Qos(prefetchCount, prefetchSize int, global bool) error {
 		},
 		&basicQosOk{},
 	)
-	if err == nil && ch.connection.IsTopologyRecoveryEnabled() {
+	if err == nil && ch.connection.IsRecoveryEnabled() {
 		ch.connection.recordQos(ch.id, QosConfig{
 			PrefetchCount: uint16(prefetchCount),
 			PrefetchSize:  uint32(prefetchSize),
