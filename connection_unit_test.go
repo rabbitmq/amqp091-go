@@ -1691,8 +1691,9 @@ func TestDialTLSConfigFailureDoesNotDial(t *testing.T) {
 					return nil, errors.New("unexpected dial")
 				},
 			})
-			if err == nil {
-				t.Fatal("expected a TLS configuration error")
+			var pathErr *os.PathError
+			if !errors.As(err, &pathErr) || pathErr.Path != missing {
+				t.Fatalf("expected error for %s, got %v", missing, err)
 			}
 			if dialed {
 				t.Fatal("dialer was called although TLS configuration failed")
