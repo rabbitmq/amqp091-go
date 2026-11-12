@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1726,5 +1727,33 @@ func TestConnectionCallPrefersShutdownReasonOverClosedRPC(t *testing.T) {
 		if err := c.call(nil, &connectionOpenOk{}); err != ErrClosed {
 			t.Fatalf("iteration %d: expected ErrClosed, got %v", i, err)
 		}
+	}
+}
+
+// TestDialTLSConfigFailureDoesNotDial verifies that an error building the TLS
+// config from the URI is returned before any TCP connection is opened.
+func TestDialTLSConfigFailureDoesNotDial(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.pem")
+
+	for name, query := range map[string]string{
+		"cacertfile":     "cacertfile=" + url.QueryEscape(missing),
+		"client-keypair": "certfile=" + url.QueryEscape(missing) + "&keyfile=" + url.QueryEscape(missing),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dialed := false
+			_, err := DialConfig("amqps://127.0.0.1:5671/?"+query, Config{
+				Dial: func(network, addr string) (net.Conn, error) {
+					dialed = true
+					return nil, errors.New("unexpected dial")
+				},
+			})
+			var pathErr *os.PathError
+			if !errors.As(err, &pathErr) || pathErr.Path != missing {
+				t.Fatalf("expected error for %s, got %v", missing, err)
+			}
+			if dialed {
+				t.Fatal("dialer was called although TLS configuration failed")
+			}
+		})
 	}
 }

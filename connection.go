@@ -374,11 +374,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		dialer = DefaultDial(uri.connectionTimeout())
 	}
 
-	conn, err = dialer("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-
+	// Build the TLS config before dialing so a failure leaves no socket open.
 	if uri.Scheme == "amqps" {
 		if config.TLSClientConfig == nil {
 			tlsConfig, err := tlsConfigFromURI(uri)
@@ -393,7 +389,14 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		if config.TLSClientConfig.ServerName == "" {
 			config.TLSClientConfig.ServerName = uri.Host
 		}
+	}
 
+	conn, err = dialer("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	if uri.Scheme == "amqps" {
 		client := tls.Client(conn, config.TLSClientConfig)
 		if err := client.Handshake(); err != nil {
 			conn.Close()
