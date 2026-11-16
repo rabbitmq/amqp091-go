@@ -397,11 +397,15 @@ func DialConfig(url string, config Config) (*Connection, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			conn.Close()
+		}
+	}()
 
 	if uri.Scheme == "amqps" {
 		client := tls.Client(conn, config.TLSClientConfig)
-		if err := client.Handshake(); err != nil {
-			conn.Close()
+		if err = client.Handshake(); err != nil {
 			return nil, err
 		}
 
