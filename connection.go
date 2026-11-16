@@ -259,6 +259,7 @@ func DefaultDial(connectionTimeout time.Duration) func(network, addr string) (ne
 		// A deadline is set for TLS and AMQP handshaking. After AMQP is established,
 		// the deadline is cleared in openComplete.
 		if err := conn.SetDeadline(time.Now().Add(connectionTimeout)); err != nil {
+			conn.Close()
 			return nil, err
 		}
 
