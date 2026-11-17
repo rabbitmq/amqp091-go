@@ -66,8 +66,17 @@ func (r *reader) ReadFrame() (frame frame, err error) {
 
 	switch typ {
 	case frameMethod:
-		if frame, err = r.parseMethodFrame(channel, size); err != nil {
+		// Bound the method's fields by the frame size, as parseHeaderFrame does.
+		lim := &io.LimitedReader{R: r.r, N: int64(size)}
+		bounded := reader{r: lim}
+		if frame, err = bounded.parseMethodFrame(channel, size); err != nil {
 			return
+		}
+		// Drain unconsumed payload bytes, as parseHeaderFrame does.
+		if lim.N > 0 {
+			if _, err = io.CopyN(io.Discard, lim, lim.N); err != nil {
+				return nil, err
+			}
 		}
 
 	case frameHeader:

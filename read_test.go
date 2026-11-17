@@ -587,6 +587,7 @@ func FuzzReadFrame(f *testing.F) {
 	f.Add([]byte("\b000000"), uint32(0))
 	f.Add([]byte("\x02\x16\x10�[��\t\xbdui�"+"\x10\x01\x00\xff\xbf\xef\xbfｻn\x99\x00\x10r"), uint32(0))
 	f.Add([]byte("\x0300\x00\x00\x00\x040000"), uint32(0))
+	f.Add([]byte("\x01000000\x00<\x00n0"), uint32(0))
 
 	f.Fuzz(func(t *testing.T, data []byte, maxFrameSize uint32) {
 		// ReadFrame relies on any nonzero limit being at least frameMinSize.
@@ -881,4 +882,38 @@ func FuzzReadArray(f *testing.F) {
 		}
 		assertRoundTrip(t, v, got)
 	})
+}
+
+// TestReadFrameBoundsMethodFieldsByFrameSize verifies that a method field
+// whose declared length exceeds the frame size is rejected without reading
+// past the end of the frame.
+func TestReadFrameBoundsMethodFieldsByFrameSize(t *testing.T) {
+	const frameSize = 100
+	const fieldLen = 1 << 20
+
+	frame := []byte{frameMethod, 0, 0}
+	frame = binary.BigEndian.AppendUint32(frame, frameSize)
+	// connection.start: version 0-9, empty server-properties, then mechanisms.
+	frame = append(frame, 0, 10, 0, 10, 0, 9, 0, 0, 0, 0)
+	frame = binary.BigEndian.AppendUint32(frame, fieldLen)
+	src := bytes.NewReader(append(frame, bytes.Repeat([]byte{'a'}, fieldLen)...))
+
+	r := reader{r: src}
+	if f, err := r.ReadFrame(); err == nil {
+		t.Fatalf("expected an error, got frame=%T", f)
+	}
+	if read := src.Size() - int64(src.Len()); read > frameHeaderSize-1+frameSize {
+		t.Fatalf("read %d bytes of a frame that declares a %d-byte payload", read, frameSize)
+	}
+}
+
+// TestParseMethodFrameConsumesPaddingBytes verifies that payload bytes left
+// after a method's fields are drained, as they are for header frames.
+func TestParseMethodFrameConsumesPaddingBytes(t *testing.T) {
+	// channel.open-ok with an empty reserved longstr and 3 padding bytes.
+	frame := "\x01\x00\x01\x00\x00\x00\x0b\x00\x14\x00\x0b\x00\x00\x00\x00\x00\x00\x00\xce"
+	r := reader{r: strings.NewReader(frame)}
+	if _, err := r.ReadFrame(); err != nil {
+		t.Fatalf("expected no error reading method frame, got: %v", err)
+	}
 }
