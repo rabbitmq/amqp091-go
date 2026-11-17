@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -592,21 +591,31 @@ func TestOpenFailedVhost(t *testing.T) {
 // rather than the configured frame size.
 func TestOpenFailedFrameSizeBelowBrokerMinimum(t *testing.T) {
 	tests := []struct {
-		frameSize int
-		wantVhost bool
+		name           string
+		frameSize      int
+		serverFrameMax uint32
+		wantVhost      bool
+		wantInReason   []string
 	}{
-		{frameSize: 4096, wantVhost: false},
-		{frameSize: 8191, wantVhost: false},
-		{frameSize: 8192, wantVhost: true},
+		{name: "client asks 4096", frameSize: 4096, serverFrameMax: 20000,
+			wantInReason: []string{"negotiated frame_max 4096", "requested 4096", "server offered 20000"}},
+		{name: "client asks 8191", frameSize: 8191, serverFrameMax: 20000,
+			wantInReason: []string{"negotiated frame_max 8191", "requested 8191"}},
+		// The low value can come from the broker's connection.tune, so the
+		// message must not only blame Config.FrameSize.
+		{name: "server offers 4096", frameSize: 0, serverFrameMax: 4096,
+			wantInReason: []string{"negotiated frame_max 4096", "requested unset", "server offered 4096"}},
+		{name: "client asks 8192", frameSize: 8192, serverFrameMax: 20000, wantVhost: true},
 	}
 	for _, tt := range tests {
-		t.Run(fmt.Sprintf("FrameSize=%d", tt.frameSize), func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			rwc, srv := newSession(t)
 
 			go func() {
 				srv.expectAMQP()
 				srv.connectionStart()
-				srv.connectionTune()
+				srv.send(0, &connectionTune{ChannelMax: 11, FrameMax: tt.serverFrameMax, Heartbeat: 10})
+				srv.recv(0, &srv.tune)
 				srv.recv(0, &connectionOpen{})
 				rwc.Close()
 			}()
@@ -620,17 +629,35 @@ func TestOpenFailedFrameSizeBelowBrokerMinimum(t *testing.T) {
 				}
 				return
 			}
-			if errors.Is(err, ErrVhost) {
-				t.Fatalf("FrameSize=%d was reported as a vhost access error: %v", tt.frameSize, err)
-			}
 			if err == nil {
-				t.Fatalf("FrameSize=%d unexpectedly connected: %+v", tt.frameSize, c)
+				t.Fatalf("unexpectedly connected: %+v", c)
 			}
-			msg := err.Error()
-			if !strings.Contains(msg, "frame_max") || !strings.Contains(msg, "8192") {
-				t.Fatalf("FrameSize=%d error %q does not name the frame size minimum", tt.frameSize, msg)
+			if errors.Is(err, ErrVhost) {
+				t.Fatalf("reported as a vhost access error: %v", err)
+			}
+			var amqpErr *Error
+			if !errors.As(err, &amqpErr) {
+				t.Fatalf("expected an *Error, got %T: %v", err, err)
+			}
+			if amqpErr.Code != NotAllowed || amqpErr.Server {
+				t.Errorf("expected a local NotAllowed error, got code %d server=%t", amqpErr.Code, amqpErr.Server)
+			}
+			for _, want := range append(tt.wantInReason, "8192") {
+				if !strings.Contains(amqpErr.Reason, want) {
+					t.Errorf("reason %q does not contain %q", amqpErr.Reason, want)
+				}
 			}
 		})
+	}
+}
+
+func TestFrameSizeTooSmallErrorKeepsCause(t *testing.T) {
+	cause := errors.New("read tcp: i/o timeout")
+	err := frameSizeTooSmallError(4096, -1, 0, cause)
+	for _, want := range []string{"requested unlimited", "server offered no limit", "i/o timeout"} {
+		if !strings.Contains(err.Reason, want) {
+			t.Errorf("reason %q does not contain %q", err.Reason, want)
+		}
 	}
 }
 
