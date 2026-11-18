@@ -1795,6 +1795,46 @@ func TestIntegrationConfirm(t *testing.T) {
 	}
 }
 
+func TestIntegrationConfirmNoWait(t *testing.T) {
+	if c, ch := integrationQueue(t, "confirm-nowait"); c != nil {
+		defer c.Close()
+
+		done := make(chan error, 1)
+		go func() { done <- ch.Confirm(true) }()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("could not enable confirm mode: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Confirm(true) did not return")
+		}
+
+		dc, err := ch.PublishWithDeferredConfirmWithContext(context.TODO(), "", "confirm-nowait", false, false, Publishing{Body: []byte("confirm")})
+		if err != nil {
+			t.Fatalf("failed to publish: %v", err)
+		}
+		if dc == nil {
+			t.Fatal("expected a deferred confirmation in confirm mode")
+		}
+		if dc.DeliveryTag != 1 {
+			t.Fatalf("expected delivery tag 1, got %d", dc.DeliveryTag)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if acked, err := dc.WaitContext(ctx); err != nil || !acked {
+			t.Fatalf("expected ack, got acked=%v err=%v", acked, err)
+		}
+
+		// The broker must not have sent a confirm.select-ok that a later RPC would receive.
+		if _, err := ch.QueueDeclarePassive("confirm-nowait", false, true, false, false, nil); err != nil {
+			t.Fatalf("RPC after Confirm(true) failed: %v", err)
+		}
+	}
+}
+
 // https://github.com/streadway/amqp/issues/61
 func TestRoundTripAllFieldValueTypes61(t *testing.T) {
 	if conn := integrationConnection(t, "issue61"); conn != nil {
