@@ -857,8 +857,10 @@ func TestIntegrationConnectionNegotiatesMaxChannels(t *testing.T) {
 	}
 	defer c.Close()
 
-	if want, got := defaultChannelMax, c.Config.ChannelMax; want != got {
-		t.Fatalf("expected connection to negotiate uint16 (%d) channels, got: %d", want, got)
+	// The broker's default channel_max depends on its version: 2047 before
+	// RabbitMQ 4.4.1 and 256 since.
+	if got := c.Config.ChannelMax; got == 0 || got > defaultChannelMax {
+		t.Fatalf("expected connection to negotiate between 1 and %d channels, got: %d", defaultChannelMax, got)
 	}
 }
 
