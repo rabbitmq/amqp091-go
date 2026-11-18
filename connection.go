@@ -30,7 +30,7 @@ const (
 	defaultHeartbeat         = 10 * time.Second
 	defaultConnectionTimeout = 30 * time.Second
 	defaultProduct           = "AMQP 0.9.1 Client"
-	buildVersion             = "1.16.0"
+	buildVersion             = "1.17.0"
 	platform                 = "golang"
 	// Safer default that makes channel leaks a lot easier to spot
 	// before they create operational headaches. See https://github.com/rabbitmq/rabbitmq-server/issues/1593.
@@ -437,11 +437,15 @@ func dialConfig(ctx context.Context, url string, config Config) (*Connection, er
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			conn.Close()
+		}
+	}()
 
 	if uri.Scheme == "amqps" {
 		client := tls.Client(conn, config.TLSClientConfig)
-		if err := client.Handshake(); err != nil {
-			conn.Close()
+		if err = client.Handshake(); err != nil {
 			return nil, err
 		}
 

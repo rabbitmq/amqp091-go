@@ -738,6 +738,42 @@ func TestDialConfigFailedHandshakeWithRecoveryDoesNotLeak(t *testing.T) {
 	}
 }
 
+func TestDialConfigClosesSocketOnHandshakeError(t *testing.T) {
+	rwc, srv := newSession(t)
+	t.Cleanup(func() { rwc.Close() })
+
+	go func() {
+		srv.expectAMQP()
+		// Fail the handshake on the client side with ErrSASL, so the broker keeps
+		// the socket open and only DialConfig can close it.
+		srv.connectionStartWithMechanisms("KERBEROS NTLM", false)
+	}()
+
+	config := defaultConfig()
+	config.Dial = func(network, addr string) (net.Conn, error) {
+		return fakeNetConn{rwc}, nil
+	}
+
+	if _, err := DialConfig("amqp://guest:guest@localhost/", config); err != ErrSASL {
+		t.Fatalf("expected ErrSASL, got %v", err)
+	}
+
+	closed := make(chan error, 1)
+	go func() {
+		_, err := srv.S.Read(make([]byte, 1))
+		closed <- err
+	}()
+
+	select {
+	case err := <-closed:
+		if err != io.EOF {
+			t.Fatalf("expected EOF on the server side, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DialConfig did not close the socket after the handshake failed")
+	}
+}
+
 func TestNegotiationEnforcesFrameMinSize(t *testing.T) {
 	tests := []struct {
 		name             string
