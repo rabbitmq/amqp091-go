@@ -72,11 +72,10 @@ func (r *reader) ReadFrame() (frame frame, err error) {
 		if frame, err = bounded.parseMethodFrame(channel, size); err != nil {
 			return
 		}
-		// Drain unconsumed payload bytes, as parseHeaderFrame does.
+		// The broker sizes a method frame to match its fields, so payload
+		// bytes left after them mean the frame is malformed.
 		if lim.N > 0 {
-			if _, err = io.CopyN(io.Discard, lim, lim.N); err != nil {
-				return nil, err
-			}
+			return nil, ErrFrame
 		}
 
 	case frameHeader:

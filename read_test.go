@@ -907,13 +907,13 @@ func TestReadFrameBoundsMethodFieldsByFrameSize(t *testing.T) {
 	}
 }
 
-// TestParseMethodFrameConsumesPaddingBytes verifies that payload bytes left
-// after a method's fields are drained, as they are for header frames.
-func TestParseMethodFrameConsumesPaddingBytes(t *testing.T) {
+// TestReadFrameRejectsMethodFramePaddingBytes verifies that a method frame
+// with payload bytes left after its fields is rejected.
+func TestReadFrameRejectsMethodFramePaddingBytes(t *testing.T) {
 	// channel.open-ok with an empty reserved longstr and 3 padding bytes.
 	frame := "\x01\x00\x01\x00\x00\x00\x0b\x00\x14\x00\x0b\x00\x00\x00\x00\x00\x00\x00\xce"
 	r := reader{r: strings.NewReader(frame)}
-	if _, err := r.ReadFrame(); err != nil {
-		t.Fatalf("expected no error reading method frame, got: %v", err)
+	if f, err := r.ReadFrame(); !errors.Is(err, ErrFrame) {
+		t.Fatalf("expected ErrFrame, got frame=%T err=%v", f, err)
 	}
 }
