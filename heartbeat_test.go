@@ -593,3 +593,58 @@ func TestCloseDeadlineNotExtendedByTraffic(t *testing.T) {
 		t.Fatalf("close took %v, traffic from the broker extended its deadline", elapsed)
 	}
 }
+
+// The dial deadline bounds the whole handshake. The heartbeat timeout must
+// not replace it before the connection is open.
+func TestHandshakeDeadlineNotExtendedByHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	closing := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		srv := newServer(t, conn, nil)
+		srv.expectAMQP()
+		srv.connectionStart()
+		srv.connectionTune()
+		srv.recv(0, &connectionOpen{})
+		// Traffic makes the reader come back for another read.
+		_ = srv.w.WriteFrame(&heartbeatFrame{})
+		<-closing
+	}()
+
+	client, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() {
+		close(closing)
+		_ = client.Close()
+		_ = ln.Close()
+		<-done
+	})
+
+	start := time.Now()
+	if err := client.SetDeadline(start.Add(300 * time.Millisecond)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	config := defaultConfig()
+	config.Heartbeat = 10 * time.Second
+	if _, err := Open(client, config); err == nil {
+		t.Fatalf("expected the handshake to time out")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("handshake took %v, the heartbeat timeout replaced the dial deadline", elapsed)
+	}
+}

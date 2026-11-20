@@ -405,13 +405,23 @@ func TestConnection_SurvivesMemoryAlarmWithStalledPublisher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cannot dial integration server: %s", err)
 	}
-	t.Cleanup(func() {
-		clearAlarm()
-		_ = conn.CloseDeadline(time.Now().Add(2 * time.Second))
-	})
-
 	closes := conn.NotifyClose(make(chan *Error, 1))
 	blocks := conn.NotifyBlocked(make(chan Blocking, 16))
+	blocked := false
+	t.Cleanup(func() {
+		clearAlarm()
+		// On failure, give the broker time to lift the alarm before the next test.
+		timeout := time.After(10 * time.Second)
+		for blocked {
+			select {
+			case b, ok := <-blocks:
+				blocked = ok && b.Active
+			case <-timeout:
+				blocked = false
+			}
+		}
+		_ = conn.CloseDeadline(time.Now().Add(2 * time.Second))
+	})
 	ch, err := conn.Channel()
 	if err != nil {
 		t.Fatalf("could not open channel: %v", err)
@@ -423,6 +433,7 @@ func TestConnection_SurvivesMemoryAlarmWithStalledPublisher(t *testing.T) {
 		for {
 			select {
 			case b := <-blocks:
+				blocked = b.Active
 				if b.Active == active {
 					return
 				}
