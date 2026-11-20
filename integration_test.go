@@ -1813,6 +1813,11 @@ func TestIntegrationConfirmNoWait(t *testing.T) {
 			t.Fatal("Confirm(true) did not return")
 		}
 
+		// A stray confirm.select-ok would arrive before this RPC's reply and fail it.
+		if _, err := ch.QueueDeclarePassive("confirm-nowait", false, true, false, false, nil); err != nil {
+			t.Fatalf("RPC after Confirm(true) failed: %v", err)
+		}
+
 		dc, err := ch.PublishWithDeferredConfirmWithContext(context.TODO(), "", "confirm-nowait", false, false, Publishing{Body: []byte("confirm")})
 		if err != nil {
 			t.Fatalf("failed to publish: %v", err)
@@ -1828,11 +1833,6 @@ func TestIntegrationConfirmNoWait(t *testing.T) {
 		defer cancel()
 		if acked, err := dc.WaitContext(ctx); err != nil || !acked {
 			t.Fatalf("expected ack, got acked=%v err=%v", acked, err)
-		}
-
-		// The broker must not have sent a confirm.select-ok that a later RPC would receive.
-		if _, err := ch.QueueDeclarePassive("confirm-nowait", false, true, false, false, nil); err != nil {
-			t.Fatalf("RPC after Confirm(true) failed: %v", err)
 		}
 	}
 }
