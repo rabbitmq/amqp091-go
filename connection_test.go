@@ -390,6 +390,82 @@ func TestConnection_Close_WhenMemoryAlarmIsActive(t *testing.T) {
 	}
 }
 
+// A publisher blocked by a memory alarm stalls in a socket write while the
+// broker keeps sending heartbeats. The connection must outlive the alarm.
+func TestConnection_SurvivesMemoryAlarmWithStalledPublisher(t *testing.T) {
+	clearAlarm := func() { _ = rabbitmqctl(t, "set_vm_memory_high_watermark", "0.4") }
+	if err := rabbitmqctl(t, "set_vm_memory_high_watermark", "0.0001"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(clearAlarm)
+
+	conf := defaultConfig()
+	conf.Heartbeat = time.Second
+	conn, err := DialConfig(amqpURL, conf)
+	if err != nil {
+		t.Fatalf("cannot dial integration server: %s", err)
+	}
+	t.Cleanup(func() {
+		clearAlarm()
+		_ = conn.CloseDeadline(time.Now().Add(2 * time.Second))
+	})
+
+	closes := conn.NotifyClose(make(chan *Error, 1))
+	blocks := conn.NotifyBlocked(make(chan Blocking, 16))
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v", err)
+	}
+
+	awaitBlocking := func(active bool) {
+		t.Helper()
+		timeout := time.After(30 * time.Second)
+		for {
+			select {
+			case b := <-blocks:
+				if b.Active == active {
+					return
+				}
+			case err := <-closes:
+				t.Fatalf("connection closed waiting for blocked=%t: %v", active, err)
+			case <-timeout:
+				t.Fatalf("timed out waiting for blocked=%t", active)
+			}
+		}
+	}
+
+	// The messages are unroutable, and large enough to fill the socket buffers
+	// once the broker stops reading.
+	stop := make(chan struct{})
+	published := publishInBackground(ch, make([]byte, 1<<20), stop)
+	awaitBlocking(true)
+
+	// The heartbeat timeout is 1.5s, so the connection would be long gone.
+	select {
+	case err := <-closes:
+		t.Fatalf("connection closed while blocked by the memory alarm: %v", err)
+	case err := <-published:
+		t.Fatalf("publisher returned instead of stalling: %v", err)
+	case <-time.After(6 * time.Second):
+	}
+
+	clearAlarm()
+	awaitBlocking(false)
+	close(stop)
+	select {
+	case err := <-published:
+		if err != nil {
+			t.Fatalf("publish failed after the alarm cleared: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("publisher still stalled after the alarm cleared")
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("connection is not usable after the alarm: %v", err)
+	}
+}
+
 func rabbitmqctl(t *testing.T, args ...string) error {
 	t.Helper()
 

@@ -194,10 +194,14 @@ type Connection struct {
 
 	conn io.ReadWriteCloser
 
-	rpc       chan message
-	writer    *writer
-	sends     chan time.Time     // timestamps of each frame sent
-	deadlines chan readDeadliner // heartbeater updates read deadlines
+	rpc    chan message
+	writer *writer
+	sends  chan time.Time // timestamps of each frame sent
+
+	// readTimeout is how long, in nanoseconds, the reader waits for traffic
+	// from the server before declaring it dead. 0 means no limit, which holds
+	// until a heartbeat is negotiated via connection.tune.
+	readTimeout atomic.Int64
 
 	allocator *allocator // id generator valid after openTune
 	channels  map[uint16]*Channel
@@ -448,7 +452,6 @@ func Open(conn io.ReadWriteCloser, config Config) (*Connection, error) {
 		sends:                 make(chan time.Time),
 		errors:                make(chan *Error, 1),
 		close:                 make(chan struct{}),
-		deadlines:             make(chan readDeadliner, 1),
 		// TODO: Connection has Config and also an atomic int for MaxFrameSize. Duplication to simplify.
 		Config:    config,
 		lifeCycle: newLifeCycle(),
@@ -864,6 +867,11 @@ func (c *Connection) shutdown(err *Error) {
 	c.destructed = true
 	defer c.destructorM.Unlock()
 
+	// Close the socket before taking any other lock. A writer stalled in a
+	// socket write holds Channel.m, which the channel shutdown below waits
+	// for, and only closing the socket makes that write return.
+	c.conn.Close()
+
 	c.m.Lock()
 	defer c.m.Unlock()
 
@@ -909,7 +917,6 @@ func (c *Connection) shutdown(err *Error) {
 		ch.shutdown(err)
 	}
 
-	c.conn.Close()
 	// reader exit
 	close(c.close)
 
@@ -1030,9 +1037,11 @@ func (c *Connection) dispatchClosed(f frame) {
 // will demux the streams and dispatch to one of the opened channels or
 // handle on channel 0 (the connection channel).
 func (c *Connection) reader(r io.Reader) {
+	if conn, ok := r.(readDeadliner); ok {
+		r = &deadlineReader{r: r, conn: conn, timeout: &c.readTimeout}
+	}
 	buf := bufio.NewReader(r)
 	frames := &reader{r: buf, maxFrameSize: &c.maxFrameSize}
-	conn, haveDeadliner := r.(readDeadliner)
 
 	defer close(c.rpc)
 
@@ -1044,23 +1053,38 @@ func (c *Connection) reader(r io.Reader) {
 		}
 
 		c.demux(frame)
+	}
+}
 
-		if haveDeadliner {
-			select {
-			case c.deadlines <- conn:
-			default:
-				// On c.Close() c.heartbeater() might exit just before c.deadlines <- conn is called.
-				// Which results in this goroutine being stuck forever.
+// deadlineReader extends the read deadline of the transport right before each
+// read, so the timeout only measures how long the server stays silent while
+// the reader is waiting on the socket. This keeps the heartbeat timeout
+// independent of how long frames take to dispatch and of any other goroutine,
+// such as a heartbeater waiting behind a publisher stalled in a socket write.
+type deadlineReader struct {
+	r       io.Reader
+	conn    readDeadliner
+	timeout *atomic.Int64
+}
+
+func (d *deadlineReader) Read(p []byte) (int, error) {
+	if timeout := time.Duration(d.timeout.Load()); timeout > 0 && d.conn != nil {
+		if err := d.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+			// A closed socket reports its error from the read below.
+			var opErr *net.OpError
+			if !errors.As(err, &opErr) {
+				Logger.Printf("error setting read deadline, reading without one: %+v", err)
+				d.conn = nil
 			}
 		}
 	}
+
+	return d.r.Read(p)
 }
 
 // Ensures that at least one frame is being sent at the tuned interval with a
 // jitter tolerance of 1s
 func (c *Connection) heartbeater(interval time.Duration, done chan struct{}) {
-	const maxServerHeartbeatsInFlight = 3
-
 	var sendTicks <-chan time.Time
 	if interval > 0 {
 		ticker := time.NewTicker(interval)
@@ -1087,19 +1111,6 @@ func (c *Connection) heartbeater(interval time.Duration, done chan struct{}) {
 					// send heartbeats even after close/closeOk so we
 					// tick until the connection starts erroring
 					return
-				}
-			}
-
-		case conn := <-c.deadlines:
-			// When reading, reset our side of the deadline, if we've negotiated one with
-			// a deadline that covers at least 2 server heartbeats
-			if interval > 0 {
-				if err := conn.SetReadDeadline(time.Now().Add(maxServerHeartbeatsInFlight * interval)); err != nil {
-					var opErr *net.OpError
-					if !errors.As(err, &opErr) {
-						Logger.Printf("error setting read deadline in heartbeater: %+v", err)
-						return
-					}
 				}
 			}
 
@@ -1404,9 +1415,15 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 		int(config.Heartbeat/time.Second),
 		int(tune.Heartbeat)))
 
+	// Both peers send heartbeats twice per negotiated interval. The read timeout
+	// covers at least 2 server heartbeats.
+	const maxServerHeartbeatsInFlight = 3
+	heartbeatInterval := c.Config.Heartbeat / 2
+	c.readTimeout.Store(int64(maxServerHeartbeatsInFlight * heartbeatInterval))
+
 	// "The client should start sending heartbeats after receiving a
 	// Connection.Tune method"
-	go c.heartbeater(c.Config.Heartbeat/2, c.close)
+	go c.heartbeater(heartbeatInterval, c.close)
 
 	if err := c.send(&methodFrame{
 		ChannelId: 0,
@@ -1453,13 +1470,20 @@ func handshakeError(err error, fallback *Error) error {
 // openComplete performs any final Connection initialization dependent on the
 // connection handshake and clears any state needed for TLS and AMQP handshaking.
 func (c *Connection) openComplete() error {
-	// We clear the deadlines and let the heartbeater reset the read deadline if requested.
-	// RabbitMQ uses TCP flow control at this point for pushback so Writes can
-	// intentionally block.
+	// We clear the handshake deadlines. RabbitMQ uses TCP flow control at this
+	// point for pushback so Writes can intentionally block.
 	if deadliner, ok := c.conn.(interface {
 		SetDeadline(time.Time) error
 	}); ok {
 		_ = deadliner.SetDeadline(time.Time{})
+	}
+
+	// The reader may already be waiting in a read that the line above just left
+	// without a deadline.
+	if timeout := time.Duration(c.readTimeout.Load()); timeout > 0 {
+		if deadliner, ok := c.conn.(readDeadliner); ok {
+			_ = deadliner.SetReadDeadline(time.Now().Add(timeout))
+		}
 	}
 
 	// Zero out credentials after successful open-ok
@@ -1856,6 +1880,9 @@ func (c *Connection) resetState() {
 	// Re-apply the spec's pre-negotiation ceiling, as Open() does, so the new
 	// reader does not inherit the frame_max negotiated on the previous connection.
 	c.maxFrameSize.Store(frameMinSize)
+
+	// Likewise, the dial deadline alone bounds the handshake on the new socket.
+	c.readTimeout.Store(0)
 
 	c.errors = make(chan *Error, 1)
 	c.close = make(chan struct{})
