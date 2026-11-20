@@ -587,6 +587,7 @@ func FuzzReadFrame(f *testing.F) {
 	f.Add([]byte("\b000000"), uint32(0))
 	f.Add([]byte("\x02\x16\x10�[��\t\xbdui�"+"\x10\x01\x00\xff\xbf\xef\xbfｻn\x99\x00\x10r"), uint32(0))
 	f.Add([]byte("\x0300\x00\x00\x00\x040000"), uint32(0))
+	f.Add([]byte("\x01000000\x00<\x00n0\xce"), uint32(0))
 
 	f.Fuzz(func(t *testing.T, data []byte, maxFrameSize uint32) {
 		// ReadFrame relies on any nonzero limit being at least frameMinSize.
@@ -596,7 +597,8 @@ func FuzzReadFrame(f *testing.F) {
 		var max atomic.Uint32
 		max.Store(maxFrameSize)
 
-		r := reader{r: bytes.NewReader(data), maxFrameSize: &max}
+		br := bytes.NewReader(data)
+		r := reader{r: br, maxFrameSize: &max}
 		f1, err := r.ReadFrame()
 		if err != nil {
 			if f1 != nil {
@@ -605,8 +607,12 @@ func FuzzReadFrame(f *testing.F) {
 			return
 		}
 
-		if size := binary.BigEndian.Uint32(data[3:7]); maxFrameSize > 0 && size > maxFrameSize-frameHeaderSize {
+		size := binary.BigEndian.Uint32(data[3:7])
+		if maxFrameSize > 0 && size > maxFrameSize-frameHeaderSize {
 			t.Fatalf("accepted frame of size %d with limit %d", size, maxFrameSize)
+		}
+		if consumed := int64(len(data) - br.Len()); consumed != frameHeaderSize+int64(size) {
+			t.Fatalf("consumed %d bytes of a frame with a %d-byte payload", consumed, size)
 		}
 		if channel := binary.BigEndian.Uint16(data[1:3]); f1.channel() != channel {
 			t.Fatalf("frame channel %d, header channel %d", f1.channel(), channel)
@@ -881,4 +887,40 @@ func FuzzReadArray(f *testing.F) {
 		}
 		assertRoundTrip(t, v, got)
 	})
+}
+
+// TestReadFrameBoundsMethodFieldsByFrameSize verifies that a method field
+// whose declared length exceeds the frame size is rejected without reading
+// past the end of the frame.
+func TestReadFrameBoundsMethodFieldsByFrameSize(t *testing.T) {
+	const frameSize = 100
+	const fieldLen = 1 << 20
+
+	frame := []byte{frameMethod, 0, 0}
+	frame = binary.BigEndian.AppendUint32(frame, frameSize)
+	// connection.start: version 0-9, empty server-properties, then mechanisms.
+	frame = append(frame, 0, 10, 0, 10, 0, 9, 0, 0, 0, 0)
+	frame = binary.BigEndian.AppendUint32(frame, fieldLen)
+	src := bytes.NewReader(append(frame, bytes.Repeat([]byte{'a'}, fieldLen)...))
+
+	r := reader{r: src}
+	if f, err := r.ReadFrame(); err == nil {
+		t.Fatalf("expected an error, got frame=%T", f)
+	}
+	if read := src.Size() - int64(src.Len()); read > frameHeaderSize-1+frameSize {
+		t.Fatalf("read %d bytes of a frame that declares a %d-byte payload", read, frameSize)
+	}
+}
+
+// TestReadFrameRejectsMethodFramePaddingBytes verifies that a method frame
+// with payload bytes left after its fields is rejected.
+func TestReadFrameRejectsMethodFramePaddingBytes(t *testing.T) {
+	// channel.open-ok with an empty reserved longstr and 3 padding bytes. The
+	// first padding byte is a frame-end octet, so only the trailing-bytes
+	// check rejects the frame.
+	frame := "\x01\x00\x01\x00\x00\x00\x0b\x00\x14\x00\x0b\x00\x00\x00\x00\xce\x00\x00\xce"
+	r := reader{r: strings.NewReader(frame)}
+	if f, err := r.ReadFrame(); !errors.Is(err, ErrFrame) {
+		t.Fatalf("expected ErrFrame, got frame=%T err=%v", f, err)
+	}
 }
