@@ -3451,6 +3451,7 @@ func TestConnectionRecoveryNoWaitRedeclareRejected(t *testing.T) {
 			reported := make(chan TopologyRecoveryEntity, 100)
 			conn, err := DialConfig(amqpURL, Config{
 				Recovery: &Recovery{
+					ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: 5, RetryInterval: 100 * time.Millisecond},
 					OnTopologyEntityError: func(_ *Connection, e TopologyRecoveryEntity) bool {
 						entityErrs.Add(1)
 						select {
@@ -3506,7 +3507,7 @@ func TestConnectionRecoveryNoWaitRedeclareRejected(t *testing.T) {
 
 			// The broker must not keep closing the channel for the same entity.
 			rejections := 0
-			window := time.After(3 * time.Second)
+			window := time.After(time.Second)
 		settle:
 			for {
 				select {
@@ -3523,6 +3524,12 @@ func TestConnectionRecoveryNoWaitRedeclareRejected(t *testing.T) {
 			}
 			if n := entityErrs.Load(); n != 1 {
 				t.Fatalf("Expected OnTopologyEntityError to be called once, got %d", n)
+			}
+			if ch.IsClosed() {
+				t.Fatalf("Channel is closed after recovery")
+			}
+			if err := ch.ExchangeDeclarePassive("amq.direct", "direct", true, false, false, false, nil); err != nil {
+				t.Fatalf("Channel is not usable after recovery: %v", err)
 			}
 		})
 	}
@@ -3596,5 +3603,106 @@ func TestConnectionRecoveryNoWaitServerNamedQueue(t *testing.T) {
 	}
 	if q.Messages != 1 {
 		t.Fatalf("Expected the message to be routed to %q after recovery, found %d message(s)", queueName, q.Messages)
+	}
+}
+
+// TestConnectionRecoveryNoWaitServerNamedQueueTransient verifies that a
+// "" binding of a server-named queue first declared with noWait is still
+// recovered after the second reconnect with TopologyRecoveryOnlyTransient.
+func TestConnectionRecoveryNoWaitServerNamedQueueTransient(t *testing.T) {
+	connectionName := "test-connection-recovery-nowait-server-named-transient"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			TopologyRecoveryMode: TopologyRecoveryOnlyTransient,
+			ReconnectionConfig:   &ReconnectionConfig{MaxRetryCount: 5, RetryInterval: 100 * time.Millisecond},
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	if _, err := ch.QueueDeclare("", false, false, true, true, nil); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+	routingKey := "test-nowait-server-named-transient-key"
+	if err := ch.QueueBind("", routingKey, "amq.direct", false, nil); err != nil {
+		t.Fatalf("QueueBind failed: %v", err)
+	}
+
+	stateChanged := make(chan *StateChanged, 20)
+	conn.NotifyStateChange(stateChanged)
+	for i := 0; i < 2; i++ {
+		dropConnection(t, connectionName)
+		waitForConnectionOpen(t, stateChanged)
+	}
+
+	if err := ch.Confirm(false); err != nil {
+		t.Fatalf("Confirm failed: %v", err)
+	}
+	confirmation, err := ch.PublishWithDeferredConfirm("amq.direct", routingKey, false, false, Publishing{Body: []byte("x")})
+	if err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	if !confirmation.Wait() {
+		t.Fatalf("Publish was not confirmed")
+	}
+	deliveries, err := ch.Consume("", "", true, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume failed: %v", err)
+	}
+	select {
+	case <-deliveries:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Expected the message to be routed to the server-named queue after two recoveries")
+	}
+}
+
+// TestConnectionRecoveryNoWaitServerNamedQueueDelete verifies that deleting a
+// server-named queue first declared with noWait forgets it after a recovery.
+func TestConnectionRecoveryNoWaitServerNamedQueueDelete(t *testing.T) {
+	connectionName := "test-connection-recovery-nowait-server-named-delete"
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: 5, RetryInterval: 100 * time.Millisecond},
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel creation failed: %v", err)
+	}
+	if _, err := ch.QueueDeclare("", false, false, true, true, nil); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+
+	stateChanged := make(chan *StateChanged, 20)
+	conn.NotifyStateChange(stateChanged)
+	dropConnection(t, connectionName)
+	waitForConnectionOpen(t, stateChanged)
+
+	if _, err := ch.QueueDelete("", false, false, false); err != nil {
+		t.Fatalf("QueueDelete failed: %v", err)
+	}
+	if n := len(ch.TopologyConfiguration(false).Queues); n != 0 {
+		t.Fatalf("Expected the deleted queue to be forgotten, %d queue(s) still recorded", n)
 	}
 }

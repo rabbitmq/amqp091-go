@@ -2514,16 +2514,23 @@ func (c *Connection) recoverConnectionTopology(channels []*Channel) ([]TopologyR
 				continue
 			}
 
+			// A server-named queue first declared with noWait is recorded as "",
+			// the name bindings and consumers use for it. Keep that record and
+			// drop the one the redeclare added under the broker-assigned name.
+			if qc.DeclaredName == "" && qc.ActualName == "" {
+				c.topologyM.Lock()
+				if connConfig, found := c.topologyConfiguration[chID]; found {
+					delete(connConfig.Queues, q.Name)
+				}
+				c.topologyM.Unlock()
+				continue
+			}
+
 			// Server-generated queues (DeclaredName == "") receive a fresh broker-assigned
 			// name on every reconnect. Record the rename so bindings and consumers can be
 			// updated before they are re-created/re-subscribed below.
 			if qc.DeclaredName == "" && q.Name != qc.ActualName {
-				// A queue first declared with noWait has no recorded name. ""
-				// in a binding or consumer means the channel's last declared
-				// queue, so it must not be rewritten on other channels.
-				if qc.ActualName != "" {
-					nameReplacements[qc.ActualName] = q.Name
-				}
+				nameReplacements[qc.ActualName] = q.Name
 
 				// Patch the persistent topology store so future recoveries use the new name.
 				c.topologyM.Lock()
