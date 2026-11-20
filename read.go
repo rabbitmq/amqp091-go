@@ -66,8 +66,16 @@ func (r *reader) ReadFrame() (frame frame, err error) {
 
 	switch typ {
 	case frameMethod:
-		if frame, err = r.parseMethodFrame(channel, size); err != nil {
+		// Bound the method's fields by the frame size, as parseHeaderFrame does.
+		lim := &io.LimitedReader{R: r.r, N: int64(size)}
+		bounded := reader{r: lim}
+		if frame, err = bounded.parseMethodFrame(channel, size); err != nil {
 			return
+		}
+		// The broker sizes a method frame to match its fields, so payload
+		// bytes left after them mean the frame is malformed.
+		if lim.N > 0 {
+			return nil, ErrFrame
 		}
 
 	case frameHeader:
