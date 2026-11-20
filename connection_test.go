@@ -437,8 +437,12 @@ func TestConnection_SurvivesMemoryAlarmWithStalledPublisher(t *testing.T) {
 	// The messages are unroutable, and large enough to fill the socket buffers
 	// once the broker stops reading.
 	stop := make(chan struct{})
-	published := publishInBackground(ch, make([]byte, 1<<20), stop)
+	published, count := publishInBackground(ch, make([]byte, 1<<20), stop)
 	awaitBlocking(true)
+
+	// Let the socket buffers fill up.
+	<-time.After(2 * time.Second)
+	stalledAt := count.Load()
 
 	// The heartbeat timeout is 1.5s, so the connection would be long gone.
 	select {
@@ -447,6 +451,9 @@ func TestConnection_SurvivesMemoryAlarmWithStalledPublisher(t *testing.T) {
 	case err := <-published:
 		t.Fatalf("publisher returned instead of stalling: %v", err)
 	case <-time.After(6 * time.Second):
+	}
+	if n := count.Load(); n != stalledAt {
+		t.Fatalf("publisher was not stalled: %d publishes completed during the alarm", n-stalledAt)
 	}
 
 	clearAlarm()

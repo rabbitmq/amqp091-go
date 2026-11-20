@@ -203,6 +203,10 @@ type Connection struct {
 	// until a heartbeat is negotiated via connection.tune.
 	readTimeout atomic.Int64
 
+	// closeDeadline is the deadline given to CloseDeadline, in nanoseconds
+	// since the Unix epoch, or 0. Once set, it replaces readTimeout.
+	closeDeadline atomic.Int64
+
 	allocator *allocator // id generator valid after openTune
 	channels  map[uint16]*Channel
 
@@ -713,6 +717,11 @@ func (c *Connection) CloseDeadline(deadline time.Time) error {
 	defer unlock()
 
 	defer c.shutdown(nil)
+	// Stored before the deadline is set, so that the reader either sees it or
+	// extends the read deadline before it is set.
+	if !deadline.IsZero() {
+		c.closeDeadline.Store(deadline.UnixNano())
+	}
 	if err := c.setDeadline(deadline); err != nil {
 		return err
 	}
@@ -945,10 +954,12 @@ func (c *Connection) dispatch0(f frame) {
 		switch m := mf.Method.(type) {
 		case *connectionClose:
 			// Send immediately as shutdown will close our side of the writer.
-			f := &methodFrame{ChannelId: 0, Method: &connectionCloseOk{}}
-			if err := c.send(f); err != nil {
-				Logger.Printf("error sending connectionCloseOk, error: %+v", err)
-			}
+			c.replyBounded(func() {
+				f := &methodFrame{ChannelId: 0, Method: &connectionCloseOk{}}
+				if err := c.send(f); err != nil {
+					Logger.Printf("error sending connectionCloseOk, error: %+v", err)
+				}
+			})
 			c.shutdown(newError(m.ReplyCode, m.ReplyText))
 		case *connectionBlocked:
 			c.m.Lock()
@@ -1015,10 +1026,12 @@ func (c *Connection) dispatchClosed(f frame) {
 	if mf, ok := f.(*methodFrame); ok {
 		switch mf.Method.(type) {
 		case *channelClose:
-			f := &methodFrame{ChannelId: f.channel(), Method: &channelCloseOk{}}
-			if err := c.send(f); err != nil {
-				Logger.Printf("error sending channelCloseOk, channel id: %d error: %+v", f.channel(), err)
-			}
+			c.replyBounded(func() {
+				f := &methodFrame{ChannelId: f.channel(), Method: &channelCloseOk{}}
+				if err := c.send(f); err != nil {
+					Logger.Printf("error sending channelCloseOk, channel id: %d error: %+v", f.channel(), err)
+				}
+			})
 		case *channelCloseOk:
 			// we are already closed, so do nothing
 		default:
@@ -1033,12 +1046,37 @@ func (c *Connection) dispatchClosed(f frame) {
 	}
 }
 
+// replyBounded runs reply, which answers the server from the reader goroutine,
+// and waits for it no longer than the reader would wait for the server. A
+// writer stalled in a socket write holds up every other write indefinitely,
+// and the reader must get back to the socket to notice a dead server. A reply
+// that outlives the wait completes in the background.
+func (c *Connection) replyBounded(reply func()) {
+	timeout := time.Duration(c.readTimeout.Load())
+	if timeout <= 0 || timeout > notifyTimeout {
+		timeout = notifyTimeout
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		reply()
+	}()
+
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	}
+}
+
 // Reads each frame off the IO and hand off to the connection object that
 // will demux the streams and dispatch to one of the opened channels or
 // handle on channel 0 (the connection channel).
 func (c *Connection) reader(r io.Reader) {
 	if conn, ok := r.(readDeadliner); ok {
-		r = &deadlineReader{r: r, conn: conn, timeout: &c.readTimeout}
+		r = &deadlineReader{r: r, conn: conn, timeout: &c.readTimeout, closeDeadline: &c.closeDeadline}
 	}
 	buf := bufio.NewReader(r)
 	frames := &reader{r: buf, maxFrameSize: &c.maxFrameSize}
@@ -1062,24 +1100,34 @@ func (c *Connection) reader(r io.Reader) {
 // independent of how long frames take to dispatch and of any other goroutine,
 // such as a heartbeater waiting behind a publisher stalled in a socket write.
 type deadlineReader struct {
-	r       io.Reader
-	conn    readDeadliner
-	timeout *atomic.Int64
+	r             io.Reader
+	conn          readDeadliner
+	timeout       *atomic.Int64
+	closeDeadline *atomic.Int64
 }
 
 func (d *deadlineReader) Read(p []byte) (int, error) {
-	if timeout := time.Duration(d.timeout.Load()); timeout > 0 && d.conn != nil {
-		if err := d.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-			// A closed socket reports its error from the read below.
-			var opErr *net.OpError
-			if !errors.As(err, &opErr) {
-				Logger.Printf("error setting read deadline, reading without one: %+v", err)
-				d.conn = nil
-			}
+	timeout := time.Duration(d.timeout.Load())
+	if timeout > 0 && d.conn != nil && d.closeDeadline.Load() == 0 {
+		d.setReadDeadline(time.Now().Add(timeout))
+		// CloseDeadline may have set its deadline just before the line above.
+		if deadline := d.closeDeadline.Load(); deadline != 0 && d.conn != nil {
+			d.setReadDeadline(time.Unix(0, deadline))
 		}
 	}
 
 	return d.r.Read(p)
+}
+
+func (d *deadlineReader) setReadDeadline(t time.Time) {
+	if err := d.conn.SetReadDeadline(t); err != nil {
+		// A closed socket reports its error from the next read.
+		var opErr *net.OpError
+		if !errors.As(err, &opErr) {
+			Logger.Printf("error setting read deadline, reading without one: %+v", err)
+			d.conn = nil
+		}
+	}
 }
 
 // Ensures that at least one frame is being sent at the tuned interval with a
