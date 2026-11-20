@@ -483,7 +483,6 @@ func TestCloseWaitsForInFlightReconnectThenClosesRecoveredConnection(t *testing.
 		sends:                 make(chan time.Time, 100),
 		errors:                make(chan *Error, 1),
 		close:                 make(chan struct{}),
-		deadlines:             make(chan readDeadliner, 100),
 		lifeCycle:             newLifeCycle(),
 		Config: Config{
 			Vhost:  "/",
@@ -584,7 +583,6 @@ func TestReconnectAbortsWhenCloseWonTheRace(t *testing.T) {
 		close:     make(chan struct{}),
 		errors:    make(chan *Error, 1),
 		sends:     make(chan time.Time, 100),
-		deadlines: make(chan readDeadliner, 100),
 		lifeCycle: newLifeCycle(),
 		Config: Config{
 			Recovery: &Recovery{
