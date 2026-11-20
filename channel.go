@@ -125,6 +125,11 @@ type Channel struct {
 	// handling) closes the channel out from under it.
 	recoveringTopology atomic.Bool
 
+	// reopening is true while reconnectChannel owns this channel. shutdown
+	// then skips NotifyClose listeners, so a failed attempt's close error
+	// cannot start another recovery.
+	reopening atomic.Bool
+
 	recoveryCancels []chan struct{} // listeners for channel recovery cancellation
 }
 
@@ -281,7 +286,7 @@ func (ch *Channel) shutdown(e *Error) {
 		// recoveringTopology may have already cleared — suppressing at the
 		// source avoids that race. ch.errors is unaffected: ch.call() (used
 		// by the in-band redeclare itself) depends on it to return promptly.
-		if !ch.recoveringTopology.Load() {
+		if !ch.recoveringTopology.Load() && !ch.reopening.Load() && !ch.connection.recovering.Load() {
 			for _, c := range ch.closes {
 				select {
 				case c <- e:
@@ -2441,6 +2446,9 @@ func (ch *Channel) reconnectChannel() error {
 	if !ch.IsClosed() {
 		return nil
 	}
+
+	ch.reopening.Store(true)
+	defer ch.reopening.Store(false)
 
 	ch.lifeCycle.SetState(StateReconnecting, nil)
 

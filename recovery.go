@@ -294,6 +294,9 @@ func (d *DefaultConnectionRecovery) OnChannelClose(ch *Channel, err *Error) {
 	// Reconnect channel
 	if err := ch.Reconnect(); err != nil {
 		Logger.Printf("Channel %d recovery failed: %v.", ch.id, err)
+		// Disable recovery for good, so that a later close error cannot
+		// reopen the channel after its id is released.
+		ch.closeInit.Store(true)
 		ch.cleanup(err)
 		ch.connection.releaseChannel(ch)
 	}
