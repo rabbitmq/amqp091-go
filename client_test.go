@@ -360,6 +360,52 @@ func TestOpenTuneNegativeFrameSizeStillBoundByBroker(t *testing.T) {
 	}
 }
 
+func TestOpenNegotiatesChannelMax(t *testing.T) {
+	tests := []struct {
+		name   string
+		client uint16
+		server uint16
+		want   uint16
+	}{
+		{"client unset uses server", 0, 256, 256},
+		{"client lower than server", 16, 256, 16},
+		{"server lower than client", 512, 256, 256},
+		{"client set and server unlimited", 16, 0, 16},
+		{"both unlimited uses default", 0, 0, defaultChannelMax},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rwc, srv := newSession(t)
+			t.Cleanup(func() { rwc.Close() })
+
+			go func() {
+				srv.expectAMQP()
+				srv.connectionStart()
+				srv.send(0, &connectionTune{ChannelMax: tt.server, FrameMax: 20000, Heartbeat: 10})
+				srv.recv(0, &srv.tune)
+				srv.recv(0, &connectionOpen{})
+				srv.send(0, &connectionOpenOk{})
+			}()
+
+			config := defaultConfig()
+			config.ChannelMax = tt.client
+
+			c, err := Open(rwc, config)
+			if err != nil {
+				t.Fatalf("could not create connection: %v", err)
+			}
+
+			if got := c.Config.ChannelMax; got != tt.want {
+				t.Fatalf("expected negotiated ChannelMax %d, got %d", tt.want, got)
+			}
+			if got := srv.tune.ChannelMax; got != tt.want {
+				t.Fatalf("expected tune-ok ChannelMax %d, got %d", tt.want, got)
+			}
+		})
+	}
+}
+
 // TestOpenDoesNotMutateCallerProvidedSASLCredentials guards against
 // https://github.com/rabbitmq/amqp091-go/issues/387: Open must not zero out
 // the password on the caller's own *PlainAuth (reached via Config.SASL)
