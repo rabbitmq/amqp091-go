@@ -41,6 +41,11 @@ const (
 	// a broker that also proposes 0. Callers that explicitly want unlimited
 	// must set Config.FrameSize to a negative value instead.
 	defaultFrameSize = 131072
+	// rabbitmqMinFrameSize is the minimum frame_max RabbitMQ 4.1.0 and later
+	// accept (rabbitmq-server#13541). The AMQP 0-9-1 spec minimum remains
+	// frameMinSize (4096); a value in between is spec-legal but the broker
+	// closes the socket without a connection.close reply.
+	rabbitmqMinFrameSize = 8192
 )
 
 // Known server capabilities advertised in the connection.start properties table.
@@ -88,6 +93,8 @@ type Config struct {
 	//     takes effect if the broker also proposes no limit; a malicious or
 	//     misbehaving broker can then send arbitrarily large frames.
 	//   > 0: explicit cap, negotiated down to the broker's max if lower.
+	//     RabbitMQ 4.1.0 and later require at least 8192; prefer leaving
+	//     this unset.
 	FrameSize int
 
 	// Heartbeat is the interval between keep-alive frames. Less than 1s uses
@@ -1419,10 +1426,13 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 		return err
 	}
 
-	return c.openVhost(config)
+	return c.openVhost(config, tune.FrameMax)
 }
 
-func (c *Connection) openVhost(config Config) error {
+// openVhost sends connection.open. serverFrameMax is the frame_max the broker
+// offered in connection.tune, used to explain a silent close caused by a
+// negotiated frame_max below what the broker accepts.
+func (c *Connection) openVhost(config Config, serverFrameMax uint32) error {
 	req := &connectionOpen{VirtualHost: config.Vhost}
 	res := &connectionOpenOk{}
 
@@ -1431,13 +1441,46 @@ func (c *Connection) openVhost(config Config) error {
 		// text say why: 530 NOT_ALLOWED for a vhost the user may not access or
 		// for a reached per-user or per-vhost connection limit. Surface that
 		// reply; only fall back to ErrVhost when the socket was closed without
-		// one.
-		return handshakeError(err, ErrVhost)
+		// one — except when the negotiated frame_max is below the RabbitMQ
+		// 4.1.0 minimum, which produces the same silent close but is not a
+		// vhost access problem.
+		if err2 := handshakeError(err, ErrVhost); err2 != ErrVhost {
+			return err2
+		}
+		if size := c.Config.FrameSize; size > 0 && size < rabbitmqMinFrameSize {
+			return frameSizeTooSmallError(size, config.FrameSize, serverFrameMax, err)
+		}
+		return ErrVhost
 	}
 
 	c.Config.Vhost = config.Vhost
 
 	return c.openComplete()
+}
+
+// frameSizeTooSmallError reports a connection.open that failed after a
+// negotiated frame_max below rabbitmqMinFrameSize. It names both sides of the
+// negotiation, since the low value may come from the caller, from the broker's
+// connection.tune, or from a reconnect re-sending the negotiated size, and it
+// keeps the underlying failure, which is not always the broker closing the
+// socket. It is an *Error so callers keep Code, Recoverable and Temporary.
+func frameSizeTooSmallError(negotiated, requested int, serverFrameMax uint32, cause error) *Error {
+	requestedText := "unset"
+	switch {
+	case requested < 0:
+		requestedText = "unlimited"
+	case requested > 0:
+		requestedText = fmt.Sprint(requested)
+	}
+	offeredText := "no limit"
+	if serverFrameMax > 0 {
+		offeredText = fmt.Sprint(serverFrameMax)
+	}
+	return &Error{
+		Code: NotAllowed,
+		Reason: fmt.Sprintf("negotiated frame_max %d (requested %s, server offered %s) is below %d, "+
+			"the minimum RabbitMQ 4.1.0 and later accept: %v", negotiated, requestedText, offeredText, rabbitmqMinFrameSize, cause),
+	}
 }
 
 // Only trust err as the failure reason if the broker actually sent it;
