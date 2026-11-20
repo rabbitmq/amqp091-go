@@ -101,6 +101,10 @@ type Channel struct {
 	confirms   *confirms
 	confirming atomic.Bool
 
+	// transacting is set after a successful Tx() (tx.select) and is replayed
+	// during channel recovery. Transaction mode cannot be turned off.
+	transacting atomic.Bool
+
 	// Selects on any errors from shutdown during RPC
 	errors chan *Error
 
@@ -2039,10 +2043,14 @@ Once a channel has been put into transaction mode, it cannot be taken out of
 transaction mode.  Use a different channel for non-transactional semantics.
 */
 func (ch *Channel) Tx() error {
-	return ch.call(
+	if err := ch.call(
 		&txSelect{},
 		&txSelectOk{},
-	)
+	); err != nil {
+		return err
+	}
+	ch.transacting.Store(true)
+	return nil
 }
 
 /*
@@ -2516,6 +2524,14 @@ func (ch *Channel) setupChannelBasic() error {
 	if ch.confirming.Load() {
 		if err = ch.Confirm(false); err != nil {
 			Logger.Printf("Channel %d recovery Confirm error: %v", ch.id, err)
+			return err
+		}
+	}
+
+	// Re-enable transactions if the channel was in transaction mode.
+	if ch.transacting.Load() {
+		if err = ch.Tx(); err != nil {
+			Logger.Printf("Channel %d recovery Tx error: %v", ch.id, err)
 			return err
 		}
 	}
