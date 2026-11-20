@@ -2645,7 +2645,7 @@ func (msg *txRollbackOk) read(r io.Reader) (err error) {
 }
 
 type confirmSelect struct {
-	Nowait bool
+	NoWait bool
 }
 
 func (msg *confirmSelect) id() (uint16, uint16) {
@@ -2653,13 +2653,13 @@ func (msg *confirmSelect) id() (uint16, uint16) {
 }
 
 func (msg *confirmSelect) wait() bool {
-	return true
+	return true && !msg.NoWait
 }
 
 func (msg *confirmSelect) write(w io.Writer) (err error) {
 	var bits byte
 
-	if msg.Nowait {
+	if msg.NoWait {
 		bits |= 1 << 0
 	}
 
@@ -2676,7 +2676,7 @@ func (msg *confirmSelect) read(r io.Reader) (err error) {
 	if err = binary.Read(r, binary.BigEndian, &bits); err != nil {
 		return
 	}
-	msg.Nowait = (bits&(1<<0) > 0)
+	msg.NoWait = (bits&(1<<0) > 0)
 
 	return
 }
