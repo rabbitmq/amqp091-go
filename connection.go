@@ -200,7 +200,7 @@ type Connection struct {
 
 	// readTimeout is how long, in nanoseconds, the reader waits for traffic
 	// from the server before declaring it dead. 0 means no limit, which holds
-	// until a heartbeat is negotiated via connection.tune.
+	// until the connection is open with a negotiated heartbeat.
 	readTimeout atomic.Int64
 
 	allocator *allocator // id generator valid after openTune
@@ -1415,15 +1415,9 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 		int(config.Heartbeat/time.Second),
 		int(tune.Heartbeat)))
 
-	// Both peers send heartbeats twice per negotiated interval. The read timeout
-	// covers at least 2 server heartbeats.
-	const maxServerHeartbeatsInFlight = 3
-	heartbeatInterval := c.Config.Heartbeat / 2
-	c.readTimeout.Store(int64(maxServerHeartbeatsInFlight * heartbeatInterval))
-
 	// "The client should start sending heartbeats after receiving a
 	// Connection.Tune method"
-	go c.heartbeater(heartbeatInterval, c.close)
+	go c.heartbeater(c.Config.Heartbeat/2, c.close)
 
 	if err := c.send(&methodFrame{
 		ChannelId: 0,
@@ -1478,9 +1472,16 @@ func (c *Connection) openComplete() error {
 		_ = deadliner.SetDeadline(time.Time{})
 	}
 
-	// The reader may already be waiting in a read that the line above just left
-	// without a deadline.
-	if timeout := time.Duration(c.readTimeout.Load()); timeout > 0 {
+	// Both peers send heartbeats twice per negotiated interval. The read timeout
+	// covers at least 2 server heartbeats. It only applies from here on, as the
+	// dial deadline bounds the handshake.
+	const maxServerHeartbeatsInFlight = 3
+	timeout := maxServerHeartbeatsInFlight * (c.Config.Heartbeat / 2)
+	c.readTimeout.Store(int64(timeout))
+
+	// The reader may already be waiting in a read that was left without a
+	// deadline above.
+	if timeout > 0 {
 		if deadliner, ok := c.conn.(readDeadliner); ok {
 			_ = deadliner.SetReadDeadline(time.Now().Add(timeout))
 		}
