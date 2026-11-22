@@ -418,10 +418,12 @@ func readArrayDepth(r io.Reader, depth int) (arr []any, err error) {
 		field any
 	)
 
-	for {
+	// The blob is delimited by its declared size, not by EOF, so a field
+	// read hitting io.EOF means the element is truncated mid-encoding.
+	for lim.N > 0 {
 		if field, err = readFieldDepth(lim, depth); err != nil {
 			if err == io.EOF {
-				break
+				return nil, ErrSyntax
 			}
 			return nil, err
 		}
