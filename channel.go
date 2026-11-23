@@ -1931,6 +1931,17 @@ func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, i
 		return nil, err
 	}
 
+	// A header frame that fails to encode would leave its method frame
+	// without content, so reject oversized short strings before sending.
+	for _, s := range [...]string{
+		msg.ContentType, msg.ContentEncoding, msg.CorrelationId, msg.ReplyTo, msg.Expiration,
+		msg.MessageId, msg.Type, msg.UserId, msg.AppId,
+	} {
+		if len(s) > 255 {
+			return nil, fmt.Errorf("amqp: shortstr %q exceeds 255 bytes", s)
+		}
+	}
+
 	ch.m.Lock()
 	defer ch.m.Unlock()
 

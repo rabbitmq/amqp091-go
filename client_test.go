@@ -1343,3 +1343,44 @@ func TestPublishWithDeferredConfirmWithContext_ContextCancelled(t *testing.T) {
 	}
 
 }
+
+func TestPublishOversizedPropertyKeepsConnectionOpen(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	done := make(chan bool)
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &basicPublish{})
+		done <- true
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	long := string(make([]byte, 256))
+	for _, msg := range []Publishing{{CorrelationId: long}, {Headers: Table{long: "v"}}} {
+		if err := ch.PublishWithContext(context.TODO(), "", "q", false, false, msg); err == nil {
+			t.Fatal("expected an error for a short string longer than 255 bytes")
+		}
+	}
+
+	if err := ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{}); err != nil {
+		t.Fatalf("publish error after a rejected publishing: %v", err)
+	}
+
+	<-done
+
+	if c.IsClosed() {
+		t.Fatal("connection closed by a rejected publishing")
+	}
+}
