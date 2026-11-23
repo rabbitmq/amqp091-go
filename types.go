@@ -428,6 +428,9 @@ func validateField(f any) error {
 
 	case Table:
 		for k, v := range fv {
+			if len(k) > 255 {
+				return fmt.Errorf("table key %q exceeds 255 bytes", k)
+			}
 			if err := validateField(v); err != nil {
 				return fmt.Errorf("table field %q %s", k, err)
 			}
