@@ -1027,6 +1027,45 @@ func TestPublishBodySliceIssue74(t *testing.T) {
 }
 
 // Should not panic when server and client have frame_size of 0
+func TestPublishEncodeErrorKeepsConnectionOpen(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	done := make(chan bool)
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &basicPublish{})
+		done <- true
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	key := string(make([]byte, 256))
+	if err := ch.PublishWithContext(context.TODO(), "", key, false, false, Publishing{}); err == nil {
+		t.Fatal("expected an error for a routing key longer than 255 bytes")
+	}
+
+	if err := ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{}); err != nil {
+		t.Fatalf("publish error after an encoding error: %v", err)
+	}
+
+	<-done
+
+	if c.IsClosed() {
+		t.Fatal("connection closed by an encoding error")
+	}
+}
+
 func TestPublishZeroFrameSizeIssue161(t *testing.T) {
 	rwc, srv := newSession(t)
 	defer rwc.Close()

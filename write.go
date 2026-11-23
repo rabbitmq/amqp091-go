@@ -51,11 +51,17 @@ func (f *methodFrame) write(w io.Writer) (err error) {
 	}
 
 	if err = f.Method.write(&payload); err != nil {
-		return
+		return encodeError{err}
 	}
 
 	return writeFrame(w, frameMethod, f.ChannelId, payload.Bytes())
 }
+
+// encodeError reports a frame that could not be encoded, so nothing of it
+// reached the connection.
+type encodeError struct{ error }
+
+func (e encodeError) Unwrap() error { return e.error }
 
 // Heartbeat
 //

@@ -766,6 +766,10 @@ func (c *Connection) send(f frame) error {
 	err := c.writer.WriteFrame(f)
 	c.sendM.Unlock()
 
+	if errors.As(err, new(encodeError)) {
+		return err
+	}
+
 	if err != nil {
 		// shutdown could be re-entrant from signaling notify chans
 		go c.shutdown(&Error{
@@ -816,6 +820,10 @@ func (c *Connection) sendUnflushed(f frame) error {
 	c.sendM.Lock()
 	err := c.writer.WriteFrameNoFlush(f)
 	c.sendM.Unlock()
+
+	if errors.As(err, new(encodeError)) {
+		return err
+	}
 
 	if err != nil {
 		// shutdown could be re-entrant from signaling notify chans
