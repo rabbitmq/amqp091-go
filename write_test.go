@@ -6,6 +6,7 @@ package amqp091
 
 import (
 	"bytes"
+	"math"
 	"strings"
 	"testing"
 )
@@ -16,6 +17,25 @@ func TestWriteShortstrTruncationReturnsError(t *testing.T) {
 	err := writeShortstr(&buf, longStr)
 	if err == nil {
 		t.Fatal("expected error for shortstr > 255 bytes, got nil")
+	}
+}
+
+func TestWriteFieldIntBeyondInt32KeepsValue(t *testing.T) {
+	big := int64(math.MaxInt32) + 1
+	if int64(int(big)) != big {
+		t.Skip("int is 32 bits wide")
+	}
+
+	var buf bytes.Buffer
+	if err := writeField(&buf, int(big)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, err := readField(&buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != big {
+		t.Fatalf("expected %d, got %v", big, got)
 	}
 }
 

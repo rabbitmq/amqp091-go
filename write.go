@@ -324,6 +324,9 @@ func writeField(w io.Writer, value any) (err error) {
 		enc = buf[:3]
 
 	case int:
+		if int(int32(v)) != v {
+			return writeField(w, int64(v))
+		}
 		buf[0] = 'I'
 		binary.BigEndian.PutUint32(buf[1:5], uint32(v))
 		enc = buf[:5]
