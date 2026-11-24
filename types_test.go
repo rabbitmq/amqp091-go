@@ -2,6 +2,7 @@ package amqp091
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 )
@@ -98,6 +99,28 @@ func TestValidateField(t *testing.T) {
 
 	if err := validateField(uint64(10)); err == nil {
 		t.Error("validateField should fail for unsupported type uint64 but it didn't")
+	}
+
+	for _, v := range []int{math.MaxInt32, math.MinInt32} {
+		if err := validateField(v); err != nil {
+			t.Errorf("validateField failed for int %d: %s", v, err)
+		}
+	}
+
+	// The two values only differ from the ones above where int is 64 bits wide.
+	for _, v := range []int64{math.MaxInt32 + 1, math.MinInt32 - 1} {
+		if int64(int(v)) != v {
+			continue
+		}
+		if err := validateField(int(v)); err == nil {
+			t.Errorf("validateField should fail for int %d but it didn't", v)
+		}
+		if err := validateField(Table{"key": []any{int(v)}}); err == nil {
+			t.Errorf("validateField should fail for nested int %d but it didn't", v)
+		}
+		if err := validateField(v); err != nil {
+			t.Errorf("validateField failed for int64 %d: %s", v, err)
+		}
 	}
 
 	// Test case for unsupported type

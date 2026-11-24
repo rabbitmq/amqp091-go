@@ -415,7 +415,13 @@ type Table map[string]any
 
 func validateField(f any) error {
 	switch fv := f.(type) {
-	case nil, bool, byte, int8, int, int16, int32, int64, uint16, uint32, float32, float64, string, []byte, Decimal, time.Time:
+	case nil, bool, byte, int8, int16, int32, int64, uint16, uint32, float32, float64, string, []byte, Decimal, time.Time:
+		return nil
+
+	case int:
+		if int(int32(fv)) != fv {
+			return fmt.Errorf("value %d of type int exceeds the int32 range, use int64", fv)
+		}
 		return nil
 
 	case []any:
