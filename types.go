@@ -406,7 +406,8 @@ const (
 // value of an unsupported type.
 //
 // The caller must be specific in which precision of integer it wishes to
-// encode.
+// encode. An int is encoded as an int32, so an int outside the int32 range
+// is rejected; use int64 for larger values.
 //
 // Use a type assertion when reading values from a table for type conversion.
 //

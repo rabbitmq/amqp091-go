@@ -107,7 +107,7 @@ func TestValidateField(t *testing.T) {
 		}
 	}
 
-	// The two values only differ from the ones above where int is 64 bits wide.
+	// These values only fit in an int where int is 64 bits wide.
 	for _, v := range []int64{math.MaxInt32 + 1, math.MinInt32 - 1} {
 		if int64(int(v)) != v {
 			continue
