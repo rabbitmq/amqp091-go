@@ -1471,6 +1471,12 @@ func (ch *Channel) Consume(queue, consumer string, autoAck, exclusive, noLocal, 
 	}
 	res := &basicConsumeOk{}
 
+	// Registering the consumer replaces any existing one with the same tag, so
+	// a request that cannot be encoded must fail before that.
+	if _, err := (&methodFrame{ChannelId: ch.id, Method: req}).encode(); err != nil {
+		return nil, err
+	}
+
 	deliveries := make(chan Delivery)
 
 	config := consumerConfig{
@@ -1577,6 +1583,12 @@ func (ch *Channel) ConsumeWithContext(ctx context.Context, queue, consumer strin
 		Arguments:   args,
 	}
 	res := &basicConsumeOk{}
+
+	// Registering the consumer replaces any existing one with the same tag, so
+	// a request that cannot be encoded must fail before that.
+	if _, err := (&methodFrame{ChannelId: ch.id, Method: req}).encode(); err != nil {
+		return nil, err
+	}
 
 	select {
 	default:

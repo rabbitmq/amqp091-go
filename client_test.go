@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1421,5 +1422,79 @@ func TestMethodEncodeErrorKeepsConnectionOpen(t *testing.T) {
 
 	if c.IsClosed() {
 		t.Fatal("connection closed by an encoding error")
+	}
+}
+
+func TestConsumeEncodeErrorKeepsExistingConsumer(t *testing.T) {
+	consumeFuncs := map[string]func(ch *Channel, queue, tag string) (<-chan Delivery, error){
+		"Consume": func(ch *Channel, queue, tag string) (<-chan Delivery, error) {
+			return ch.Consume(queue, tag, false, false, false, false, nil)
+		},
+		"ConsumeWithContext": func(ch *Channel, queue, tag string) (<-chan Delivery, error) {
+			return ch.ConsumeWithContext(context.Background(), queue, tag, false, false, false, false, nil)
+		},
+	}
+
+	for name, consume := range consumeFuncs {
+		t.Run(name, func(t *testing.T) {
+			const tag = "c1"
+
+			rwc, srv := newSession(t)
+			defer rwc.Close()
+
+			failed := make(chan struct{})
+			done := make(chan struct{})
+
+			go func() {
+				defer close(done)
+				srv.connectionOpen()
+				srv.channelOpen(1)
+				srv.recv(1, &basicConsume{})
+				srv.send(1, &basicConsumeOk{ConsumerTag: tag})
+				<-failed
+				srv.send(1, &basicDeliver{ConsumerTag: tag, DeliveryTag: 1})
+			}()
+
+			c, err := Open(rwc, defaultConfig())
+			if err != nil {
+				t.Fatalf("could not create connection: %v (%s)", c, err)
+			}
+
+			ch, err := c.Channel()
+			if err != nil {
+				t.Fatalf("could not open channel: %v (%s)", ch, err)
+			}
+
+			deliveries, err := consume(ch, "q", tag)
+			if err != nil {
+				t.Fatalf("unexpected error during consume: %v", err)
+			}
+
+			if _, err := consume(ch, strings.Repeat("q", 256), tag); !errors.As(err, new(frameEncodeError)) {
+				t.Fatalf("expected a frame encoding error for a queue name longer than 255 bytes, got: %v", err)
+			}
+			close(failed)
+
+			select {
+			case d, ok := <-deliveries:
+				if !ok {
+					t.Fatal("existing consumer's deliveries channel closed by an encoding error")
+				}
+				if d.DeliveryTag != 1 {
+					t.Fatalf("unexpected delivery tag: want: 1, got: %d", d.DeliveryTag)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("existing consumer did not receive a delivery after an encoding error")
+			}
+
+			<-done
+
+			ch.consumers.Lock()
+			config, found := ch.consumers.configs[tag]
+			ch.consumers.Unlock()
+			if !found || config.Queue != "q" {
+				t.Fatalf("expected the recorded consumer config for queue q, got: %+v (found: %v)", config, found)
+			}
+		})
 	}
 }
