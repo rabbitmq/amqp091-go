@@ -1026,7 +1026,6 @@ func TestPublishBodySliceIssue74(t *testing.T) {
 	<-done
 }
 
-// Should not panic when server and client have frame_size of 0
 func TestPublishEncodeErrorKeepsConnectionOpen(t *testing.T) {
 	rwc, srv := newSession(t)
 	defer rwc.Close()
@@ -1066,6 +1065,7 @@ func TestPublishEncodeErrorKeepsConnectionOpen(t *testing.T) {
 	}
 }
 
+// Should not panic when server and client have frame_size of 0
 func TestPublishZeroFrameSizeIssue161(t *testing.T) {
 	rwc, srv := newSession(t)
 	defer rwc.Close()
