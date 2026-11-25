@@ -775,36 +775,65 @@ func TestDialConfigClosesSocketOnHandshakeError(t *testing.T) {
 }
 
 func TestOpenShutsDownOnHandshakeEncodeError(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
-	rwc, srv := newSession(t)
-
-	go func() {
-		srv.expectAMQP()
-		srv.connectionStart()
-		srv.connectionTune()
-	}()
-
-	config := defaultConfig()
-	config.Vhost = strings.Repeat("v", 256)
-
-	if _, err := Open(rwc, config); err == nil {
-		t.Fatal("expected Open to fail for a vhost longer than 255 bytes")
+	tests := []struct {
+		name   string
+		server func(srv *server)
+		config func(config *Config)
+	}{
+		{
+			name: "connection.start-ok",
+			server: func(srv *server) {
+				srv.connectionStartWithMechanisms("PLAIN", false)
+			},
+			config: func(config *Config) {
+				config.Locale = strings.Repeat("l", 256)
+			},
+		},
+		{
+			name: "connection.open",
+			server: func(srv *server) {
+				srv.connectionStart()
+				srv.connectionTune()
+			},
+			config: func(config *Config) {
+				config.Vhost = strings.Repeat("v", 256)
+			},
+		},
 	}
 
-	closed := make(chan error, 1)
-	go func() {
-		_, err := srv.S.Read(make([]byte, 1))
-		closed <- err
-	}()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
-	select {
-	case err := <-closed:
-		if err != io.EOF {
-			t.Fatalf("expected EOF on the server side, got %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Open did not close the transport after a handshake frame failed to encode")
+			rwc, srv := newSession(t)
+
+			go func() {
+				srv.expectAMQP()
+				tt.server(srv)
+			}()
+
+			config := defaultConfig()
+			tt.config(&config)
+
+			if _, err := Open(rwc, config); !errors.As(err, new(frameEncodeError)) {
+				t.Fatalf("expected a frame encoding error, got: %v", err)
+			}
+
+			closed := make(chan error, 1)
+			go func() {
+				_, err := srv.S.Read(make([]byte, 1))
+				closed <- err
+			}()
+
+			select {
+			case err := <-closed:
+				if err != io.EOF {
+					t.Fatalf("expected EOF on the server side, got %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Open did not close the transport after a handshake frame failed to encode")
+			}
+		})
 	}
 }
 

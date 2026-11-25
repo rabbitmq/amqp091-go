@@ -1453,6 +1453,9 @@ func handshakeError(err error, fallback *Error) error {
 	if errors.As(err, &amqpErr) && amqpErr.Server {
 		return err
 	}
+	if errors.As(err, new(frameEncodeError)) {
+		return err
+	}
 	return fallback
 }
 
