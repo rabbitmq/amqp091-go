@@ -1384,3 +1384,42 @@ func TestPublishOversizedPropertyKeepsConnectionOpen(t *testing.T) {
 		t.Fatal("connection closed by a rejected publishing")
 	}
 }
+
+func TestMethodEncodeErrorKeepsConnectionOpen(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	done := make(chan bool)
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &queueBind{})
+		done <- true
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	name := string(make([]byte, 256))
+	if err := ch.QueueBind(name, "k", "x", true, nil); !errors.As(err, new(frameEncodeError)) {
+		t.Fatalf("expected a frame encoding error for a queue name longer than 255 bytes, got: %v", err)
+	}
+
+	if err := ch.QueueBind("q", "k", "x", true, nil); err != nil {
+		t.Fatalf("queue bind error after an encoding error: %v", err)
+	}
+
+	<-done
+
+	if c.IsClosed() {
+		t.Fatal("connection closed by an encoding error")
+	}
+}

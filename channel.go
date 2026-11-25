@@ -413,6 +413,25 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 			return ch.sendClosed(msg)
 		}
 
+		// Encode the method and header before writing either, so that an encoding
+		// error leaves nothing of the message on the connection.
+		var methodPayload, headerPayload []byte
+		if methodPayload, err = (&methodFrame{
+			ChannelId: ch.id,
+			Method:    content,
+		}).encode(); err != nil {
+			return
+		}
+
+		if headerPayload, err = (&headerFrame{
+			ChannelId:  ch.id,
+			ClassId:    class,
+			Size:       uint64(len(body)),
+			Properties: props,
+		}).encode(); err != nil {
+			return
+		}
+
 		// Flush the buffer only after all the Frames that comprise the Message
 		// have been written to maximise benefits of using a buffered writer.
 		defer func() {
@@ -432,18 +451,18 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 		// so sendUnflushed() performs an *Unflushed* write, but is otherwise
 		// equivalent to the send() method. We later use the separate flush
 		// method to explicitly flush the buffer after all Frames are written.
-		if err = ch.connection.sendUnflushed(&methodFrame{
+		if err = ch.connection.sendUnflushed(&encodedFrame{
+			typ:       frameMethod,
 			ChannelId: ch.id,
-			Method:    content,
+			payload:   methodPayload,
 		}); err != nil {
 			return
 		}
 
-		if err = ch.connection.sendUnflushed(&headerFrame{
-			ChannelId:  ch.id,
-			ClassId:    class,
-			Size:       uint64(len(body)),
-			Properties: props,
+		if err = ch.connection.sendUnflushed(&encodedFrame{
+			typ:       frameHeader,
+			ChannelId: ch.id,
+			payload:   headerPayload,
 		}); err != nil {
 			return
 		}
@@ -1929,17 +1948,6 @@ mode, the DeferredConfirmation will be nil.
 func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, immediate bool, msg Publishing) (*DeferredConfirmation, error) {
 	if err := msg.Headers.Validate(); err != nil {
 		return nil, err
-	}
-
-	// A header frame that fails to encode would leave its method frame
-	// without content, so reject oversized short strings before sending.
-	for _, s := range [...]string{
-		msg.ContentType, msg.ContentEncoding, msg.CorrelationId, msg.ReplyTo, msg.Expiration,
-		msg.MessageId, msg.Type, msg.UserId, msg.AppId,
-	} {
-		if len(s) > 255 {
-			return nil, fmt.Errorf("amqp: shortstr %q exceeds 255 bytes", s)
-		}
 	}
 
 	ch.m.Lock()

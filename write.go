@@ -33,11 +33,22 @@ func (w *writer) WriteFrame(frame frame) (err error) {
 	return
 }
 
-func (f *methodFrame) write(w io.Writer) (err error) {
+func (f *methodFrame) write(w io.Writer) error {
+	payload, err := f.encode()
+	if err != nil {
+		return err
+	}
+
+	return writeFrame(w, frameMethod, f.ChannelId, payload)
+}
+
+func (f *methodFrame) encode() (_ []byte, err error) {
+	defer wrapFrameEncodeError(&err)
+
 	var payload bytes.Buffer
 
 	if f.Method == nil {
-		return errors.New("malformed frame: missing method")
+		return nil, errors.New("malformed frame: missing method")
 	}
 
 	class, method := f.Method.id()
@@ -51,17 +62,21 @@ func (f *methodFrame) write(w io.Writer) (err error) {
 	}
 
 	if err = f.Method.write(&payload); err != nil {
-		return encodeError{err}
+		return
 	}
 
-	return writeFrame(w, frameMethod, f.ChannelId, payload.Bytes())
+	return payload.Bytes(), nil
 }
 
-// encodeError reports a frame that could not be encoded, so nothing of it
-// reached the connection.
-type encodeError struct{ error }
+func wrapFrameEncodeError(err *error) {
+	if *err != nil {
+		*err = frameEncodeError{*err}
+	}
+}
 
-func (e encodeError) Unwrap() error { return e.error }
+func (f *encodedFrame) write(w io.Writer) error {
+	return writeFrame(w, f.typ, f.ChannelId, f.payload)
+}
 
 // Heartbeat
 //
@@ -77,7 +92,9 @@ func (f *heartbeatFrame) write(w io.Writer) (err error) {
 // +----------+--------+-----------+----------------+------------- - -
 //
 //	short     short    long long       short        remainder...
-func (f *headerFrame) write(w io.Writer) (err error) {
+func (f *headerFrame) encode() (_ []byte, err error) {
+	defer wrapFrameEncodeError(&err)
+
 	var payload bytes.Buffer
 
 	if err = binary.Write(&payload, binary.BigEndian, f.ClassId); err != nil {
@@ -207,7 +224,16 @@ func (f *headerFrame) write(w io.Writer) (err error) {
 		}
 	}
 
-	return writeFrame(w, frameHeader, f.ChannelId, payload.Bytes())
+	return payload.Bytes(), nil
+}
+
+func (f *headerFrame) write(w io.Writer) error {
+	payload, err := f.encode()
+	if err != nil {
+		return err
+	}
+
+	return writeFrame(w, frameHeader, f.ChannelId, payload)
 }
 
 // Body

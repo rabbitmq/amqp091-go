@@ -90,6 +90,12 @@ var (
 	errInvalidTypeAssertion = &Error{Code: InternalError, Reason: "type assertion unsuccessful", Server: false, Recover: true}
 )
 
+// frameEncodeError reports a frame that could not be encoded, so nothing of it
+// reached the connection.
+type frameEncodeError struct{ error }
+
+func (e frameEncodeError) Unwrap() error { return e.error }
+
 var _ error = (*Error)(nil)
 
 // Error captures the code and reason a channel or connection has been closed
@@ -630,6 +636,15 @@ type bodyFrame struct {
 }
 
 func (f *bodyFrame) channel() uint16 { return f.ChannelId }
+
+// encodedFrame is a frame whose payload has already been encoded.
+type encodedFrame struct {
+	typ       uint8
+	ChannelId uint16
+	payload   []byte
+}
+
+func (f *encodedFrame) channel() uint16 { return f.ChannelId }
 
 type heartbeatDuration struct {
 	value    time.Duration
