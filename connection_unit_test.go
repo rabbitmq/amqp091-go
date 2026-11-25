@@ -774,6 +774,40 @@ func TestDialConfigClosesSocketOnHandshakeError(t *testing.T) {
 	}
 }
 
+func TestOpenShutsDownOnHandshakeEncodeError(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	rwc, srv := newSession(t)
+
+	go func() {
+		srv.expectAMQP()
+		srv.connectionStart()
+		srv.connectionTune()
+	}()
+
+	config := defaultConfig()
+	config.Vhost = strings.Repeat("v", 256)
+
+	if _, err := Open(rwc, config); err == nil {
+		t.Fatal("expected Open to fail for a vhost longer than 255 bytes")
+	}
+
+	closed := make(chan error, 1)
+	go func() {
+		_, err := srv.S.Read(make([]byte, 1))
+		closed <- err
+	}()
+
+	select {
+	case err := <-closed:
+		if err != io.EOF {
+			t.Fatalf("expected EOF on the server side, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Open did not close the transport after a handshake frame failed to encode")
+	}
+}
+
 func TestNegotiationEnforcesFrameMinSize(t *testing.T) {
 	tests := []struct {
 		name             string

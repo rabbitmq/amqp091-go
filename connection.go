@@ -766,7 +766,9 @@ func (c *Connection) send(f frame) error {
 	err := c.writer.WriteFrame(f)
 	c.sendM.Unlock()
 
-	if err != nil && errors.As(err, new(frameEncodeError)) {
+	// Channel 0 still shuts down: a failed handshake relies on it to release the
+	// transport and goroutines.
+	if err != nil && errors.As(err, new(frameEncodeError)) && f.channel() != 0 {
 		return err
 	}
 
