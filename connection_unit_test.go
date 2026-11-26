@@ -962,6 +962,25 @@ func TestTLSConfigFromURIWithCACertAndClientCerts(t *testing.T) {
 	}
 }
 
+func TestDialConfigDoesNotMutateCallerProvidedTLSClientConfig(t *testing.T) {
+	errDial := errors.New("dial refused")
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	config := Config{
+		TLSClientConfig: tlsConfig,
+		Dial: func(network, addr string) (net.Conn, error) {
+			return nil, errDial
+		},
+	}
+
+	if _, err := DialConfig("amqps://first.example.com/", config); !errors.Is(err, errDial) {
+		t.Fatalf("expected the dial error, got: %v", err)
+	}
+
+	if tlsConfig.ServerName != "" {
+		t.Fatalf("DialConfig set ServerName on the caller-owned tls.Config: %q", tlsConfig.ServerName)
+	}
+}
+
 const (
 	testQueue1             = "test-queue-1"
 	testQueue2             = "test-queue-2"

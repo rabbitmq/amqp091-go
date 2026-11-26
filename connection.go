@@ -389,6 +389,7 @@ func DialConfig(url string, config Config) (*Connection, error) {
 		// If ServerName has not been specified in TLSClientConfig,
 		// set it to the URI host used for this connection.
 		if config.TLSClientConfig.ServerName == "" {
+			config.TLSClientConfig = config.TLSClientConfig.Clone()
 			config.TLSClientConfig.ServerName = uri.Host
 		}
 	}
