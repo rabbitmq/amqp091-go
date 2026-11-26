@@ -54,7 +54,10 @@ Caller
 
 - `Dial` / `DialConfig` / `DialTLS` are the entry points; `DialConfig` is the most general.
 - One **reader goroutine** (`connection.reader`) reads frames from the socket and calls `demux` to route them to channels.
-- One **heartbeater goroutine** (`connection.heartbeater`) monitors activity and sends keep-alive frames.
+- One **heartbeater goroutine** (`connection.heartbeater`) monitors send activity and sends keep-alive frames. It does nothing else, as it can wait behind a writer stalled in a socket write. No frame, heartbeats included, can be sent while a socket write is stalled.
+- The heartbeat timeout belongs to the reader: `deadlineReader` extends the socket read deadline by `Connection.readTimeout` (1.5× the negotiated heartbeat) right before each socket read, from `connection.tune` on, so it only measures broker silence while the reader waits on the socket. It also bounds the rest of the handshake, replacing the read deadline set by the dialer. `CloseDeadline` replaces it with its own deadline (`Connection.closeDeadline`).
+- The reader must get back to the socket within a bounded time, whatever publishers and consumers do. It never takes `Channel.m` directly (a publisher stalled in a socket write holds it): RPC state is loaded from `Channel.session`, and replies the reader owes the server (close-ok, cancel-ok, flow-ok) go through `Connection.replyBounded`, which gives up waiting after `min(readTimeout, notifyTimeout)` and lets the reply finish in the background. Listener notifications are bounded by `notifyTimeout`.
+- `Connection.shutdown` closes the socket before taking any lock other than `destructorM`: a publisher stalled in a socket write holds `Channel.m`, and only closing the socket releases it.
 - Channels are tracked in `Connection.channels map[uint16]*Channel`. Channel 0 is reserved for connection-level control frames.
 
 ### Channel

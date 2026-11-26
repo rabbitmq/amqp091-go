@@ -18,9 +18,9 @@ func TestChannelFlowDispatchDropsNotificationOnFullListener(t *testing.T) {
 	listener := make(chan bool, 1)
 	listener <- false // pre-fill to capacity
 
-	ch := &Channel{consumers: makeConsumers()}
+	ch := &Channel{connection: &Connection{}, consumers: makeConsumers()}
 	ch.flows = append(ch.flows, listener)
-	ch.closed.Store(true) // prevent send() from accessing nil connection
+	ch.closed.Store(true) // prevent send() from writing to the connection
 
 	done := make(chan struct{})
 	go func() {

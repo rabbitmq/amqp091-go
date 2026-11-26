@@ -70,14 +70,15 @@ type Channel struct {
 
 	connection *Connection
 
-	rpc       chan message
+	// session is loaded without Channel.m by the reader and by RPC callers, as
+	// a writer stalled in a socket write holds that mutex indefinitely.
+	session   atomic.Pointer[channelSession]
 	consumers *consumers
 
 	id uint16
 
 	// closed is set to true when the channel has been closed - see Channel.send()
 	closed atomic.Bool
-	close  chan struct{}
 
 	// true when we will never notify again
 	noNotify bool
@@ -100,9 +101,6 @@ type Channel struct {
 	// Allocated when in confirm mode in order to track publish counter and order confirms
 	confirms   *confirms
 	confirming atomic.Bool
-
-	// Selects on any errors from shutdown during RPC
-	errors chan *Error
 
 	// State machine that manages frame order, must only be mutated by the connection
 	recv func(*Channel, frame)
@@ -228,19 +226,35 @@ func cloneSlice[T any](s []T) []T {
 	return result
 }
 
+// channelSession holds the channels that live as long as one opening of an
+// AMQP channel. They are replaced together when the channel is reopened.
+type channelSession struct {
+	rpc chan message
+	// Selects on any errors from shutdown during RPC
+	errors chan *Error
+	close  chan struct{}
+}
+
+func newChannelSession() *channelSession {
+	return &channelSession{
+		rpc:    make(chan message),
+		errors: make(chan *Error, 1),
+		close:  make(chan struct{}),
+	}
+}
+
 // Constructs a new channel with the given framing rules
 func newChannel(c *Connection, id uint16) *Channel {
-	return &Channel{
+	ch := &Channel{
 		connection: c,
 		id:         id,
-		rpc:        make(chan message),
 		consumers:  makeConsumers(),
 		confirms:   newConfirms(),
 		recv:       (*Channel).recvMethod,
-		errors:     make(chan *Error, 1),
-		close:      make(chan struct{}),
 		lifeCycle:  newLifeCycle(),
 	}
+	ch.session.Store(newChannelSession())
+	return ch
 }
 
 // Signal that from now on, Channel.send() should call Channel.sendClosed()
@@ -268,6 +282,8 @@ func (ch *Channel) shutdown(e *Error) {
 	ch.notifyM.Lock()
 	defer ch.notifyM.Unlock()
 
+	session := ch.session.Load()
+
 	// Broadcast abnormal shutdown.
 	if e != nil {
 		// While an in-flight topology-recovery pass owns this channel
@@ -279,7 +295,7 @@ func (ch *Channel) shutdown(e *Error) {
 		// listener, because a full listener channel defers delivery up to
 		// notifyTimeout in the background goroutine below, by which time
 		// recoveringTopology may have already cleared — suppressing at the
-		// source avoids that race. ch.errors is unaffected: ch.call() (used
+		// source avoids that race. session.errors is unaffected: ch.call() (used
 		// by the in-band redeclare itself) depends on it to return promptly.
 		if !ch.recoveringTopology.Load() {
 			for _, c := range ch.closes {
@@ -304,13 +320,13 @@ func (ch *Channel) shutdown(e *Error) {
 		}
 		// Notify RPC if we're selecting
 		select {
-		case ch.errors <- e:
+		case session.errors <- e:
 		default:
 		}
 	}
 
-	close(ch.errors)
-	close(ch.close)
+	close(session.errors)
+	close(session.close)
 
 	if e == nil || !ch.connection.IsRecoveryEnabled() {
 		var err error
@@ -346,19 +362,16 @@ func (ch *Channel) call(req message, res ...message) error {
 	}
 
 	if req.wait() {
-		ch.m.Lock()
-		errors := ch.errors
-		rpc := ch.rpc
-		ch.m.Unlock()
+		session := ch.session.Load()
 
 		select {
-		case e, ok := <-errors:
+		case e, ok := <-session.errors:
 			if ok {
 				return e
 			}
 			return ErrClosed
 
-		case msg := <-rpc:
+		case msg := <-session.rpc:
 			if msg != nil {
 				for _, try := range res {
 					if reflect.TypeOf(msg) == reflect.TypeOf(try) {
@@ -503,23 +516,27 @@ func (ch *Channel) dispatch(msg message) {
 		// Note: channel state is set to closed immediately after the message is
 		// decoded by the Connection
 
-		// lock before sending connection.close-ok
-		// to avoid unexpected interleaving with basic.publish frames if
-		// publishing is happening concurrently
-		ch.m.Lock()
-		if err := ch.send(&channelCloseOk{}); err != nil {
-			Logger.Printf("error sending channelCloseOk, channel id: %d error: %+v", ch.id, err)
-		}
-		ch.m.Unlock()
-		ch.connection.closeChannel(ch, newError(m.ReplyCode, m.ReplyText))
+		ch.connection.replyBounded(func() {
+			// lock before sending connection.close-ok
+			// to avoid unexpected interleaving with basic.publish frames if
+			// publishing is happening concurrently
+			ch.m.Lock()
+			if err := ch.send(&channelCloseOk{}); err != nil {
+				Logger.Printf("error sending channelCloseOk, channel id: %d error: %+v", ch.id, err)
+			}
+			ch.m.Unlock()
+			ch.connection.closeChannel(ch, newError(m.ReplyCode, m.ReplyText))
+		})
 
 	case *channelFlow:
 		ch.notifyM.RLock()
 		notifyAll(ch.flows, m.Active)
 		ch.notifyM.RUnlock()
-		if err := ch.send(&channelFlowOk{Active: m.Active}); err != nil {
-			Logger.Printf("error sending channelFlowOk, channel id: %d error: %+v", ch.id, err)
-		}
+		ch.connection.replyBounded(func() {
+			if err := ch.send(&channelFlowOk{Active: m.Active}); err != nil {
+				Logger.Printf("error sending channelFlowOk, channel id: %d error: %+v", ch.id, err)
+			}
+		})
 
 	case *basicCancel:
 		queueName, _ := ch.consumers.queueForTag(m.ConsumerTag)
@@ -529,12 +546,14 @@ func (ch *Channel) dispatch(msg message) {
 		ch.consumers.cancel(m.ConsumerTag)
 		if ch.connection.isCapable(serverCapabilityAcceptConsumerCancelOk) {
 			// Older servers cannot handle client-sent basic.cancel-ok.
-			// Serialize the response with concurrent basic.publish frames.
-			ch.m.Lock()
-			if err := ch.send(&basicCancelOk{ConsumerTag: m.ConsumerTag}); err != nil {
-				Logger.Printf("error sending basicCancelOk, channel id: %d error: %+v", ch.id, err)
-			}
-			ch.m.Unlock()
+			ch.connection.replyBounded(func() {
+				// Serialize the response with concurrent basic.publish frames.
+				ch.m.Lock()
+				if err := ch.send(&basicCancelOk{ConsumerTag: m.ConsumerTag}); err != nil {
+					Logger.Printf("error sending basicCancelOk, channel id: %d error: %+v", ch.id, err)
+				}
+				ch.m.Unlock()
+			})
 		}
 		if queueName != "" {
 			ch.connection.maybeDeleteRecordedAutoDeleteQueue(queueName)
@@ -570,15 +589,12 @@ func (ch *Channel) dispatch(msg message) {
 		// deliveries are in flight and a no-wait cancel has happened
 
 	default:
-		ch.m.Lock()
-		closeCh := ch.close
-		rpc := ch.rpc
-		ch.m.Unlock()
+		session := ch.session.Load()
 
 		select {
-		case <-closeCh:
+		case <-session.close:
 			return
-		case rpc <- msg:
+		case session.rpc <- msg:
 		}
 	}
 }
@@ -2561,9 +2577,7 @@ func (ch *Channel) resetState() {
 	ch.closed.Store(false)
 	ch.destructed = false
 
-	ch.errors = make(chan *Error, 1)
-	ch.close = make(chan struct{})
-	ch.rpc = make(chan message)
+	ch.session.Store(newChannelSession())
 
 	if ch.confirms != nil {
 		ch.confirms.reset()
