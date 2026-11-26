@@ -1335,6 +1335,8 @@ func (c *Connection) openStart(config Config) error {
 func (c *Connection) openTune(config Config, auth Authentication) error {
 	if len(config.Properties) == 0 {
 		config.Properties = NewConnectionProperties()
+	} else {
+		config.Properties = cloneMap(config.Properties)
 	}
 
 	config.Properties["capabilities"] = Table{

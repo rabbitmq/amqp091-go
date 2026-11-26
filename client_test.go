@@ -453,6 +453,37 @@ func TestOpenDoesNotMutateCallerProvidedSASLCredentials(t *testing.T) {
 	}
 }
 
+func TestOpenDoesNotMutateCallerProvidedProperties(t *testing.T) {
+	properties := Table{"connection_name": "shared"}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		rwc, srv := newSession(t)
+		t.Cleanup(func() { _ = rwc.Close() })
+		go srv.connectionOpen()
+
+		config := defaultConfig()
+		config.Properties = properties
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := Open(rwc, config); err != nil {
+				t.Errorf("could not create connection: %s", err)
+				return
+			}
+			if _, ok := srv.start.ClientProperties["capabilities"]; !ok {
+				t.Errorf("expected the client capabilities to be sent, got: %+v", srv.start.ClientProperties)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if len(properties) != 1 {
+		t.Fatalf("Open changed the caller-owned Config.Properties: %+v", properties)
+	}
+}
+
 // TestOpenCapturesOriginalSASLClone is a follow-up to the fix for
 // https://github.com/rabbitmq/amqp091-go/issues/387: Open must retain an
 // independent clone of the caller-provided Config.SASL candidates so
