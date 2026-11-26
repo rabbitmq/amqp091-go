@@ -129,6 +129,38 @@ func TestConfirmMultipleResequences(t *testing.T) {
 	}
 }
 
+func TestConfirmMultipleKeepsBufferedConfirmation(t *testing.T) {
+	var (
+		fixtures = []Confirmation{
+			{1, true},
+			{2, true},
+			{3, false},
+			{4, true},
+			{5, true},
+		}
+		c = newConfirms()
+		l = make(chan Confirmation, len(fixtures))
+	)
+	c.Listen(l)
+
+	deferred := make([]*DeferredConfirmation, len(fixtures))
+	for i := range fixtures {
+		deferred[i] = c.publish()
+	}
+
+	c.One(fixtures[2])
+	c.Multiple(fixtures[4])
+
+	for i, fix := range fixtures {
+		if want, got := fix, <-l; want != got {
+			t.Fatalf("expected the buffered confirmation to survive a multiple for %d, want: %+v, got: %+v", i, want, got)
+		}
+		if want, got := fix.Ack, deferred[i].Acked(); want != got {
+			t.Fatalf("expected the deferred confirmation to agree for %d, want: %v, got: %v", i, want, got)
+		}
+	}
+}
+
 func BenchmarkSequentialBufferedConfirms(t *testing.B) {
 	var (
 		c = newConfirms()

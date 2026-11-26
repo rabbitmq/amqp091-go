@@ -101,7 +101,11 @@ func (c *confirms) Multiple(confirmed Confirmation) {
 	c.deferredConfirmations.ConfirmMultiple(confirmed)
 
 	for c.expecting <= confirmed.DeliveryTag {
-		c.confirm(Confirmation{c.expecting, confirmed.Ack})
+		sequenced, found := c.sequencer[c.expecting]
+		if !found {
+			sequenced = Confirmation{c.expecting, confirmed.Ack}
+		}
+		c.confirm(sequenced)
 	}
 	c.resequence()
 }
