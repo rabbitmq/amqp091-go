@@ -200,7 +200,7 @@ type Connection struct {
 
 	// readTimeout is how long, in nanoseconds, the reader waits for traffic
 	// from the server before declaring it dead. 0 means no limit, which holds
-	// until the connection is open with a negotiated heartbeat.
+	// until a heartbeat is negotiated via connection.tune.
 	readTimeout atomic.Int64
 
 	// closeDeadline is the deadline given to CloseDeadline, in nanoseconds
@@ -777,6 +777,12 @@ func (c *Connection) send(f frame) error {
 	c.sendM.Lock()
 	err := c.writer.WriteFrame(f)
 	c.sendM.Unlock()
+
+	// Channel 0 still shuts down: a failed handshake relies on it to release the
+	// transport and goroutines.
+	if err != nil && errors.As(err, new(frameEncodeError)) && f.channel() != 0 {
+		return err
+	}
 
 	if err != nil {
 		// shutdown could be re-entrant from signaling notify chans
@@ -1463,9 +1469,19 @@ func (c *Connection) openTune(config Config, auth Authentication) error {
 		int(config.Heartbeat/time.Second),
 		int(tune.Heartbeat)))
 
+	// Both peers send heartbeats twice per negotiated interval. The read timeout
+	// covers at least 2 server heartbeats.
+	const maxServerHeartbeatsInFlight = 3
+	heartbeatInterval := c.Config.Heartbeat / 2
+	c.readTimeout.Store(int64(maxServerHeartbeatsInFlight * heartbeatInterval))
+
+	// The timeout also bounds the rest of the handshake, which nothing else does
+	// on a transport without a deadline.
+	c.armReadDeadline()
+
 	// "The client should start sending heartbeats after receiving a
 	// Connection.Tune method"
-	go c.heartbeater(c.Config.Heartbeat/2, c.close)
+	go c.heartbeater(heartbeatInterval, c.close)
 
 	if err := c.send(&methodFrame{
 		ChannelId: 0,
@@ -1506,7 +1522,23 @@ func handshakeError(err error, fallback *Error) error {
 	if errors.As(err, &amqpErr) && amqpErr.Server {
 		return err
 	}
+	if errors.As(err, new(frameEncodeError)) {
+		return err
+	}
 	return fallback
+}
+
+// armReadDeadline starts the heartbeat timeout for the read the reader is
+// already waiting in, which it entered before the deadline changed. The reader
+// extends the deadline itself before each of its following reads.
+func (c *Connection) armReadDeadline() {
+	timeout := time.Duration(c.readTimeout.Load())
+	if timeout <= 0 {
+		return
+	}
+	if deadliner, ok := c.conn.(readDeadliner); ok {
+		_ = deadliner.SetReadDeadline(time.Now().Add(timeout))
+	}
 }
 
 // openComplete performs any final Connection initialization dependent on the
@@ -1520,20 +1552,8 @@ func (c *Connection) openComplete() error {
 		_ = deadliner.SetDeadline(time.Time{})
 	}
 
-	// Both peers send heartbeats twice per negotiated interval. The read timeout
-	// covers at least 2 server heartbeats. It only applies from here on, as the
-	// dial deadline bounds the handshake.
-	const maxServerHeartbeatsInFlight = 3
-	timeout := maxServerHeartbeatsInFlight * (c.Config.Heartbeat / 2)
-	c.readTimeout.Store(int64(timeout))
-
-	// The reader may already be waiting in a read that was left without a
-	// deadline above.
-	if timeout > 0 {
-		if deadliner, ok := c.conn.(readDeadliner); ok {
-			_ = deadliner.SetReadDeadline(time.Now().Add(timeout))
-		}
-	}
+	// Clearing the deadlines also cleared the one of the read in progress.
+	c.armReadDeadline()
 
 	// Zero out credentials after successful open-ok
 	for i := range c.Config.SASL {
@@ -1930,7 +1950,8 @@ func (c *Connection) resetState() {
 	// reader does not inherit the frame_max negotiated on the previous connection.
 	c.maxFrameSize.Store(frameMinSize)
 
-	// Likewise, the dial deadline alone bounds the handshake on the new socket.
+	// Likewise, the heartbeat timeout of the previous connection does not apply
+	// to the new socket before connection.tune.
 	c.readTimeout.Store(0)
 
 	c.errors = make(chan *Error, 1)

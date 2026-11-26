@@ -90,6 +90,12 @@ var (
 	errInvalidTypeAssertion = &Error{Code: InternalError, Reason: "type assertion unsuccessful", Server: false, Recover: true}
 )
 
+// frameEncodeError reports a frame that could not be encoded, so nothing of it
+// reached the connection.
+type frameEncodeError struct{ error }
+
+func (e frameEncodeError) Unwrap() error { return e.error }
+
 var _ error = (*Error)(nil)
 
 // Error captures the code and reason a channel or connection has been closed
@@ -406,7 +412,8 @@ const (
 // value of an unsupported type.
 //
 // The caller must be specific in which precision of integer it wishes to
-// encode.
+// encode. An int is encoded as an int32, so an int outside the int32 range
+// is rejected; use int64 for larger values.
 //
 // Use a type assertion when reading values from a table for type conversion.
 //
@@ -415,7 +422,13 @@ type Table map[string]any
 
 func validateField(f any) error {
 	switch fv := f.(type) {
-	case nil, bool, byte, int8, int, int16, int32, int64, uint16, uint32, float32, float64, string, []byte, Decimal, time.Time:
+	case nil, bool, byte, int8, int16, int32, int64, uint16, uint32, float32, float64, string, []byte, Decimal, time.Time:
+		return nil
+
+	case int:
+		if int(int32(fv)) != fv {
+			return fmt.Errorf("value %d of type int exceeds the int32 range, use int64", fv)
+		}
 		return nil
 
 	case []any:
@@ -428,6 +441,9 @@ func validateField(f any) error {
 
 	case Table:
 		for k, v := range fv {
+			if len(k) > 255 {
+				return fmt.Errorf("table key %q exceeds 255 bytes", k)
+			}
 			if err := validateField(v); err != nil {
 				return fmt.Errorf("table field %q %s", k, err)
 			}
@@ -627,6 +643,15 @@ type bodyFrame struct {
 }
 
 func (f *bodyFrame) channel() uint16 { return f.ChannelId }
+
+// encodedFrame is a frame whose payload has already been encoded.
+type encodedFrame struct {
+	typ       uint8
+	ChannelId uint16
+	payload   []byte
+}
+
+func (f *encodedFrame) channel() uint16 { return f.ChannelId }
 
 type heartbeatDuration struct {
 	value    time.Duration
