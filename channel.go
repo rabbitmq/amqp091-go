@@ -413,6 +413,25 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 			return ch.sendClosed(msg)
 		}
 
+		// Encode the method and header before writing either, so that an encoding
+		// error leaves nothing of the message on the connection.
+		var methodPayload, headerPayload []byte
+		if methodPayload, err = (&methodFrame{
+			ChannelId: ch.id,
+			Method:    content,
+		}).encode(); err != nil {
+			return
+		}
+
+		if headerPayload, err = (&headerFrame{
+			ChannelId:  ch.id,
+			ClassId:    class,
+			Size:       uint64(len(body)),
+			Properties: props,
+		}).encode(); err != nil {
+			return
+		}
+
 		// Flush the buffer only after all the Frames that comprise the Message
 		// have been written to maximise benefits of using a buffered writer.
 		defer func() {
@@ -432,18 +451,18 @@ func (ch *Channel) sendOpen(msg message) (err error) {
 		// so sendUnflushed() performs an *Unflushed* write, but is otherwise
 		// equivalent to the send() method. We later use the separate flush
 		// method to explicitly flush the buffer after all Frames are written.
-		if err = ch.connection.sendUnflushed(&methodFrame{
+		if err = ch.connection.sendUnflushed(&encodedFrame{
+			typ:       frameMethod,
 			ChannelId: ch.id,
-			Method:    content,
+			payload:   methodPayload,
 		}); err != nil {
 			return
 		}
 
-		if err = ch.connection.sendUnflushed(&headerFrame{
-			ChannelId:  ch.id,
-			ClassId:    class,
-			Size:       uint64(len(body)),
-			Properties: props,
+		if err = ch.connection.sendUnflushed(&encodedFrame{
+			typ:       frameHeader,
+			ChannelId: ch.id,
+			payload:   headerPayload,
 		}); err != nil {
 			return
 		}
@@ -1452,6 +1471,12 @@ func (ch *Channel) Consume(queue, consumer string, autoAck, exclusive, noLocal, 
 	}
 	res := &basicConsumeOk{}
 
+	// Registering the consumer replaces any existing one with the same tag, so
+	// a request that cannot be encoded must fail before that.
+	if _, err := (&methodFrame{ChannelId: ch.id, Method: req}).encode(); err != nil {
+		return nil, err
+	}
+
 	deliveries := make(chan Delivery)
 
 	config := consumerConfig{
@@ -1558,6 +1583,12 @@ func (ch *Channel) ConsumeWithContext(ctx context.Context, queue, consumer strin
 		Arguments:   args,
 	}
 	res := &basicConsumeOk{}
+
+	// Registering the consumer replaces any existing one with the same tag, so
+	// a request that cannot be encoded must fail before that.
+	if _, err := (&methodFrame{ChannelId: ch.id, Method: req}).encode(); err != nil {
+		return nil, err
+	}
 
 	select {
 	default:
