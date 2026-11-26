@@ -55,7 +55,7 @@ Caller
 - `Dial` / `DialConfig` / `DialTLS` are the entry points; `DialConfig` is the most general.
 - One **reader goroutine** (`connection.reader`) reads frames from the socket and calls `demux` to route them to channels.
 - One **heartbeater goroutine** (`connection.heartbeater`) monitors send activity and sends keep-alive frames. It does nothing else, as it can wait behind a writer stalled in a socket write.
-- The heartbeat timeout belongs to the reader: `deadlineReader` extends the socket read deadline by `Connection.readTimeout` (1.5× the negotiated heartbeat) right before each socket read, once the connection is open, so it only measures broker silence while the reader waits on the socket. It does not run while the reader is held up elsewhere: by a slow listener (up to `notifyTimeout`), or by a reply waiting behind a writer stalled in a socket write.
+- The heartbeat timeout belongs to the reader: `deadlineReader` extends the socket read deadline by `Connection.readTimeout` (1.5× the negotiated heartbeat) right before each socket read, from `connection.tune` on, so it only measures broker silence while the reader waits on the socket. It also bounds the rest of the handshake, replacing the read deadline set by the dialer. It does not run while the reader is held up elsewhere: by a slow listener (up to `notifyTimeout`), or by a reply waiting behind a writer stalled in a socket write.
 - `Connection.shutdown` closes the socket before taking any lock other than `destructorM`: a publisher stalled in a socket write holds `Channel.m`, and only closing the socket releases it.
 - Channels are tracked in `Connection.channels map[uint16]*Channel`. Channel 0 is reserved for connection-level control frames.
 

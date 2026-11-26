@@ -7,7 +7,9 @@ package amqp091
 
 import (
 	"context"
+	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -359,9 +361,44 @@ func TestHeartbeatSurvivesSlowListener(t *testing.T) {
 	}
 }
 
-// The dial deadline bounds the whole handshake. The heartbeat timeout must
-// not replace it before the connection is open.
-func TestHandshakeDeadlineNotExtendedByHeartbeat(t *testing.T) {
+// silentAfterOpen plays the broker up to connection.open and never answers
+// it. It gives up quietly when the client goes away.
+func silentAfterOpen(conn net.Conn, closing <-chan struct{}) {
+	w := &writer{conn}
+	r := &reader{r: conn}
+
+	if _, err := io.ReadFull(conn, make([]byte, 8)); err != nil {
+		return
+	}
+	start := &connectionStart{VersionMajor: 0, VersionMinor: 9, Mechanisms: "PLAIN", Locales: defaultLocale}
+	if w.WriteFrame(&methodFrame{ChannelId: 0, Method: start}) != nil {
+		return
+	}
+	if _, err := r.ReadFrame(); err != nil {
+		return
+	}
+	tune := &connectionTune{ChannelMax: 11, FrameMax: 20000, Heartbeat: uint16(testHeartbeat / time.Second)}
+	if w.WriteFrame(&methodFrame{ChannelId: 0, Method: tune}) != nil {
+		return
+	}
+	// Heartbeats may precede tune-ok and connection.open.
+	for {
+		f, err := r.ReadFrame()
+		if err != nil {
+			return
+		}
+		if mf, ok := f.(*methodFrame); ok {
+			if _, ok := mf.Method.(*connectionOpen); ok {
+				break
+			}
+		}
+	}
+	<-closing
+}
+
+// The heartbeat timeout must bound the wait for connection.open-ok, as a
+// transport without a deadline has no other bound.
+func TestHandshakeBoundedWithoutDialDeadline(t *testing.T) {
 	t.Parallel()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -378,15 +415,7 @@ func TestHandshakeDeadlineNotExtendedByHeartbeat(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-
-		srv := newServer(t, conn, nil)
-		srv.expectAMQP()
-		srv.connectionStart()
-		srv.connectionTune()
-		srv.recv(0, &connectionOpen{})
-		// Traffic makes the reader come back for another read.
-		_ = srv.w.WriteFrame(&heartbeatFrame{})
-		<-closing
+		silentAfterOpen(conn, closing)
 	}()
 
 	client, err := net.Dial("tcp", ln.Addr().String())
@@ -400,16 +429,99 @@ func TestHandshakeDeadlineNotExtendedByHeartbeat(t *testing.T) {
 		<-done
 	})
 
-	start := time.Now()
-	if err := client.SetDeadline(start.Add(300 * time.Millisecond)); err != nil {
-		t.Fatalf("set deadline: %v", err)
-	}
 	config := defaultConfig()
-	config.Heartbeat = 10 * time.Second
-	if _, err := Open(client, config); err == nil {
-		t.Fatalf("expected the handshake to time out")
+	config.Heartbeat = testHeartbeat
+	opened := make(chan error, 1)
+	go func() {
+		_, err := Open(client, config)
+		opened <- err
+	}()
+
+	select {
+	case err := <-opened:
+		if err == nil {
+			t.Fatalf("expected the handshake to time out")
+		}
+	case <-time.After(testDetection):
+		t.Fatalf("handshake still waiting for connection.open-ok")
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("handshake took %v, the heartbeat timeout replaced the dial deadline", elapsed)
+}
+
+// A reconnect that reaches a broker stuck in the handshake must time out, or
+// it holds up Close for good.
+func TestCloseNotBlockedByReconnectToSilentBroker(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	closing := make(chan struct{})
+	reconnecting := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var brokers sync.WaitGroup
+		defer brokers.Wait()
+		for first := true; ; first = false {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if first {
+				// The connection opens, then drops once recovery watches it.
+				srv := newServer(t, conn, nil)
+				srv.connectionOpen()
+				<-time.After(200 * time.Millisecond)
+				_ = conn.Close()
+				close(reconnecting)
+				continue
+			}
+			brokers.Add(1)
+			go func() {
+				defer brokers.Done()
+				defer conn.Close()
+				silentAfterOpen(conn, closing)
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		close(closing)
+		_ = ln.Close()
+		<-done
+	})
+
+	config := defaultConfig()
+	config.Heartbeat = testHeartbeat
+	config.Dial = func(network, _ string) (net.Conn, error) {
+		return net.Dial(network, ln.Addr().String())
+	}
+	config.Recovery = &Recovery{ReconnectionConfig: &ReconnectionConfig{
+		MaxRetryCount: 3,
+		RetryInterval: 100 * time.Millisecond,
+	}}
+	c, err := DialConfig("amqp://guest:guest@localhost:5672/", config)
+	if err != nil {
+		t.Fatalf("could not open connection: %v", err)
+	}
+
+	select {
+	case <-reconnecting:
+	case <-time.After(testDetection):
+		t.Fatalf("first connection never dropped")
+	}
+	// Let the reconnect reach the silent broker.
+	<-time.After(testReadTimeout)
+
+	closed := make(chan struct{})
+	go func() {
+		_ = c.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(testDetection):
+		t.Fatalf("Close still blocked behind the reconnect")
 	}
 }
