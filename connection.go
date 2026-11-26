@@ -766,6 +766,12 @@ func (c *Connection) send(f frame) error {
 	err := c.writer.WriteFrame(f)
 	c.sendM.Unlock()
 
+	// Channel 0 still shuts down: a failed handshake relies on it to release the
+	// transport and goroutines.
+	if err != nil && errors.As(err, new(frameEncodeError)) && f.channel() != 0 {
+		return err
+	}
+
 	if err != nil {
 		// shutdown could be re-entrant from signaling notify chans
 		go c.shutdown(&Error{
@@ -1445,6 +1451,9 @@ func (c *Connection) openVhost(config Config) error {
 func handshakeError(err error, fallback *Error) error {
 	var amqpErr *Error
 	if errors.As(err, &amqpErr) && amqpErr.Server {
+		return err
+	}
+	if errors.As(err, new(frameEncodeError)) {
 		return err
 	}
 	return fallback
