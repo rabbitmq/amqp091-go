@@ -1499,46 +1499,99 @@ func TestConsumeEncodeErrorKeepsExistingConsumer(t *testing.T) {
 	}
 }
 
-// TestSetupChannelBasicReplaysTx verifies that a successful Tx() is recorded
-// and that setupChannelBasic re-sends tx.select, matching Java and .NET
-// autorecovering clients. Without this, a recovered transactional channel
-// publishes immediately and TxCommit fails.
-func TestSetupChannelBasicReplaysTx(t *testing.T) {
+func txRecoveryConfig() Config {
+	config := defaultConfig()
+	config.Recovery = &Recovery{
+		ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: 1, RetryInterval: time.Millisecond},
+		ConnectionRecovery: &DefaultConnectionRecovery{},
+	}
+	return config
+}
+
+// recoverTxChannel closes the channel with a soft error and expects the client
+// to reopen it and replay tx.select.
+func (t *server) recoverTxChannel(id int) {
+	t.send(id, &channelClose{ReplyCode: NotFound, ReplyText: "NOT_FOUND"})
+	t.recv(id, &channelCloseOk{})
+	t.channelOpen(id)
+	t.recv(id, &txSelect{})
+	t.send(id, &txSelectOk{})
+}
+
+func waitForChannelRecovery(t *testing.T, states chan *StateChanged) {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	reconnecting := false
+	for {
+		select {
+		case sc := <-states:
+			if sc.To == StateReconnecting {
+				reconnecting = true
+			}
+			if reconnecting && sc.To == StateOpen {
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for channel recovery")
+		}
+	}
+}
+
+func TestTxCommitAfterRecoveryWithoutPendingWork(t *testing.T) {
 	rwc, srv := newSession(t)
 	defer rwc.Close()
+	// Unblock the client if the mock broker stops responding.
+	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
 
 	done := make(chan struct{})
+	// Wait for the mock broker so that its failures are reported while the test runs.
+	defer func() { _ = rwc.Close(); <-done }()
 	go func() {
 		defer close(done)
 		srv.connectionOpen()
 		srv.channelOpen(1)
 		srv.recv(1, &txSelect{})
 		srv.send(1, &txSelectOk{})
-		srv.recv(1, &txSelect{})
-		srv.send(1, &txSelectOk{})
+		srv.recv(1, &basicPublish{})
+		srv.recv(1, &txCommit{})
+		srv.send(1, &txCommitOk{})
+		srv.recoverTxChannel(1)
+		srv.recv(1, &txCommit{})
+		srv.send(1, &txCommitOk{})
+		srv.connectionClose()
 	}()
 
-	c, err := Open(rwc, defaultConfig())
+	c, err := Open(rwc, txRecoveryConfig())
 	if err != nil {
-		t.Fatalf("could not create connection: %v (%s)", c, err)
+		t.Fatalf("could not create connection: %v", err)
 	}
 	ch, err := c.Channel()
 	if err != nil {
-		t.Fatalf("could not open channel: %v (%s)", ch, err)
+		t.Fatalf("could not open channel: %v", err)
 	}
+	states := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(states)
 	if err := ch.Tx(); err != nil {
 		t.Fatalf("Tx failed: %v", err)
 	}
-	if !ch.transacting.Load() {
-		t.Fatal("Tx did not record transactional mode")
+	if err := ch.Publish("", "q", false, false, Publishing{Body: []byte("m1")}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
 	}
-	if err := ch.setupChannelBasic(); err != nil {
-		t.Fatalf("setupChannelBasic failed: %v", err)
+	if err := ch.TxCommit(); err != nil {
+		t.Fatalf("TxCommit failed: %v", err)
+	}
+	waitForChannelRecovery(t, states)
+
+	if err := ch.TxCommit(); err != nil {
+		t.Fatalf("expected commit after recovery to succeed, got %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("could not close connection: %v", err)
 	}
 
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the mock broker to see the recovered tx.select")
+		t.Fatal("timed out waiting for the mock broker")
 	}
 }
