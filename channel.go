@@ -355,34 +355,40 @@ func (ch *Channel) call(req message, res ...message) error {
 		rpc := ch.rpc
 		ch.m.Unlock()
 
-		select {
-		case e, ok := <-errors:
-			if ok {
-				return e
-			}
-			return ErrClosed
-
-		case msg := <-rpc:
-			if msg != nil {
-				for _, try := range res {
-					if reflect.TypeOf(msg) == reflect.TypeOf(try) {
-						// *res = *msg
-						vres := reflect.ValueOf(try).Elem()
-						vmsg := reflect.ValueOf(msg).Elem()
-						vres.Set(vmsg)
-						return nil
-					}
-				}
-				return ErrCommandInvalid
-			}
-			// RPC channel has been closed without an error, likely due to a hard
-			// error on the Connection.  This indicates we have already been
-			// shutdown and if were waiting, will have returned from the errors chan.
-			return ErrClosed
-		}
+		return awaitReply(errors, rpc, res...)
 	}
 
 	return nil
+}
+
+// awaitReply waits for the response to a synchronous request on the given
+// session's errors and rpc channels.
+func awaitReply(errors chan *Error, rpc chan message, res ...message) error {
+	select {
+	case e, ok := <-errors:
+		if ok {
+			return e
+		}
+		return ErrClosed
+
+	case msg := <-rpc:
+		if msg != nil {
+			for _, try := range res {
+				if reflect.TypeOf(msg) == reflect.TypeOf(try) {
+					// *res = *msg
+					vres := reflect.ValueOf(try).Elem()
+					vmsg := reflect.ValueOf(msg).Elem()
+					vres.Set(vmsg)
+					return nil
+				}
+			}
+			return ErrCommandInvalid
+		}
+		// RPC channel has been closed without an error, likely due to a hard
+		// error on the Connection.  This indicates we have already been
+		// shutdown and if were waiting, will have returned from the errors chan.
+		return ErrClosed
+	}
 }
 
 func (ch *Channel) sendClosed(msg message) (err error) {
