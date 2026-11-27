@@ -101,8 +101,9 @@ type Channel struct {
 	confirms   *confirms
 	confirming atomic.Bool
 
-	// transacting is set after a successful Tx() (tx.select) and is replayed
-	// during channel recovery. Transaction mode cannot be turned off.
+	// transacting is set after a successful Tx() (tx.select) when recovery is
+	// enabled, and is replayed during channel recovery. Transaction mode cannot
+	// be turned off.
 	transacting atomic.Bool
 
 	// Selects on any errors from shutdown during RPC
@@ -2086,7 +2087,9 @@ func (ch *Channel) Tx() error {
 	); err != nil {
 		return err
 	}
-	ch.transacting.Store(true)
+	if ch.connection.IsRecoveryEnabled() {
+		ch.transacting.Store(true)
+	}
 	return nil
 }
 

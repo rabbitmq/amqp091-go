@@ -1595,3 +1595,64 @@ func TestTxCommitAfterRecoveryWithoutPendingWork(t *testing.T) {
 		t.Fatal("timed out waiting for the mock broker")
 	}
 }
+
+func TestTxWithoutRecoveryIsNotTracked(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+	// Unblock the client if the mock broker stops responding.
+	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
+
+	done := make(chan struct{})
+	// Wait for the mock broker so that its failures are reported while the test runs.
+	defer func() { _ = rwc.Close(); <-done }()
+	go func() {
+		defer close(done)
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &txSelect{})
+		srv.send(1, &txSelectOk{})
+		srv.recv(1, &basicPublish{})
+		srv.recv(1, &txCommit{})
+		srv.send(1, &txCommitOk{})
+		srv.recv(1, &basicAck{})
+		srv.recv(1, &txRollback{})
+		srv.send(1, &txRollbackOk{})
+		srv.connectionClose()
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v", err)
+	}
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v", err)
+	}
+	if err := ch.Tx(); err != nil {
+		t.Fatalf("Tx failed: %v", err)
+	}
+	if ch.transacting.Load() {
+		t.Fatal("Tx recorded transaction mode with recovery disabled")
+	}
+	if err := ch.Publish("", "q", false, false, Publishing{Body: []byte("m1")}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	if err := ch.TxCommit(); err != nil {
+		t.Fatalf("TxCommit failed: %v", err)
+	}
+	if err := ch.Ack(1, false); err != nil {
+		t.Fatalf("Ack failed: %v", err)
+	}
+	if err := ch.TxRollback(); err != nil {
+		t.Fatalf("TxRollback failed: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("could not close connection: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the mock broker")
+	}
+}
