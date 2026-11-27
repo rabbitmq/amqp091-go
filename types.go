@@ -43,6 +43,10 @@ var (
 	// ErrClosed is returned when the channel or connection is not open
 	ErrClosed = &Error{Code: ChannelError, Reason: "channel/connection is not open"}
 
+	// ErrTxAborted is returned by Channel.TxCommit when a channel or connection
+	// recovery discarded publishings or acknowledgments of the transaction.
+	ErrTxAborted = &Error{Code: PreconditionFailed, Reason: "transaction aborted by recovery, uncommitted publishings and acknowledgments were discarded", Recover: true}
+
 	// ErrChannelMax is returned when Connection.Channel has been called enough
 	// times that all channel IDs have been exhausted in the client or the
 	// server.

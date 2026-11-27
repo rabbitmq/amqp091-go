@@ -1537,6 +1537,80 @@ func waitForChannelRecovery(t *testing.T, states chan *StateChanged) {
 	}
 }
 
+func TestTxCommitAfterRecoveryDiscardedPendingWork(t *testing.T) {
+	tests := []struct {
+		name   string
+		work   func(ch *Channel) error
+		expect message
+	}{
+		{"publish", func(ch *Channel) error { return ch.Publish("", "q", false, false, Publishing{Body: []byte("m1")}) }, &basicPublish{}},
+		{"ack", func(ch *Channel) error { return ch.Ack(1, false) }, &basicAck{}},
+		{"nack", func(ch *Channel) error { return ch.Nack(1, false, true) }, &basicNack{}},
+		{"reject", func(ch *Channel) error { return ch.Reject(1, true) }, &basicReject{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rwc, srv := newSession(t)
+			defer rwc.Close()
+			// Unblock the client if the mock broker stops responding.
+			defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
+
+			done := make(chan struct{})
+			// Wait for the mock broker so that its failures are reported while the test runs.
+			defer func() { _ = rwc.Close(); <-done }()
+			go func() {
+				defer close(done)
+				srv.connectionOpen()
+				srv.channelOpen(1)
+				srv.recv(1, &txSelect{})
+				srv.send(1, &txSelectOk{})
+				srv.recv(1, tt.expect)
+				srv.recoverTxChannel(1)
+				// The aborted commit must roll back instead of committing.
+				srv.recv(1, &txRollback{})
+				srv.send(1, &txRollbackOk{})
+				srv.recv(1, &txCommit{})
+				srv.send(1, &txCommitOk{})
+				srv.connectionClose()
+			}()
+
+			c, err := Open(rwc, txRecoveryConfig())
+			if err != nil {
+				t.Fatalf("could not create connection: %v", err)
+			}
+			ch, err := c.Channel()
+			if err != nil {
+				t.Fatalf("could not open channel: %v", err)
+			}
+			states := make(chan *StateChanged, 10)
+			ch.NotifyStateChange(states)
+			if err := ch.Tx(); err != nil {
+				t.Fatalf("Tx failed: %v", err)
+			}
+			if err := tt.work(ch); err != nil {
+				t.Fatalf("transactional work failed: %v", err)
+			}
+			waitForChannelRecovery(t, states)
+
+			if err := ch.TxCommit(); err != ErrTxAborted {
+				t.Fatalf("expected ErrTxAborted, got %v", err)
+			}
+			if err := ch.TxCommit(); err != nil {
+				t.Fatalf("expected the next commit to succeed, got %v", err)
+			}
+			if err := c.Close(); err != nil {
+				t.Fatalf("could not close connection: %v", err)
+			}
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for the mock broker")
+			}
+		})
+	}
+}
+
 func TestTxCommitAfterRecoveryWithoutPendingWork(t *testing.T) {
 	rwc, srv := newSession(t)
 	defer rwc.Close()
@@ -1631,7 +1705,7 @@ func TestTxWithoutRecoveryIsNotTracked(t *testing.T) {
 	if err := ch.Tx(); err != nil {
 		t.Fatalf("Tx failed: %v", err)
 	}
-	if ch.transacting.Load() {
+	if ch.tx.enabled.Load() {
 		t.Fatal("Tx recorded transaction mode with recovery disabled")
 	}
 	if err := ch.Publish("", "q", false, false, Publishing{Body: []byte("m1")}); err != nil {
@@ -1645,6 +1719,65 @@ func TestTxWithoutRecoveryIsNotTracked(t *testing.T) {
 	}
 	if err := ch.TxRollback(); err != nil {
 		t.Fatalf("TxRollback failed: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("could not close connection: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the mock broker")
+	}
+}
+
+func TestTxRollbackAfterRecoveryDiscardedPendingWork(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+	// Unblock the client if the mock broker stops responding.
+	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
+
+	done := make(chan struct{})
+	// Wait for the mock broker so that its failures are reported while the test runs.
+	defer func() { _ = rwc.Close(); <-done }()
+	go func() {
+		defer close(done)
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &txSelect{})
+		srv.send(1, &txSelectOk{})
+		srv.recv(1, &basicPublish{})
+		srv.recoverTxChannel(1)
+		srv.recv(1, &txRollback{})
+		srv.send(1, &txRollbackOk{})
+		srv.recv(1, &txCommit{})
+		srv.send(1, &txCommitOk{})
+		srv.connectionClose()
+	}()
+
+	c, err := Open(rwc, txRecoveryConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v", err)
+	}
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v", err)
+	}
+	states := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(states)
+	if err := ch.Tx(); err != nil {
+		t.Fatalf("Tx failed: %v", err)
+	}
+	if err := ch.Publish("", "q", false, false, Publishing{Body: []byte("m1")}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	waitForChannelRecovery(t, states)
+
+	if err := ch.TxRollback(); err != nil {
+		t.Fatalf("expected the rollback of an aborted transaction to succeed, got %v", err)
+	}
+	if err := ch.TxCommit(); err != nil {
+		t.Fatalf("expected the commit after the rollback to succeed, got %v", err)
 	}
 	if err := c.Close(); err != nil {
 		t.Fatalf("could not close connection: %v", err)

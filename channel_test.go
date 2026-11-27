@@ -386,3 +386,37 @@ func TestReconnectChannelAbortsWhenCloseWonTheRace(t *testing.T) {
 		t.Fatal("reconnectChannel() did not return within 2s — it did not abort on closeInit and is stuck in its retry loop")
 	}
 }
+
+func TestTxState(t *testing.T) {
+	var tx txState
+
+	tx.markPending()
+	tx.abortPending()
+	if tx.end() {
+		t.Fatal("work sent before Tx() was tracked")
+	}
+
+	tx.enabled.Store(true)
+	tx.abortPending()
+	if tx.end() {
+		t.Fatal("a recovery without pending work aborted the transaction")
+	}
+
+	tx.markPending()
+	tx.abortPending()
+	// A retry of the recovery must keep the abort.
+	tx.abortPending()
+	if !tx.end() {
+		t.Fatal("a recovery with pending work did not abort the transaction")
+	}
+	if tx.end() {
+		t.Fatal("the abort was reported for the next transaction too")
+	}
+
+	tx.markPending()
+	tx.end()
+	tx.abortPending()
+	if tx.end() {
+		t.Fatal("work ended by TxCommit or TxRollback was aborted by a later recovery")
+	}
+}
