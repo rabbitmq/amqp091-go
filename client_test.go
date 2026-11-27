@@ -631,10 +631,8 @@ func TestOpenFailedVhost(t *testing.T) {
 	}
 }
 
-// TestOpenFailedFrameSizeBelowBrokerMinimum covers RabbitMQ 4.1.0+ closing
-// the socket without a connection.close when the negotiated frame_max is
-// below 8192. That used to surface as ErrVhost, which points at permissions
-// rather than the configured frame size.
+// TestOpenFailedFrameSizeBelowBrokerMinimum covers a broker closing the socket
+// without connection.close after a negotiated frame_max below 8192.
 func TestOpenFailedFrameSizeBelowBrokerMinimum(t *testing.T) {
 	tests := []struct {
 		name           string

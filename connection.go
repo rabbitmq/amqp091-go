@@ -41,10 +41,9 @@ const (
 	// a broker that also proposes 0. Callers that explicitly want unlimited
 	// must set Config.FrameSize to a negative value instead.
 	defaultFrameSize = 131072
-	// rabbitmqMinFrameSize is the minimum frame_max RabbitMQ 4.1.0 and later
-	// accept (rabbitmq-server#13541). The AMQP 0-9-1 spec minimum remains
-	// frameMinSize (4096); a value in between is spec-legal but the broker
-	// closes the socket without a connection.close reply.
+	// rabbitmqMinFrameSize is the minimum frame_max RabbitMQ accepts since 4.1.0,
+	// above the AMQP 0-9-1 minimum of frameMinSize. Some releases reject a lower
+	// value by closing the socket without connection.close.
 	rabbitmqMinFrameSize = 8192
 )
 
@@ -1443,13 +1442,8 @@ func (c *Connection) openVhost(config Config, serverFrameMax uint32) error {
 	res := &connectionOpenOk{}
 
 	if err := c.call(req, res); err != nil {
-		// RabbitMQ rejects connection.open with a connection.close whose code and
-		// text say why: 530 NOT_ALLOWED for a vhost the user may not access or
-		// for a reached per-user or per-vhost connection limit. Surface that
-		// reply; only fall back to ErrVhost when the socket was closed without
-		// one — except when the negotiated frame_max is below the RabbitMQ
-		// 4.1.0 minimum, which produces the same silent close but is not a
-		// vhost access problem.
+		// Prefer the broker's reply or a local encoding error; only fall back
+		// to ErrVhost when the socket was closed without one.
 		if err2 := handshakeError(err, ErrVhost); err2 != ErrVhost {
 			return err2
 		}
@@ -1465,11 +1459,7 @@ func (c *Connection) openVhost(config Config, serverFrameMax uint32) error {
 }
 
 // frameSizeTooSmallError reports a connection.open that failed after a
-// negotiated frame_max below rabbitmqMinFrameSize. It names both sides of the
-// negotiation, since the low value may come from the caller, from the broker's
-// connection.tune, or from a reconnect re-sending the negotiated size, and it
-// keeps the underlying failure, which is not always the broker closing the
-// socket. It is an *Error so callers keep Code, Recoverable and Temporary.
+// negotiated frame_max below rabbitmqMinFrameSize.
 func frameSizeTooSmallError(negotiated, requested int, serverFrameMax uint32, cause error) *Error {
 	requestedText := "unset"
 	switch {
