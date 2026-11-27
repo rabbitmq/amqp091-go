@@ -631,6 +631,158 @@ func TestOpenFailedVhost(t *testing.T) {
 	}
 }
 
+// TestOpenFailedFrameSizeBelowBrokerMinimum covers a broker closing the socket
+// without connection.close after a negotiated frame_max below 8192.
+func TestOpenFailedFrameSizeBelowBrokerMinimum(t *testing.T) {
+	tests := []struct {
+		name           string
+		frameSize      int
+		serverFrameMax uint32
+		wantVhost      bool
+		wantInReason   []string
+	}{
+		{name: "client asks 4096", frameSize: 4096, serverFrameMax: 20000,
+			wantInReason: []string{"negotiated frame_max 4096", "requested 4096", "server offered 20000"}},
+		{name: "client asks 8191", frameSize: 8191, serverFrameMax: 20000,
+			wantInReason: []string{"negotiated frame_max 8191", "requested 8191"}},
+		// The low value can come from the broker's connection.tune, so the
+		// message must not only blame Config.FrameSize.
+		{name: "server offers 4096", frameSize: 0, serverFrameMax: 4096,
+			wantInReason: []string{"negotiated frame_max 4096", "requested unset", "server offered 4096"}},
+		{name: "client asks 8192", frameSize: 8192, serverFrameMax: 20000, wantVhost: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rwc, srv := newSession(t)
+
+			go func() {
+				srv.expectAMQP()
+				srv.connectionStart()
+				srv.send(0, &connectionTune{ChannelMax: 11, FrameMax: tt.serverFrameMax, Heartbeat: 10})
+				srv.recv(0, &srv.tune)
+				srv.recv(0, &connectionOpen{})
+				rwc.Close()
+			}()
+
+			cfg := defaultConfig()
+			cfg.FrameSize = tt.frameSize
+			c, err := Open(rwc, cfg)
+			if tt.wantVhost {
+				if err != ErrVhost {
+					t.Fatalf("expected ErrVhost got: %+v on %+v", err, c)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("unexpectedly connected: %+v", c)
+			}
+			if errors.Is(err, ErrVhost) {
+				t.Fatalf("reported as a vhost access error: %v", err)
+			}
+			var amqpErr *Error
+			if !errors.As(err, &amqpErr) {
+				t.Fatalf("expected an *Error, got %T: %v", err, err)
+			}
+			if amqpErr.Code != NotAllowed || amqpErr.Server {
+				t.Errorf("expected a local NotAllowed error, got code %d server=%t", amqpErr.Code, amqpErr.Server)
+			}
+			for _, want := range append(tt.wantInReason, "8192") {
+				if !strings.Contains(amqpErr.Reason, want) {
+					t.Errorf("reason %q does not contain %q", amqpErr.Reason, want)
+				}
+			}
+		})
+	}
+}
+
+func TestFrameSizeTooSmallErrorKeepsCause(t *testing.T) {
+	tests := []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{"plain error", errors.New("read tcp: i/o timeout"), "failed: read tcp: i/o timeout;"},
+		{"amqp error", &Error{Code: FrameError, Reason: "EOF"}, "failed: EOF;"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := frameSizeTooSmallError(4096, -1, 0, tt.cause)
+			for _, want := range []string{tt.want, "requested unlimited", "server offered no limit"} {
+				if !strings.Contains(err.Reason, want) {
+					t.Errorf("reason %q does not contain %q", err.Reason, want)
+				}
+			}
+			if strings.Contains(err.Reason, "Exception (") {
+				t.Errorf("reason %q nests the cause's Error() text", err.Reason)
+			}
+		})
+	}
+}
+
+func TestOpenFrameSizeBelowBrokerMinimumKeepsOtherErrors(t *testing.T) {
+	const reason = "NOT_ALLOWED - access to vhost '/' refused for user 'guest'"
+
+	tests := []struct {
+		name   string
+		vhost  string
+		server func(srv *server)
+		check  func(t *testing.T, err error)
+	}{
+		{
+			name:  "broker connection.close",
+			vhost: "/",
+			server: func(srv *server) {
+				srv.recv(0, &connectionOpen{})
+				srv.send(0, &connectionClose{ReplyCode: NotAllowed, ReplyText: reason})
+				srv.recv(0, &connectionCloseOk{})
+			},
+			check: func(t *testing.T, err error) {
+				var amqpErr *Error
+				if !errors.As(err, &amqpErr) {
+					t.Fatalf("expected *Error, got %T: %v", err, err)
+				}
+				if amqpErr.Code != NotAllowed || amqpErr.Reason != reason || !amqpErr.Server {
+					t.Fatalf("expected the broker's reply %q, got %#v", reason, amqpErr)
+				}
+			},
+		},
+		{
+			name:   "connection.open encoding error",
+			vhost:  strings.Repeat("v", 256),
+			server: func(srv *server) {},
+			check: func(t *testing.T, err error) {
+				if !errors.As(err, new(frameEncodeError)) {
+					t.Fatalf("expected a frame encoding error, got %T: %v", err, err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rwc, srv := newSession(t)
+			t.Cleanup(func() { rwc.Close() })
+
+			go func() {
+				srv.expectAMQP()
+				srv.connectionStart()
+				srv.connectionTune()
+				tt.server(srv)
+			}()
+
+			config := defaultConfig()
+			config.FrameSize = 4096
+			config.Vhost = tt.vhost
+
+			c, err := Open(rwc, config)
+			if err == nil {
+				t.Fatalf("unexpectedly connected: %+v", c)
+			}
+			tt.check(t, err)
+		})
+	}
+}
+
 // TestOpenFailedServerClose covers a broker that rejects a handshake step with
 // an explicit connection.close, as RabbitMQ does for a rejected login (when the
 // client advertises authentication_failure_close) and for a rejected
