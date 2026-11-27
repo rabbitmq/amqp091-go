@@ -361,6 +361,52 @@ func TestOpenTuneNegativeFrameSizeStillBoundByBroker(t *testing.T) {
 	}
 }
 
+func TestOpenNegotiatesChannelMax(t *testing.T) {
+	tests := []struct {
+		name   string
+		client uint16
+		server uint16
+		want   uint16
+	}{
+		{"client unset uses server", 0, 256, 256},
+		{"client lower than server", 16, 256, 16},
+		{"server lower than client", 512, 256, 256},
+		{"client set and server unlimited", 16, 0, 16},
+		{"both unlimited uses default", 0, 0, defaultChannelMax},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rwc, srv := newSession(t)
+			t.Cleanup(func() { rwc.Close() })
+
+			go func() {
+				srv.expectAMQP()
+				srv.connectionStart()
+				srv.send(0, &connectionTune{ChannelMax: tt.server, FrameMax: 20000, Heartbeat: 10})
+				srv.recv(0, &srv.tune)
+				srv.recv(0, &connectionOpen{})
+				srv.send(0, &connectionOpenOk{})
+			}()
+
+			config := defaultConfig()
+			config.ChannelMax = tt.client
+
+			c, err := Open(rwc, config)
+			if err != nil {
+				t.Fatalf("could not create connection: %v", err)
+			}
+
+			if got := c.Config.ChannelMax; got != tt.want {
+				t.Fatalf("expected negotiated ChannelMax %d, got %d", tt.want, got)
+			}
+			if got := srv.tune.ChannelMax; got != tt.want {
+				t.Fatalf("expected tune-ok ChannelMax %d, got %d", tt.want, got)
+			}
+		})
+	}
+}
+
 // TestOpenDoesNotMutateCallerProvidedSASLCredentials guards against
 // https://github.com/rabbitmq/amqp091-go/issues/387: Open must not zero out
 // the password on the caller's own *PlainAuth (reached via Config.SASL)
@@ -1057,6 +1103,45 @@ func TestPublishBodySliceIssue74(t *testing.T) {
 	<-done
 }
 
+func TestPublishEncodeErrorKeepsConnectionOpen(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	done := make(chan bool)
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &basicPublish{})
+		done <- true
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	key := string(make([]byte, 256))
+	if err := ch.PublishWithContext(context.TODO(), "", key, false, false, Publishing{}); err == nil {
+		t.Fatal("expected an error for a routing key longer than 255 bytes")
+	}
+
+	if err := ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{}); err != nil {
+		t.Fatalf("publish error after an encoding error: %v", err)
+	}
+
+	<-done
+
+	if c.IsClosed() {
+		t.Fatal("connection closed by an encoding error")
+	}
+}
+
 // Should not panic when server and client have frame_size of 0
 func TestPublishZeroFrameSizeIssue161(t *testing.T) {
 	rwc, srv := newSession(t)
@@ -1334,4 +1419,158 @@ func TestPublishWithDeferredConfirmWithContext_ContextCancelled(t *testing.T) {
 		t.Fatalf("expected nil, got %v", res)
 	}
 
+}
+
+func TestPublishOversizedPropertyKeepsConnectionOpen(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	done := make(chan bool)
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &basicPublish{})
+		done <- true
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	long := string(make([]byte, 256))
+	for _, msg := range []Publishing{{CorrelationId: long}, {Headers: Table{long: "v"}}} {
+		if err := ch.PublishWithContext(context.TODO(), "", "q", false, false, msg); err == nil {
+			t.Fatal("expected an error for a short string longer than 255 bytes")
+		}
+	}
+
+	if err := ch.PublishWithContext(context.TODO(), "", "q", false, false, Publishing{}); err != nil {
+		t.Fatalf("publish error after a rejected publishing: %v", err)
+	}
+
+	<-done
+
+	if c.IsClosed() {
+		t.Fatal("connection closed by a rejected publishing")
+	}
+}
+
+func TestMethodEncodeErrorKeepsConnectionOpen(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	done := make(chan bool)
+
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &queueBind{})
+		done <- true
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	name := string(make([]byte, 256))
+	if err := ch.QueueBind(name, "k", "x", true, nil); !errors.As(err, new(frameEncodeError)) {
+		t.Fatalf("expected a frame encoding error for a queue name longer than 255 bytes, got: %v", err)
+	}
+
+	if err := ch.QueueBind("q", "k", "x", true, nil); err != nil {
+		t.Fatalf("queue bind error after an encoding error: %v", err)
+	}
+
+	<-done
+
+	if c.IsClosed() {
+		t.Fatal("connection closed by an encoding error")
+	}
+}
+
+func TestConsumeEncodeErrorKeepsExistingConsumer(t *testing.T) {
+	consumeFuncs := map[string]func(ch *Channel, queue, tag string) (<-chan Delivery, error){
+		"Consume": func(ch *Channel, queue, tag string) (<-chan Delivery, error) {
+			return ch.Consume(queue, tag, false, false, false, false, nil)
+		},
+		"ConsumeWithContext": func(ch *Channel, queue, tag string) (<-chan Delivery, error) {
+			return ch.ConsumeWithContext(context.Background(), queue, tag, false, false, false, false, nil)
+		},
+	}
+
+	for name, consume := range consumeFuncs {
+		t.Run(name, func(t *testing.T) {
+			const tag = "c1"
+
+			rwc, srv := newSession(t)
+			defer rwc.Close()
+
+			failed := make(chan struct{})
+			done := make(chan struct{})
+
+			go func() {
+				defer close(done)
+				srv.connectionOpen()
+				srv.channelOpen(1)
+				srv.recv(1, &basicConsume{})
+				srv.send(1, &basicConsumeOk{ConsumerTag: tag})
+				<-failed
+				srv.send(1, &basicDeliver{ConsumerTag: tag, DeliveryTag: 1})
+			}()
+
+			c, err := Open(rwc, defaultConfig())
+			if err != nil {
+				t.Fatalf("could not create connection: %v (%s)", c, err)
+			}
+
+			ch, err := c.Channel()
+			if err != nil {
+				t.Fatalf("could not open channel: %v (%s)", ch, err)
+			}
+
+			deliveries, err := consume(ch, "q", tag)
+			if err != nil {
+				t.Fatalf("unexpected error during consume: %v", err)
+			}
+
+			if _, err := consume(ch, strings.Repeat("q", 256), tag); !errors.As(err, new(frameEncodeError)) {
+				t.Fatalf("expected a frame encoding error for a queue name longer than 255 bytes, got: %v", err)
+			}
+			close(failed)
+
+			select {
+			case d, ok := <-deliveries:
+				if !ok {
+					t.Fatal("existing consumer's deliveries channel closed by an encoding error")
+				}
+				if d.DeliveryTag != 1 {
+					t.Fatalf("unexpected delivery tag: want: 1, got: %d", d.DeliveryTag)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("existing consumer did not receive a delivery after an encoding error")
+			}
+
+			<-done
+
+			ch.consumers.Lock()
+			config, found := ch.consumers.configs[tag]
+			ch.consumers.Unlock()
+			if !found || config.Queue != "q" {
+				t.Fatalf("expected the recorded consumer config for queue q, got: %+v (found: %v)", config, found)
+			}
+		})
+	}
 }
