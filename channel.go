@@ -101,6 +101,9 @@ type Channel struct {
 	confirms   *confirms
 	confirming atomic.Bool
 
+	// Transaction mode, replayed during channel recovery.
+	tx txState
+
 	// Selects on any errors from shutdown during RPC
 	errors chan *Error
 
@@ -351,34 +354,40 @@ func (ch *Channel) call(req message, res ...message) error {
 		rpc := ch.rpc
 		ch.m.Unlock()
 
-		select {
-		case e, ok := <-errors:
-			if ok {
-				return e
-			}
-			return ErrClosed
-
-		case msg := <-rpc:
-			if msg != nil {
-				for _, try := range res {
-					if reflect.TypeOf(msg) == reflect.TypeOf(try) {
-						// *res = *msg
-						vres := reflect.ValueOf(try).Elem()
-						vmsg := reflect.ValueOf(msg).Elem()
-						vres.Set(vmsg)
-						return nil
-					}
-				}
-				return ErrCommandInvalid
-			}
-			// RPC channel has been closed without an error, likely due to a hard
-			// error on the Connection.  This indicates we have already been
-			// shutdown and if were waiting, will have returned from the errors chan.
-			return ErrClosed
-		}
+		return awaitReply(errors, rpc, res...)
 	}
 
 	return nil
+}
+
+// awaitReply waits for the response to a synchronous request on the given
+// session's errors and rpc channels.
+func awaitReply(errors chan *Error, rpc chan message, res ...message) error {
+	select {
+	case e, ok := <-errors:
+		if ok {
+			return e
+		}
+		return ErrClosed
+
+	case msg := <-rpc:
+		if msg != nil {
+			for _, try := range res {
+				if reflect.TypeOf(msg) == reflect.TypeOf(try) {
+					// *res = *msg
+					vres := reflect.ValueOf(try).Elem()
+					vmsg := reflect.ValueOf(msg).Elem()
+					vres.Set(vmsg)
+					return nil
+				}
+			}
+			return ErrCommandInvalid
+		}
+		// RPC channel has been closed without an error, likely due to a hard
+		// error on the Connection.  This indicates we have already been
+		// shutdown and if were waiting, will have returned from the errors chan.
+		return ErrClosed
+	}
 }
 
 func (ch *Channel) sendClosed(msg message) (err error) {
@@ -1997,6 +2006,7 @@ func (ch *Channel) PublishWithDeferredConfirm(exchange, key string, mandatory, i
 		}
 		return nil, err
 	}
+	ch.tx.markPending()
 
 	return dc, nil
 }
@@ -2068,12 +2078,25 @@ the channel is in a transaction is not defined.
 
 Once a channel has been put into transaction mode, it cannot be taken out of
 transaction mode.  Use a different channel for non-transactional semantics.
+
+Call Tx before publishing or acknowledging on the channel. Work sent
+concurrently with Tx may or may not be part of the transaction.
+
+When recovery is enabled, a recovered channel is put back into transaction
+mode. The broker discards a transaction that is open when the channel or
+connection closes, so recovery cannot preserve it: see Channel.TxCommit.
 */
 func (ch *Channel) Tx() error {
-	return ch.call(
+	if err := ch.call(
 		&txSelect{},
 		&txSelectOk{},
-	)
+	); err != nil {
+		return err
+	}
+	if ch.connection.IsRecoveryEnabled() {
+		ch.tx.enabled.Store(true)
+	}
+	return nil
 }
 
 /*
@@ -2081,12 +2104,17 @@ TxCommit atomically commits all publishings and acknowledgments for a single
 queue and immediately start a new transaction.
 
 Calling this method without having called Channel.Tx is an error.
+
+If a channel or connection recovery discarded publishings or acknowledgments of
+the current transaction, TxCommit rolls back the work sent since the recovery
+and returns ErrTxAborted, so that no part of the transaction is committed. The
+whole transaction can then be retried on the same channel.
+
+If the channel or connection closes while TxCommit is waiting for the broker,
+an error is returned, but the transaction may or may not have been committed.
 */
 func (ch *Channel) TxCommit() error {
-	return ch.call(
-		&txCommit{},
-		&txCommitOk{},
-	)
+	return ch.callTx(&txCommit{}, &txCommitOk{})
 }
 
 /*
@@ -2096,10 +2124,74 @@ single queue and immediately start a new transaction.
 Calling this method without having called Channel.Tx is an error.
 */
 func (ch *Channel) TxRollback() error {
-	return ch.call(
-		&txRollback{},
-		&txRollbackOk{},
-	)
+	return ch.callTx(&txRollback{}, &txRollbackOk{})
+}
+
+// txState tracks transaction mode for channel recovery. enabled is atomic;
+// pending and aborted are guarded by Channel.m, not a private mutex, so that
+// callTx checks them and sends its request without a resetState in between.
+type txState struct {
+	// Set by a successful Tx() when recovery is enabled. Cannot be turned off.
+	enabled atomic.Bool
+	pending bool
+	aborted bool
+}
+
+// markPending records a publishing or acknowledgment sent in the current
+// transaction, which starts at Tx() and at each TxCommit or TxRollback.
+func (t *txState) markPending() {
+	if t.enabled.Load() {
+		t.pending = true
+	}
+}
+
+// abortPending marks the current transaction aborted if it has pending work,
+// because a recovery discarded it.
+func (t *txState) abortPending() {
+	if t.pending {
+		t.aborted = true
+		t.pending = false
+	}
+}
+
+// end starts a new transaction once its tx.commit or tx.rollback request is sent.
+func (t *txState) end() {
+	t.aborted = false
+	t.pending = false
+}
+
+// callTx sends a tx.commit or tx.rollback request and waits for the reply, like
+// call. When a recovery aborted the transaction, a tx.commit request is sent as
+// tx.rollback and ErrTxAborted is returned.
+func (ch *Channel) callTx(req, res message) error {
+	// Without recovery, no transaction can be aborted by it.
+	if !ch.tx.enabled.Load() {
+		return ch.call(req, res)
+	}
+
+	ch.m.Lock()
+	aborted := ch.tx.aborted
+
+	_, commit := req.(*txCommit)
+	if commit && aborted {
+		// Discard work sent since the recovery so that it is not committed with the retried transaction.
+		req, res = &txRollback{}, &txRollbackOk{}
+	}
+	if err := ch.send(req); err != nil {
+		ch.m.Unlock()
+		return err
+	}
+	ch.tx.end()
+	errors := ch.errors
+	rpc := ch.rpc
+	ch.m.Unlock()
+
+	err := awaitReply(errors, rpc, res)
+	if commit && aborted {
+		// The recovery discarded the transaction whether or not the rollback completed.
+		return ErrTxAborted
+	}
+	return err
 }
 
 /*
@@ -2206,10 +2298,14 @@ func (ch *Channel) Ack(tag uint64, multiple bool) error {
 	ch.m.Lock()
 	defer ch.m.Unlock()
 
-	return ch.send(&basicAck{
+	if err := ch.send(&basicAck{
 		DeliveryTag: tag,
 		Multiple:    multiple,
-	})
+	}); err != nil {
+		return err
+	}
+	ch.tx.markPending()
+	return nil
 }
 
 /*
@@ -2223,11 +2319,15 @@ func (ch *Channel) Nack(tag uint64, multiple, requeue bool) error {
 	ch.m.Lock()
 	defer ch.m.Unlock()
 
-	return ch.send(&basicNack{
+	if err := ch.send(&basicNack{
 		DeliveryTag: tag,
 		Multiple:    multiple,
 		Requeue:     requeue,
-	})
+	}); err != nil {
+		return err
+	}
+	ch.tx.markPending()
+	return nil
 }
 
 /*
@@ -2241,10 +2341,14 @@ func (ch *Channel) Reject(tag uint64, requeue bool) error {
 	ch.m.Lock()
 	defer ch.m.Unlock()
 
-	return ch.send(&basicReject{
+	if err := ch.send(&basicReject{
 		DeliveryTag: tag,
 		Requeue:     requeue,
-	})
+	}); err != nil {
+		return err
+	}
+	ch.tx.markPending()
+	return nil
 }
 
 // GetNextPublishSeqNo returns the sequence number of the next message to be
@@ -2344,7 +2448,7 @@ func (ch *Channel) watchChannel() {
 
 // Reconnect initiates automatic channel recovery,
 // re-opens the AMQP channel with the same channel id and configuration,
-// and re-establishes all active publisher confirmations and consumer subscriptions.
+// and re-establishes QoS, confirm or transaction mode, and consumer subscriptions.
 func (ch *Channel) Reconnect() error {
 	if err := ch.reconnectChannel(); err != nil {
 		return err
@@ -2366,7 +2470,7 @@ func (ch *Channel) Reconnect() error {
 }
 
 // openChannelSession resets client-side state, opens a fresh broker channel,
-// and restores QoS/Confirm configuration. It is the shared single-attempt core
+// and restores QoS and confirm or transaction mode. It is the shared single-attempt core
 // used by both reconnectChannel (retry loop) and reopenIfClosed (topology
 // recovery). The caller must hold ch.reconnecting and manage lifecycle transitions.
 //
@@ -2395,7 +2499,7 @@ func (ch *Channel) openChannelSession() (openSucceeded bool, err error) {
 		return false, err
 	}
 
-	// 3. Perform QoS and Confirms setup.
+	// 3. Restore QoS and confirm or transaction mode.
 	return true, ch.setupChannelBasic()
 }
 
@@ -2437,7 +2541,7 @@ func (ch *Channel) reopenIfClosed() {
 	ch.lifeCycle.SetState(StateOpen, nil)
 }
 
-// reconnectChannel opens a fresh channel on the broker and performs basic setup (QoS, Confirms).
+// reconnectChannel opens a fresh channel on the broker and performs basic setup (QoS, confirm or transaction mode).
 // It does NOT recover the channel's topology.
 //
 // Applications must coordinate with in-progress recovery rather than calling into the
@@ -2551,6 +2655,14 @@ func (ch *Channel) setupChannelBasic() error {
 		}
 	}
 
+	// Re-enable transactions if the channel was in transaction mode.
+	if ch.tx.enabled.Load() {
+		if err = ch.Tx(); err != nil {
+			Logger.Printf("Channel %d recovery Tx error: %v", ch.id, err)
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -2568,6 +2680,9 @@ func (ch *Channel) resetState() {
 	if ch.confirms != nil {
 		ch.confirms.reset()
 	}
+
+	// The broker discarded the previous session's uncommitted transaction.
+	ch.tx.abortPending()
 }
 
 // TopologyConfiguration returns a cloned, read-only snapshot of topology tracked for recovery.

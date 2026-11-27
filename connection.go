@@ -136,7 +136,7 @@ type Config struct {
 	//   - TopologyRecoveryOnlyTransient: recovers only transient entities
 	//     (exclusive/auto-delete queues, auto-delete exchanges, and bindings to them).
 	//   - TopologyRecoveryDisabled: skips topology and consumer recovery entirely. Channel QoS
-	//     and confirm mode are still restored.
+	//     and confirm or transaction mode are still restored.
 	//
 	// During the recovery process, applications can monitor state changes (such as reconnecting
 	// or closed) by registering a listener using `Connection.NotifyStateChange` and
@@ -1814,7 +1814,7 @@ func (c *Connection) Reconnect() (err error) {
 		}
 		c.m.Unlock()
 
-		// Phase 1: Reconnect and open all channel sessions, apply QoS and Confirms
+		// Phase 1: Reconnect and open all channel sessions, apply QoS and confirm or transaction mode
 		for _, ch := range channels {
 			if err = ch.reconnectChannel(); err != nil {
 				Logger.Printf("Connection recovery failed to reconnect channel %d: %v", ch.id, err)

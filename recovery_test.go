@@ -3310,3 +3310,168 @@ waitOpen:
 			queueName)
 	}
 }
+
+// TestConnectionRecoveryTxAbortsPendingTransaction checks that a transaction
+// cut by connection recovery is reported by TxCommit instead of being committed
+// in part, and that the recovered channel is still transactional.
+func TestConnectionRecoveryTxAbortsPendingTransaction(t *testing.T) {
+	connectionName := "test-connection-recovery-tx"
+	queueName := "test-connection-recovery-tx"
+
+	adminConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("admin DialConfig failed: %v", err)
+	}
+	defer adminConn.Close()
+	admin, err := adminConn.Channel()
+	if err != nil {
+		t.Fatalf("admin Channel failed: %v", err)
+	}
+	if _, err := admin.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+	defer func() { _, _ = admin.QueueDelete(queueName, false, false, false) }()
+	if _, err := admin.QueuePurge(queueName, false); err != nil {
+		t.Fatalf("QueuePurge failed: %v", err)
+	}
+
+	properties := NewConnectionProperties()
+	properties.SetClientConnectionName(connectionName)
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: 5, RetryInterval: time.Second},
+		},
+		Locale:     defaultLocale,
+		Properties: properties,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel failed: %v", err)
+	}
+	if err := ch.Tx(); err != nil {
+		t.Fatalf("Tx failed: %v", err)
+	}
+
+	publish := func(body string) {
+		t.Helper()
+		if err := ch.Publish("", queueName, false, false, Publishing{Body: []byte(body)}); err != nil {
+			t.Fatalf("Publish %s failed: %v", body, err)
+		}
+	}
+	queueDepth := func() int {
+		t.Helper()
+		q, err := admin.QueueDeclarePassive(queueName, true, false, false, false, nil)
+		if err != nil {
+			t.Fatalf("QueueDeclarePassive failed: %v", err)
+		}
+		return q.Messages
+	}
+
+	publish("m1")
+	chanStateChanged := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(chanStateChanged)
+	dropConnection(t, connectionName)
+	waitForChannelOpen(t, chanStateChanged)
+
+	publish("m2")
+	if err := ch.TxCommit(); err != ErrTxAborted {
+		t.Fatalf("expected ErrTxAborted, got %v", err)
+	}
+	if n := queueDepth(); n != 0 {
+		t.Fatalf("expected no message committed from the aborted transaction, got %d", n)
+	}
+
+	publish("m1")
+	publish("m2")
+	if err := ch.TxCommit(); err != nil {
+		t.Fatalf("TxCommit of the retried transaction failed: %v", err)
+	}
+	if n := queueDepth(); n != 2 {
+		t.Fatalf("expected 2 messages after the retried commit, got %d", n)
+	}
+}
+
+// TestChannelRecoveryTxAbortsPendingTransaction checks that a transaction cut
+// by a channel-level error, which channel recovery reopens automatically, is
+// reported by TxCommit instead of being committed in part.
+func TestChannelRecoveryTxAbortsPendingTransaction(t *testing.T) {
+	queueName := "test-channel-recovery-tx"
+
+	adminConn, err := DialConfig(amqpURL, Config{Locale: defaultLocale})
+	if err != nil {
+		t.Fatalf("admin DialConfig failed: %v", err)
+	}
+	defer adminConn.Close()
+	admin, err := adminConn.Channel()
+	if err != nil {
+		t.Fatalf("admin Channel failed: %v", err)
+	}
+	if _, err := admin.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
+		t.Fatalf("QueueDeclare failed: %v", err)
+	}
+	defer func() { _, _ = admin.QueueDelete(queueName, false, false, false) }()
+	if _, err := admin.QueuePurge(queueName, false); err != nil {
+		t.Fatalf("QueuePurge failed: %v", err)
+	}
+
+	conn, err := DialConfig(amqpURL, Config{
+		Recovery: &Recovery{
+			ReconnectionConfig: &ReconnectionConfig{MaxRetryCount: 5, RetryInterval: time.Second},
+		},
+		Locale: defaultLocale,
+	})
+	if err != nil {
+		t.Fatalf("DialConfig failed: %v", err)
+	}
+	defer conn.Close()
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("Channel failed: %v", err)
+	}
+	if err := ch.Tx(); err != nil {
+		t.Fatalf("Tx failed: %v", err)
+	}
+
+	publish := func(exchange, body string) {
+		t.Helper()
+		if err := ch.Publish(exchange, queueName, false, false, Publishing{Body: []byte(body)}); err != nil {
+			t.Fatalf("Publish %s failed: %v", body, err)
+		}
+	}
+	queueDepth := func() int {
+		t.Helper()
+		q, err := admin.QueueDeclarePassive(queueName, true, false, false, false, nil)
+		if err != nil {
+			t.Fatalf("QueueDeclarePassive failed: %v", err)
+		}
+		return q.Messages
+	}
+
+	chanStateChanged := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(chanStateChanged)
+	publish("", "m0")
+	// The broker closes the channel with 404 NOT_FOUND and discards the transaction.
+	publish("test-channel-recovery-tx-missing-exchange", "m1")
+	waitForChannelOpen(t, chanStateChanged)
+
+	publish("", "m2")
+	if err := ch.TxCommit(); err != ErrTxAborted {
+		t.Fatalf("expected ErrTxAborted, got %v", err)
+	}
+	if n := queueDepth(); n != 0 {
+		t.Fatalf("expected no message committed from the aborted transaction, got %d", n)
+	}
+
+	publish("", "m0")
+	publish("", "m2")
+	if err := ch.TxCommit(); err != nil {
+		t.Fatalf("TxCommit of the retried transaction failed: %v", err)
+	}
+	if n := queueDepth(); n != 2 {
+		t.Fatalf("expected 2 messages after the retried commit, got %d", n)
+	}
+}
