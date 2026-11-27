@@ -329,6 +329,69 @@ func TestReadArrayAcceptsElementCountAtCap(t *testing.T) {
 	}
 }
 
+// TestReadArrayRejectsTruncatedFinalField verifies readArray rejects a blob
+// whose declared size is not consumed by whole fields, rather than treating
+// a final element truncated at the start of its encoding as the end of the
+// array and silently dropping it.
+func TestReadArrayRejectsTruncatedFinalField(t *testing.T) {
+	testCases := []struct {
+		name string
+		size uint32
+		blob []byte
+	}{
+		{name: "declared size with no bytes", size: 1, blob: nil},
+		{name: "bool tag without value", size: 1, blob: []byte{'t'}},
+		{name: "long-uint tag without value", size: 1, blob: []byte{'i'}},
+		{name: "longstr tag without length", size: 1, blob: []byte{'S'}},
+		{name: "nested array tag without size", size: 1, blob: []byte{'A'}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := binary.Write(&buf, binary.BigEndian, tc.size); err != nil {
+				t.Fatalf("failed to build fixture: %v", err)
+			}
+			buf.Write(tc.blob)
+
+			arr, err := readArray(&buf)
+			if !errors.Is(err, ErrSyntax) {
+				t.Fatalf("expected ErrSyntax for truncated array element, got arr=%#v err=%v", arr, err)
+			}
+		})
+	}
+}
+
+// TestReadFrameRejectsHeaderFrameWithTruncatedArrayField verifies that a
+// content-header frame whose headers table ends with a truncated array
+// element is rejected, rather than parsed with the element silently
+// missing from Delivery.Headers.
+func TestReadFrameRejectsHeaderFrameWithTruncatedArrayField(t *testing.T) {
+	// Table blob: key "a", field 'A' (array) declaring a 1-byte blob that
+	// holds only the 't' (bool) type tag.
+	tableBlob := []byte{0x01, 'a', 'A', 0, 0, 0, 1, 't'}
+
+	payload := []byte{0x00, 0x3c}                            // class id 60 (basic)
+	payload = append(payload, 0x00, 0x00)                    // weight
+	payload = append(payload, 0, 0, 0, 0, 0, 0, 0, 0)        // body size
+	payload = binary.BigEndian.AppendUint16(payload, 0x2000) // flagHeaders
+	payload = binary.BigEndian.AppendUint32(payload, uint32(len(tableBlob)))
+	payload = append(payload, tableBlob...)
+
+	frame := []byte{frameHeader, 0x00, 0x01}
+	frame = binary.BigEndian.AppendUint32(frame, uint32(len(payload)))
+	frame = append(frame, payload...)
+	frame = append(frame, frameEnd)
+
+	var maxFrameSize atomic.Uint32
+	maxFrameSize.Store(4096)
+
+	r := reader{r: bytes.NewReader(frame), maxFrameSize: &maxFrameSize}
+	if f, err := r.ReadFrame(); !errors.Is(err, ErrSyntax) {
+		t.Fatalf("expected ErrSyntax for header frame with truncated array field, got frame=%T err=%v", f, err)
+	}
+}
+
 // TestReadTableRejectsExcessiveEntryCount is the Table analogue of
 // TestReadArrayRejectsExcessiveElementCount.
 func TestReadTableRejectsExcessiveEntryCount(t *testing.T) {
