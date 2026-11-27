@@ -1499,6 +1499,25 @@ func TestConsumeEncodeErrorKeepsExistingConsumer(t *testing.T) {
 	}
 }
 
+// runMockBroker runs script as the broker end of a new session and returns the
+// client end. Cleanup waits for script so that its failures are reported.
+func runMockBroker(t *testing.T, script func(srv *server)) io.ReadWriteCloser {
+	t.Helper()
+	rwc, srv := newSession(t)
+	stall := time.AfterFunc(5*time.Second, func() { _ = rwc.Close() })
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		stall.Stop()
+		_ = rwc.Close()
+		<-done
+	})
+	go func() {
+		defer close(done)
+		script(srv)
+	}()
+	return rwc
+}
+
 func txRecoveryConfig() Config {
 	config := defaultConfig()
 	config.Recovery = &Recovery{
@@ -1550,16 +1569,7 @@ func TestTxCommitAfterRecoveryDiscardedPendingWork(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rwc, srv := newSession(t)
-			defer rwc.Close()
-			// Unblock the client if the mock broker stops responding.
-			defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
-
-			done := make(chan struct{})
-			// Wait for the mock broker so that its failures are reported while the test runs.
-			defer func() { _ = rwc.Close(); <-done }()
-			go func() {
-				defer close(done)
+			rwc := runMockBroker(t, func(srv *server) {
 				srv.connectionOpen()
 				srv.channelOpen(1)
 				srv.recv(1, &txSelect{})
@@ -1572,7 +1582,7 @@ func TestTxCommitAfterRecoveryDiscardedPendingWork(t *testing.T) {
 				srv.recv(1, &txCommit{})
 				srv.send(1, &txCommitOk{})
 				srv.connectionClose()
-			}()
+			})
 
 			c, err := Open(rwc, txRecoveryConfig())
 			if err != nil {
@@ -1601,27 +1611,12 @@ func TestTxCommitAfterRecoveryDiscardedPendingWork(t *testing.T) {
 			if err := c.Close(); err != nil {
 				t.Fatalf("could not close connection: %v", err)
 			}
-
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("timed out waiting for the mock broker")
-			}
 		})
 	}
 }
 
 func TestTxCommitAfterRecoveryWithoutPendingWork(t *testing.T) {
-	rwc, srv := newSession(t)
-	defer rwc.Close()
-	// Unblock the client if the mock broker stops responding.
-	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
-
-	done := make(chan struct{})
-	// Wait for the mock broker so that its failures are reported while the test runs.
-	defer func() { _ = rwc.Close(); <-done }()
-	go func() {
-		defer close(done)
+	rwc := runMockBroker(t, func(srv *server) {
 		srv.connectionOpen()
 		srv.channelOpen(1)
 		srv.recv(1, &txSelect{})
@@ -1633,7 +1628,7 @@ func TestTxCommitAfterRecoveryWithoutPendingWork(t *testing.T) {
 		srv.recv(1, &txCommit{})
 		srv.send(1, &txCommitOk{})
 		srv.connectionClose()
-	}()
+	})
 
 	c, err := Open(rwc, txRecoveryConfig())
 	if err != nil {
@@ -1662,25 +1657,10 @@ func TestTxCommitAfterRecoveryWithoutPendingWork(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatalf("could not close connection: %v", err)
 	}
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the mock broker")
-	}
 }
 
 func TestTxWithoutRecoveryIsNotTracked(t *testing.T) {
-	rwc, srv := newSession(t)
-	defer rwc.Close()
-	// Unblock the client if the mock broker stops responding.
-	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
-
-	done := make(chan struct{})
-	// Wait for the mock broker so that its failures are reported while the test runs.
-	defer func() { _ = rwc.Close(); <-done }()
-	go func() {
-		defer close(done)
+	rwc := runMockBroker(t, func(srv *server) {
 		srv.connectionOpen()
 		srv.channelOpen(1)
 		srv.recv(1, &txSelect{})
@@ -1692,7 +1672,7 @@ func TestTxWithoutRecoveryIsNotTracked(t *testing.T) {
 		srv.recv(1, &txRollback{})
 		srv.send(1, &txRollbackOk{})
 		srv.connectionClose()
-	}()
+	})
 
 	c, err := Open(rwc, defaultConfig())
 	if err != nil {
@@ -1723,25 +1703,10 @@ func TestTxWithoutRecoveryIsNotTracked(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatalf("could not close connection: %v", err)
 	}
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the mock broker")
-	}
 }
 
 func TestTxRollbackAfterRecoveryDiscardedPendingWork(t *testing.T) {
-	rwc, srv := newSession(t)
-	defer rwc.Close()
-	// Unblock the client if the mock broker stops responding.
-	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
-
-	done := make(chan struct{})
-	// Wait for the mock broker so that its failures are reported while the test runs.
-	defer func() { _ = rwc.Close(); <-done }()
-	go func() {
-		defer close(done)
+	rwc := runMockBroker(t, func(srv *server) {
 		srv.connectionOpen()
 		srv.channelOpen(1)
 		srv.recv(1, &txSelect{})
@@ -1753,7 +1718,7 @@ func TestTxRollbackAfterRecoveryDiscardedPendingWork(t *testing.T) {
 		srv.recv(1, &txCommit{})
 		srv.send(1, &txCommitOk{})
 		srv.connectionClose()
-	}()
+	})
 
 	c, err := Open(rwc, txRecoveryConfig())
 	if err != nil {
@@ -1782,12 +1747,6 @@ func TestTxRollbackAfterRecoveryDiscardedPendingWork(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatalf("could not close connection: %v", err)
 	}
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the mock broker")
-	}
 }
 
 // blockingChannelRecovery holds the first channel recovery until release is closed.
@@ -1807,16 +1766,7 @@ func (r *blockingChannelRecovery) OnChannelClose(ch *Channel, err *Error) {
 }
 
 func TestTxCommitOnClosedChannelKeepsPendingWork(t *testing.T) {
-	rwc, srv := newSession(t)
-	defer rwc.Close()
-	// Unblock the client if the mock broker stops responding.
-	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
-
-	done := make(chan struct{})
-	// Wait for the mock broker so that its failures are reported while the test runs.
-	defer func() { _ = rwc.Close(); <-done }()
-	go func() {
-		defer close(done)
+	rwc := runMockBroker(t, func(srv *server) {
 		srv.connectionOpen()
 		srv.channelOpen(1)
 		srv.recv(1, &txSelect{})
@@ -1826,7 +1776,7 @@ func TestTxCommitOnClosedChannelKeepsPendingWork(t *testing.T) {
 		srv.recv(1, &txRollback{})
 		srv.send(1, &txRollbackOk{})
 		srv.connectionClose()
-	}()
+	})
 
 	recovery := &blockingChannelRecovery{closed: make(chan struct{}), release: make(chan struct{})}
 	config := txRecoveryConfig()
@@ -1862,25 +1812,10 @@ func TestTxCommitOnClosedChannelKeepsPendingWork(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatalf("could not close connection: %v", err)
 	}
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the mock broker")
-	}
 }
 
 func TestTxCommitReportsAbortWhenRollbackIsCut(t *testing.T) {
-	rwc, srv := newSession(t)
-	defer rwc.Close()
-	// Unblock the client if the mock broker stops responding.
-	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
-
-	done := make(chan struct{})
-	// Wait for the mock broker so that its failures are reported while the test runs.
-	defer func() { _ = rwc.Close(); <-done }()
-	go func() {
-		defer close(done)
+	rwc := runMockBroker(t, func(srv *server) {
 		srv.connectionOpen()
 		srv.channelOpen(1)
 		srv.recv(1, &txSelect{})
@@ -1893,7 +1828,7 @@ func TestTxCommitReportsAbortWhenRollbackIsCut(t *testing.T) {
 		srv.recv(1, &txCommit{})
 		srv.send(1, &txCommitOk{})
 		srv.connectionClose()
-	}()
+	})
 
 	c, err := Open(rwc, txRecoveryConfig())
 	if err != nil {
@@ -1923,11 +1858,5 @@ func TestTxCommitReportsAbortWhenRollbackIsCut(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Fatalf("could not close connection: %v", err)
-	}
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the mock broker")
 	}
 }

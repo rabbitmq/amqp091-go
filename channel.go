@@ -2128,9 +2128,8 @@ func (ch *Channel) TxRollback() error {
 }
 
 // txState tracks transaction mode for channel recovery. enabled is atomic;
-// pending and aborted are guarded by Channel.m, which callers of the methods
-// must hold. A private mutex would not do: Channel.m also orders the state
-// with the publishings and acknowledgments it tracks and with resetState.
+// pending and aborted are guarded by Channel.m, not a private mutex, so that
+// callTx checks them and sends its request without a resetState in between.
 type txState struct {
 	// Set by a successful Tx() when recovery is enabled. Cannot be turned off.
 	enabled atomic.Bool
@@ -2163,9 +2162,7 @@ func (t *txState) end() {
 
 // callTx sends a tx.commit or tx.rollback request and waits for the reply, like
 // call. When a recovery aborted the transaction, a tx.commit request is sent as
-// tx.rollback and ErrTxAborted is returned. The flags are read and the request
-// is sent under ch.m, which resetState also holds, so that no recovery can run
-// between the check and the send.
+// tx.rollback and ErrTxAborted is returned.
 func (ch *Channel) callTx(req, res message) error {
 	// Without recovery, no transaction can be aborted by it.
 	if !ch.tx.enabled.Load() {
