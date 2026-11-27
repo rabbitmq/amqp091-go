@@ -698,7 +698,7 @@ func TestOpenFailedFrameSizeBelowBrokerMinimum(t *testing.T) {
 func TestFrameSizeTooSmallErrorKeepsCause(t *testing.T) {
 	cause := errors.New("read tcp: i/o timeout")
 	err := frameSizeTooSmallError(4096, -1, 0, cause)
-	for _, want := range []string{"requested unlimited", "server offered no limit", "i/o timeout"} {
+	for _, want := range []string{"failed: read tcp: i/o timeout;", "requested unlimited", "server offered no limit"} {
 		if !strings.Contains(err.Reason, want) {
 			t.Errorf("reason %q does not contain %q", err.Reason, want)
 		}

@@ -1474,8 +1474,9 @@ func frameSizeTooSmallError(negotiated, requested int, serverFrameMax uint32, ca
 	}
 	return &Error{
 		Code: NotAllowed,
-		Reason: fmt.Sprintf("negotiated frame_max %d (requested %s, server offered %s) is below %d, "+
-			"the minimum RabbitMQ 4.1.0 and later accept: %v", negotiated, requestedText, offeredText, rabbitmqMinFrameSize, cause),
+		Reason: fmt.Sprintf("connection.open failed: %v; negotiated frame_max %d (requested %s, server offered %s) "+
+			"is below %d, the minimum frame_max that RabbitMQ 4.1.0 and later accept",
+			cause, negotiated, requestedText, offeredText, rabbitmqMinFrameSize),
 	}
 }
 
