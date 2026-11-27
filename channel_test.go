@@ -392,13 +392,13 @@ func TestTxState(t *testing.T) {
 
 	tx.markPending()
 	tx.abortPending()
-	if tx.end() {
+	if tx.aborted {
 		t.Fatal("work sent before Tx() was tracked")
 	}
 
 	tx.enabled.Store(true)
 	tx.abortPending()
-	if tx.end() {
+	if tx.aborted {
 		t.Fatal("a recovery without pending work aborted the transaction")
 	}
 
@@ -406,17 +406,18 @@ func TestTxState(t *testing.T) {
 	tx.abortPending()
 	// A retry of the recovery must keep the abort.
 	tx.abortPending()
-	if !tx.end() {
+	if !tx.aborted {
 		t.Fatal("a recovery with pending work did not abort the transaction")
 	}
-	if tx.end() {
+	tx.end()
+	if tx.aborted {
 		t.Fatal("the abort was reported for the next transaction too")
 	}
 
 	tx.markPending()
 	tx.end()
 	tx.abortPending()
-	if tx.end() {
+	if tx.aborted {
 		t.Fatal("work ended by TxCommit or TxRollback was aborted by a later recovery")
 	}
 }

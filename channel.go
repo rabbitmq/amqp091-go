@@ -2155,13 +2155,10 @@ func (t *txState) abortPending() {
 	}
 }
 
-// end starts a new transaction and reports whether a recovery aborted the
-// previous one.
-func (t *txState) end() (aborted bool) {
-	aborted = t.aborted
+// end starts a new transaction once its tx.commit or tx.rollback request is sent.
+func (t *txState) end() {
 	t.aborted = false
 	t.pending = false
-	return aborted
 }
 
 // callTx sends a tx.commit or tx.rollback request and waits for the reply, like
@@ -2176,7 +2173,7 @@ func (ch *Channel) callTx(req, res message) error {
 	}
 
 	ch.m.Lock()
-	aborted := ch.tx.end()
+	aborted := ch.tx.aborted
 
 	_, commit := req.(*txCommit)
 	if commit && aborted {
@@ -2187,17 +2184,17 @@ func (ch *Channel) callTx(req, res message) error {
 		ch.m.Unlock()
 		return err
 	}
+	ch.tx.end()
 	errors := ch.errors
 	rpc := ch.rpc
 	ch.m.Unlock()
 
-	if err := awaitReply(errors, rpc, res); err != nil {
-		return err
-	}
+	err := awaitReply(errors, rpc, res)
 	if commit && aborted {
+		// The recovery discarded the transaction whether or not the rollback completed.
 		return ErrTxAborted
 	}
-	return nil
+	return err
 }
 
 /*

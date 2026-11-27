@@ -1789,3 +1789,145 @@ func TestTxRollbackAfterRecoveryDiscardedPendingWork(t *testing.T) {
 		t.Fatal("timed out waiting for the mock broker")
 	}
 }
+
+// blockingChannelRecovery holds the first channel recovery until release is closed.
+type blockingChannelRecovery struct {
+	DefaultConnectionRecovery
+	once    sync.Once
+	closed  chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingChannelRecovery) OnChannelClose(ch *Channel, err *Error) {
+	r.once.Do(func() {
+		close(r.closed)
+		<-r.release
+	})
+	r.DefaultConnectionRecovery.OnChannelClose(ch, err)
+}
+
+func TestTxCommitOnClosedChannelKeepsPendingWork(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+	// Unblock the client if the mock broker stops responding.
+	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
+
+	done := make(chan struct{})
+	// Wait for the mock broker so that its failures are reported while the test runs.
+	defer func() { _ = rwc.Close(); <-done }()
+	go func() {
+		defer close(done)
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &txSelect{})
+		srv.send(1, &txSelectOk{})
+		srv.recv(1, &basicPublish{})
+		srv.recoverTxChannel(1)
+		srv.recv(1, &txRollback{})
+		srv.send(1, &txRollbackOk{})
+		srv.connectionClose()
+	}()
+
+	recovery := &blockingChannelRecovery{closed: make(chan struct{}), release: make(chan struct{})}
+	config := txRecoveryConfig()
+	config.Recovery.ConnectionRecovery = recovery
+	c, err := Open(rwc, config)
+	if err != nil {
+		t.Fatalf("could not create connection: %v", err)
+	}
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v", err)
+	}
+	states := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(states)
+	if err := ch.Tx(); err != nil {
+		t.Fatalf("Tx failed: %v", err)
+	}
+	if err := ch.Publish("", "q", false, false, Publishing{Body: []byte("m1")}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+
+	// The channel is closed and resetState has not run yet.
+	<-recovery.closed
+	if err := ch.TxCommit(); err != ErrClosed {
+		t.Fatalf("expected ErrClosed from a commit on a closed channel, got %v", err)
+	}
+	close(recovery.release)
+	waitForChannelRecovery(t, states)
+
+	if err := ch.TxCommit(); err != ErrTxAborted {
+		t.Fatalf("expected ErrTxAborted, got %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("could not close connection: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the mock broker")
+	}
+}
+
+func TestTxCommitReportsAbortWhenRollbackIsCut(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+	// Unblock the client if the mock broker stops responding.
+	defer time.AfterFunc(5*time.Second, func() { _ = rwc.Close() }).Stop()
+
+	done := make(chan struct{})
+	// Wait for the mock broker so that its failures are reported while the test runs.
+	defer func() { _ = rwc.Close(); <-done }()
+	go func() {
+		defer close(done)
+		srv.connectionOpen()
+		srv.channelOpen(1)
+		srv.recv(1, &txSelect{})
+		srv.send(1, &txSelectOk{})
+		srv.recv(1, &basicPublish{})
+		srv.recoverTxChannel(1)
+		srv.recv(1, &txRollback{})
+		// Close the channel instead of answering the substituted rollback.
+		srv.recoverTxChannel(1)
+		srv.recv(1, &txCommit{})
+		srv.send(1, &txCommitOk{})
+		srv.connectionClose()
+	}()
+
+	c, err := Open(rwc, txRecoveryConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v", err)
+	}
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v", err)
+	}
+	states := make(chan *StateChanged, 10)
+	ch.NotifyStateChange(states)
+	if err := ch.Tx(); err != nil {
+		t.Fatalf("Tx failed: %v", err)
+	}
+	if err := ch.Publish("", "q", false, false, Publishing{Body: []byte("m1")}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	waitForChannelRecovery(t, states)
+
+	if err := ch.TxCommit(); err != ErrTxAborted {
+		t.Fatalf("expected ErrTxAborted, got %v", err)
+	}
+	waitForChannelRecovery(t, states)
+
+	if err := ch.TxCommit(); err != nil {
+		t.Fatalf("expected the next commit to succeed, got %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("could not close connection: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the mock broker")
+	}
+}
