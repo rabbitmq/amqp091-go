@@ -719,6 +719,70 @@ func TestFrameSizeTooSmallErrorKeepsCause(t *testing.T) {
 	}
 }
 
+func TestOpenFrameSizeBelowBrokerMinimumKeepsOtherErrors(t *testing.T) {
+	const reason = "NOT_ALLOWED - access to vhost '/' refused for user 'guest'"
+
+	tests := []struct {
+		name   string
+		vhost  string
+		server func(srv *server)
+		check  func(t *testing.T, err error)
+	}{
+		{
+			name:  "broker connection.close",
+			vhost: "/",
+			server: func(srv *server) {
+				srv.recv(0, &connectionOpen{})
+				srv.send(0, &connectionClose{ReplyCode: NotAllowed, ReplyText: reason})
+				srv.recv(0, &connectionCloseOk{})
+			},
+			check: func(t *testing.T, err error) {
+				var amqpErr *Error
+				if !errors.As(err, &amqpErr) {
+					t.Fatalf("expected *Error, got %T: %v", err, err)
+				}
+				if amqpErr.Code != NotAllowed || amqpErr.Reason != reason || !amqpErr.Server {
+					t.Fatalf("expected the broker's reply %q, got %#v", reason, amqpErr)
+				}
+			},
+		},
+		{
+			name:   "connection.open encoding error",
+			vhost:  strings.Repeat("v", 256),
+			server: func(srv *server) {},
+			check: func(t *testing.T, err error) {
+				if !errors.As(err, new(frameEncodeError)) {
+					t.Fatalf("expected a frame encoding error, got %T: %v", err, err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rwc, srv := newSession(t)
+			t.Cleanup(func() { rwc.Close() })
+
+			go func() {
+				srv.expectAMQP()
+				srv.connectionStart()
+				srv.connectionTune()
+				tt.server(srv)
+			}()
+
+			config := defaultConfig()
+			config.FrameSize = 4096
+			config.Vhost = tt.vhost
+
+			c, err := Open(rwc, config)
+			if err == nil {
+				t.Fatalf("unexpectedly connected: %+v", c)
+			}
+			tt.check(t, err)
+		})
+	}
+}
+
 // TestOpenFailedServerClose covers a broker that rejects a handshake step with
 // an explicit connection.close, as RabbitMQ does for a rejected login (when the
 // client advertises authentication_failure_close) and for a rejected
