@@ -2454,7 +2454,7 @@ func (ch *Channel) watchChannel() {
 
 // Reconnect initiates automatic channel recovery,
 // re-opens the AMQP channel with the same channel id and configuration,
-// and re-establishes all active publisher confirmations and consumer subscriptions.
+// and re-establishes QoS, confirm or transaction mode, and consumer subscriptions.
 func (ch *Channel) Reconnect() error {
 	if err := ch.reconnectChannel(); err != nil {
 		return err
@@ -2476,7 +2476,7 @@ func (ch *Channel) Reconnect() error {
 }
 
 // openChannelSession resets client-side state, opens a fresh broker channel,
-// and restores QoS/Confirm configuration. It is the shared single-attempt core
+// and restores QoS and confirm or transaction mode. It is the shared single-attempt core
 // used by both reconnectChannel (retry loop) and reopenIfClosed (topology
 // recovery). The caller must hold ch.reconnecting and manage lifecycle transitions.
 //
@@ -2505,7 +2505,7 @@ func (ch *Channel) openChannelSession() (openSucceeded bool, err error) {
 		return false, err
 	}
 
-	// 3. Perform QoS and Confirms setup.
+	// 3. Restore QoS and confirm or transaction mode.
 	return true, ch.setupChannelBasic()
 }
 
@@ -2547,7 +2547,7 @@ func (ch *Channel) reopenIfClosed() {
 	ch.lifeCycle.SetState(StateOpen, nil)
 }
 
-// reconnectChannel opens a fresh channel on the broker and performs basic setup (QoS, Confirms).
+// reconnectChannel opens a fresh channel on the broker and performs basic setup (QoS, confirm or transaction mode).
 // It does NOT recover the channel's topology.
 //
 // Applications must coordinate with in-progress recovery rather than calling into the
