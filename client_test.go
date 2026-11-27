@@ -809,6 +809,62 @@ func TestConfirmMultipleOrdersDeliveryTags(t *testing.T) {
 	}
 }
 
+func TestConfirmNoWaitDoesNotWaitForReply(t *testing.T) {
+	rwc, srv := newSession(t)
+	defer rwc.Close()
+
+	selected := make(chan confirmSelect, 1)
+	go func() {
+		srv.connectionOpen()
+		srv.channelOpen(1)
+
+		var m confirmSelect
+		srv.recv(1, &m)
+		selected <- m
+
+		srv.recv(1, &basicPublish{})
+	}()
+
+	c, err := Open(rwc, defaultConfig())
+	if err != nil {
+		t.Fatalf("could not create connection: %v (%s)", c, err)
+	}
+
+	ch, err := c.Channel()
+	if err != nil {
+		t.Fatalf("could not open channel: %v (%s)", ch, err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- ch.Confirm(true) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("channel error setting confirm mode: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Confirm(true) waited for confirm.select-ok")
+	}
+
+	select {
+	case m := <-selected:
+		if !m.NoWait {
+			t.Fatal("expected confirm.select with no-wait set")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive confirm.select")
+	}
+
+	dc, err := ch.PublishWithDeferredConfirmWithContext(context.TODO(), "", "q", false, false, Publishing{Body: []byte("pub")})
+	if err != nil {
+		t.Fatalf("failed to publish: %v", err)
+	}
+	if dc == nil || dc.DeliveryTag != 1 {
+		t.Fatalf("expected a deferred confirmation with delivery tag 1, got %+v", dc)
+	}
+}
+
 func TestDeferredConfirmations(t *testing.T) {
 	rwc, srv := newSession(t)
 	defer rwc.Close()
