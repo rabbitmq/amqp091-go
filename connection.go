@@ -1472,11 +1472,16 @@ func frameSizeTooSmallError(negotiated, requested int, serverFrameMax uint32, ca
 	if serverFrameMax > 0 {
 		offeredText = fmt.Sprint(serverFrameMax)
 	}
+	causeText := cause.Error()
+	var amqpErr *Error
+	if errors.As(cause, &amqpErr) {
+		causeText = amqpErr.Reason
+	}
 	return &Error{
 		Code: NotAllowed,
-		Reason: fmt.Sprintf("connection.open failed: %v; negotiated frame_max %d (requested %s, server offered %s) "+
+		Reason: fmt.Sprintf("connection.open failed: %s; negotiated frame_max %d (requested %s, server offered %s) "+
 			"is below %d, the minimum frame_max that RabbitMQ 4.1.0 and later accept",
-			cause, negotiated, requestedText, offeredText, rabbitmqMinFrameSize),
+			causeText, negotiated, requestedText, offeredText, rabbitmqMinFrameSize),
 	}
 }
 
